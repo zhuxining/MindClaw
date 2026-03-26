@@ -233,11 +233,18 @@ src/
 ~/MindClaw/
   vault/                        # Markdown 内容（Obsidian 兼容）
   │ ├── daily/                  # YYYY-MM-DD.md
-  │ ├── knowledge/              # Agent 沉淀的知识笔记
+  │ ├── knowledge/              # Agent 沉淀的知识笔记（按主题分目录）
+  │ │   ├── 投资/               # 主题目录
+  │ │   │   ├── 价值投资.md     # 单篇知识笔记（含 frontmatter L0 + 正文 L2）
+  │ │   │   └── 风险管理.md
+  │ │   ├── 教育/
+  │ │   │   └── 蒙特梭利.md
+  │ │   └── 工作方法论/
+  │ │       └── 深度工作.md
   │ ├── private/                # 私密区（Agent 不可见）
   │ └── _assets/                # 附件（图片、PDF）
   data/
-  │ ├── main.db                 # SQLite 主库（结构索引 + FTS5）
+  │ ├── main.db                 # SQLite 主库（L0/L1 索引 + FTS5）
   │ ├── queue.db                # 离线捕获队列（轻量独立）
   │ └── archive/                # 冷归档
   │     └── 2026-01.jsonl       # 按月归档对话
@@ -387,6 +394,7 @@ pub struct AgentCommandContext {
     pub session: Session,
     pub session_mgr: Arc<SessionManager>,
     pub sub_agent_tx: mpsc::Sender<SubAgentTask>,
+    pub cancel_token: CancellationToken,  // /stop 可触发取消正在进行的操作
 }
 
 pub struct AgentCommandResult {
@@ -585,7 +593,7 @@ impl CliRuntime {
     /// chat 子命令需要 Provider
     pub fn with_provider(mut self) -> Result<Self, AppError> {
         let key = keyring::Entry::new("mindclaw", "api_key")?.get_password()?;
-        self.provider = Some(Arc::new(ClaudeProvider::new(&key)));
+        self.provider = Some(Arc::new(ClaudeProvider::from_key(&key)));
         Ok(self)
     }
 }
@@ -685,20 +693,23 @@ clap = { version = "4", features = ["derive"] }
 ```
 用户发送消息（桌面 UI / Telegram / Feishu）
   → Channel 将平台消息转为 ChannelMessage { sender, content, source, mode }
-  → AgentService.turn_streamed(message, channel)
-      ├─ SessionManager: 按 sender 加载/创建 Session
+  → Bus.publish_inbound() → AgentLoop 消费
+      ├─ UserIdentityResolver: 跨通道身份统一（→ "owner"）
+      ├─ SessionManager: 按统一身份加载/创建 Session
       ├─ ContextBuilder: 组装 prompt
       │    [1] 基础人格 + 模式指令
       │    [2] 用户角色上下文（user_roles 表）
-      │    [3] KnowledgeService.search(): RAG 检索知识片段
+      │    [3] KnowledgeService.search_with_rerank(): L0 粗筛 → L1 注入
       │    [4] 压缩对话历史（近 5 轮完整 + 早期摘要）
       │    [5] Memory.unsurfaced_observations(): 记忆召回
       │    [6] 用户消息
-      ├─ Provider.chat_stream(): 调用 Claude API（流式）
-      ├─ Channel.send_chunk(): 逐 chunk 推送到来源通道
+      ├─ call_with_tools(): 两阶段流式策略
+      │    stream_with_tool_detection(): 解析 SSE 事件
+      │    text → 立即推送 Bus.outbound（用户可见）
+      │    tool_use → 静默累积 → 执行工具 → 再次流式调用
       ├─ PostProcess: 写入 Memory + 派发 SubAgent 任务
       └─ SessionManager: 追加消息对，触发裁剪
-  → 来源通道渲染响应
+  → Bus.outbound → run_outbound_dispatcher() → Channel.send()
       Desktop: Tauri Event → 前端 useConversation 实时渲染
       Telegram: sendMessage API → 用户手机
 ```
@@ -728,16 +739,43 @@ DailyPage 挂载，传入今日日期
 
 ```sql
 -- Markdown 索引（派生，可从文件系统重建）
+-- 三级索引：L0 Tags / L1 Overview / L2 Detail（全文在文件系统）
+-- 笔记和目录统一存储，kind 区分类型，共享 L0/L1 检索路径
 CREATE TABLE notes (
-  id       TEXT PRIMARY KEY,
-  path     TEXT UNIQUE NOT NULL,
-  title    TEXT,
-  created  TEXT NOT NULL,
-  updated  TEXT NOT NULL,
-  status   TEXT DEFAULT 'active',
-  tags     TEXT,  -- JSON 数组
+  id         TEXT PRIMARY KEY,
+  path       TEXT UNIQUE NOT NULL,  -- 笔记: "knowledge/投资/价值投资.md"（有 .md 后缀）
+                                    -- 目录: "knowledge/投资"（无后缀，从文件系统目录派生）
+  title      TEXT,
+  tags       TEXT,           -- JSON 数组（L0，~100 tokens）
+                             --   笔记: 从 frontmatter 提取
+                             --   目录: 聚合子笔记 tags（去重合并）
+  overview   TEXT,           -- ~2k tokens 概要（L1）
+                             --   笔记: 从 frontmatter 提取（Haiku 生成或人工编写）
+                             --   目录: 聚合子笔记概要
+  source     TEXT,           -- 来源标识（从 frontmatter 提取，仅笔记有）
+                             --   NULL             — 用户手动创建
+                             --   'https://...'    — 从 URL 解析
+                             --   'file://...pdf'  — 从 PDF 解析
+                             --   'session:abc123' — 对话沉淀（关联会话 ID）
+                             --   'capture:xyz'    — 捕获路由（关联 capture ID）
+  -- parent_dir 和 note_count 不需要：
+  --   父目录从 path 推导（如 "knowledge/投资/价值投资.md" → "knowledge/投资"）
+  --   子节点查询用 WHERE path LIKE 'knowledge/投资/%'
+  --   子笔记计数用 COUNT(*) 实时计算
+  created    TEXT NOT NULL,
+  updated    TEXT NOT NULL,
+  status     TEXT DEFAULT 'active',
   last_indexed TEXT
 );
+-- 笔记 vs 目录的判断：path LIKE '%.md' 即为笔记，否则为目录
+
+-- L0 全文索引（FTS5，笔记和目录统一搜索）
+CREATE VIRTUAL TABLE notes_fts USING fts5(
+  title, tags,
+  content='notes', content_rowid='rowid'
+);
+
+-- 子节点查询直接用 path LIKE 'dir/%'，path 的 UNIQUE 索引已覆盖前缀匹配
 
 -- 任务（一等公民，独立结构）
 CREATE TABLE tasks (
@@ -799,11 +837,15 @@ CREATE TABLE capture_queue (
 -- 对话会话
 CREATE TABLE sessions (
   id      TEXT PRIMARY KEY,
+  sender  TEXT NOT NULL,  -- canonical user ID（经 UserIdentityResolver 统一后）
   mode    TEXT NOT NULL,  -- companion | reflect | challenge | knowledge | treehole
   created TEXT NOT NULL,
   updated TEXT NOT NULL,
   summary TEXT
 );
+
+-- 索引：按 sender + mode 查找活跃会话
+CREATE INDEX idx_sessions_sender_mode ON sessions(sender, mode);
 
 -- 对话消息（热存，90 天后转冷归档）
 CREATE TABLE messages (
@@ -828,9 +870,138 @@ CREATE TABLE user_roles (
 
 ### Markdown 与 SQLite 同步
 
-- **写入时**：Markdown 先写，然后更新 SQLite 索引（frontmatter → notes 表）
+- **写入时**：Markdown 先写，然后更新 SQLite 索引（frontmatter tags/overview → notes 表 L0/L1）
+- **写入失败恢复**：如果 SQLite 索引更新失败，写入 `data/.index_dirty` 脏标记文件，下次启动时立即触发全量重建
 - **冲突时**：Markdown frontmatter 为权威，SQLite 索引可随时从文件系统重建
-- **重建索引**：启动时检查 `last_indexed` 与文件 mtime，仅增量更新
+- **重建索引**：启动时先检查 `.index_dirty` 标记，再检查 `last_indexed` 与文件 mtime，仅增量更新
+
+### 知识笔记三级索引（L0 / L1 / L2）
+
+知识笔记采用渐进式加载策略，用最少的 token 做最精准的检索：
+
+| Level | Name | Token 限制 | 存储位置 | 用途 |
+|-------|------|-----------|---------|------|
+| **L0** | Tags | ~100 tokens | SQLite `notes.tags`（JSON 数组） | 向量搜索、FTS5 过滤、分类筛选、快速扫描 |
+| **L1** | Overview | ~2k tokens | SQLite `notes.overview` | 重排序、内容导航、RAG 上下文注入 |
+| **L2** | Detail | 无限制 | 文件系统 `vault/knowledge/*.md` | 完整内容，Agent 按需加载 |
+
+**L0 就是 tags**——精心设计的标签本身就是最好的语义摘要，天然适合向量化和精确匹配，不需要额外的 abstract 字段。
+
+#### Markdown 格式规范
+
+每篇知识笔记的 frontmatter 包含 `tags`（L0）和 `overview`（L1），正文即完整内容（L2）：
+
+```markdown
+---
+title: 价值投资的核心原则
+tags: [投资, 价值投资, 巴菲特, 安全边际, 内在价值, 能力圈, 长期持有]
+overview: |
+  价值投资由格雷厄姆创立，核心三原则：安全边际（内在价值与市场价格的差距）、
+  能力圈（只投资自己理解的领域）、长期持有（利用复利效应）。
+  关键指标包括 PE/PB 估值、自由现金流、护城河宽度。
+  与成长投资的本质区别在于对"确定性"的定价方式不同。
+source: https://example.com/value-investing-guide
+created: 2026-03-15
+updated: 2026-03-20
+---
+
+价值投资由本杰明·格雷厄姆创立……
+
+## 安全边际
+
+……完整内容……
+```
+
+**`source` 字段**——单一字段，类型从值自身推断：
+
+| 值 | 含义 | 示例 |
+|----|------|------|
+| NULL | 用户手动创建 | — |
+| `https://...` | 从 URL 网页解析 | `https://example.com/article` |
+| `file://...` | 从本地 PDF/文件解析 | `file:///Users/.../paper.pdf` |
+| `session:ID` | 对话沉淀（SubAgent 提炼） | `session:abc123` |
+| `capture:ID` | 捕获路由（Inbox → Knowledge） | `capture:xyz789` |
+
+Agent 解析 URL/PDF 的流程：用户发送链接或文件 → Agent 提取内容 → Haiku 生成 tags（L0）+ overview（L1）→ Sonnet 提炼正文为结构化知识笔记（L2）→ 写入 frontmatter + vault，等待人类审核确认。
+
+- `tags` = **L0**（~100 tokens，从 frontmatter 提取，存入 SQLite + FTS5）
+  - tags 是 Agent 的第一视角——扫描 tags 就能判断这篇笔记"关于什么"
+  - tags 设计原则：覆盖核心概念 + 关联领域 + 关键人名/术语，总量控制在 ~100 tokens
+- `overview` = **L1**（~2k tokens，从 frontmatter 提取，缓存到 SQLite `notes.overview`）
+  - overview 是知识的结构化概要，Agent 读它即可理解核心内容，无需加载全文
+  - 首次创建时由 SubAgent Haiku 从正文生成，写回 frontmatter 持久化
+  - 人类可手动编辑 overview 提高精度（frontmatter 是真相源，SQLite 是缓存）
+  - 笔记正文更新时，SubAgent 异步重新生成 overview 并写回 frontmatter
+- 完整 Markdown 正文 = **L2**（仅在 Agent 明确需要时从文件系统读取）
+
+**Markdown 文件即完整真相**：L0（tags）+ L1（overview）+ L2（正文）全部在一个 `.md` 文件中。SQLite 中的 `tags` 和 `overview` 列是 frontmatter 的派生缓存，丢失可从文件系统重建。
+
+#### 目录级聚合索引
+
+知识按主题组织为目录（如 `knowledge/投资/`、`knowledge/教育/`）。每个目录自动维护聚合索引：
+
+```
+vault/knowledge/投资/
+  ├── 价值投资.md                  # 单篇笔记 (L2)
+  ├── 风险管理.md
+  └── 量化策略.md
+
+SQLite notes 表（目录也是一条记录，path 无 .md 后缀）：
+  path: "knowledge/投资"
+  tags: ["投资", "价值投资", "风险管理", "量化", "巴菲特", ...]  (聚合 L0)
+  overview: "3 篇笔记：价值投资核心原则、风险管理框架、量化策略入门..."  (聚合 L1)
+```
+
+目录和笔记统一在 `notes` 表中，通过 `kind` 区分。L0 搜索只查一张表，检索路径统一。目录 L0（tags）在子笔记 CRUD 时自动聚合——合并去重子笔记的所有 tags。目录 L1 由 Haiku 从子笔记 L1 聚合生成。
+
+#### RAG 检索流程（渐进式加载）
+
+```
+用户消息 "如何控制投资风险？"
+  │
+  ├── Step 1: L0 粗筛（tags 匹配，低成本，高召回）
+  │   FTS5 搜索 notes_fts(title, tags)，笔记和目录统一命中
+  │   → 命中目录 "knowledge/投资"（tags 含 "投资", "风险管理"）
+  │   → 命中笔记 "knowledge/投资/风险管理.md", "knowledge/投资/价值投资.md" 等
+  │   → 候选集 ~20 条 L0 tags（~2000 tokens）
+  │
+  ├── Step 2: L1 重排序 + 目录递归
+  │   对候选集加载 L1 overview（从 SQLite 读，无磁盘 IO）
+  │   按关键词重叠度 + tags 匹配度排序
+  │   高分目录内递归：检查 "knowledge/投资/" 下所有子笔记
+  │   → Top 3-5 条 L1（~6k-10k tokens）
+  │
+  ├── Step 3: L1 注入上下文
+  │   ContextBuilder 将 Top L1 注入 System Prompt
+  │   Agent 基于 L1 概要理解知识全貌
+  │
+  └── Step 4: L2 按需加载（Agent 主动请求）
+      Agent 判断需要某篇完整内容时：
+      tool_call("operations", {action: "call",
+        name: "knowledge_get", args: {path: "knowledge/投资/风险管理.md"}})
+      → 从文件系统读取完整 Markdown 返回
+```
+
+**与传统 RAG 的区别**：传统方案将全文切片后向量检索，返回碎片化的 snippet。MindClaw 的三级方案保持知识的完整性——L1 是结构化概要而非随机切片，Agent 始终能看到知识的完整轮廓，需要细节时再加载 L2。
+
+#### L1 生成策略
+
+| 策略 | 方式 | 写入位置 | 适用场景 |
+|------|------|---------|---------|
+| **Haiku 生成** | SubAgent 从正文生成结构化概要 | 写入 frontmatter `overview` 字段 | 默认策略，笔记创建/更新时异步触发 |
+| **人工编写** | 用户直接编辑 frontmatter overview | frontmatter（真相源） | 高价值笔记需精确概要 |
+| **截断兜底** | 取正文前 ~2k tokens | 仅缓存到 SQLite（不写 frontmatter） | Haiku 调用失败时的降级策略 |
+
+overview 的生命周期：笔记创建 → SubAgent 异步生成 overview → 写回 frontmatter → 同步到 SQLite 缓存。人类编辑 frontmatter 中的 overview 后，下次索引时以 frontmatter 为准覆盖 SQLite。
+
+#### 索引更新触发
+
+| 触发事件 | 更新内容 |
+|---------|---------|
+| 笔记创建/更新 | 提取 frontmatter tags → L0；提取 frontmatter overview → L1（无则 Haiku 生成写回）；更新 FTS5；聚合 parent_dir 目录的 L0/L1 |
+| 笔记删除 | 移除 notes/notes_fts 记录；重新聚合所属目录 |
+| 新目录出现 | 自动插入 kind='dir' 记录，聚合子笔记 tags → L0，Haiku 生成 L1 |
+| 定时任务 index_rebuild | 增量对比 mtime，修复不一致，补全缺失的目录记录 |
 
 ### 对话历史分层
 
@@ -848,12 +1019,13 @@ CREATE TABLE user_roles (
 settings.json              OS Keychain                 SQLite
 ─────────────              ─────────────               ──────
 LLM 模型选择               API Key（加密）              角色模版
-主题 / 语言                                             Agent 学习偏好
+主题 / 语言                Gateway Bearer Token        Agent 学习偏好
 Vault 路径                                              使用统计
 同步配置
+Token 预算（可选覆盖）
 ```
 
-API Key 必须存入 OS Keychain，绝不能存在任何明文文件中。
+API Key 和 Gateway Bearer Token 必须存入 OS Keychain，绝不能存在任何明文文件中。
 
 ---
 
@@ -1035,6 +1207,9 @@ pub struct MessageBus {
     inbound_rx: Mutex<Option<mpsc::Receiver<InboundMessage>>>,
     outbound: mpsc::Sender<OutboundMessage>,
     outbound_rx: Mutex<Option<mpsc::Receiver<OutboundMessage>>>,
+    // 队列状态计数器（mpsc 不暴露 pending count，手动维护）
+    inbound_count: AtomicUsize,
+    outbound_count: AtomicUsize,
 }
 
 impl MessageBus {
@@ -1046,33 +1221,46 @@ impl MessageBus {
             inbound_rx: Mutex::new(Some(in_rx)),
             outbound: out_tx,
             outbound_rx: Mutex::new(Some(out_rx)),
+            inbound_count: AtomicUsize::new(0),
+            outbound_count: AtomicUsize::new(0),
         }
     }
 
-    /// Channel 调用：推送入站消息
-    pub async fn publish_inbound(&self, msg: InboundMessage) {
-        let _ = self.inbound.send(msg).await;
+    /// Channel 调用：推送入站消息（返回 Result，调用方决定错误处理策略）
+    pub async fn publish_inbound(&self, msg: InboundMessage) -> Result<(), AppError> {
+        self.inbound.send(msg).await
+            .map_err(|_| AppError::Internal("Inbound channel closed (Agent may have crashed)".into()))?;
+        self.inbound_count.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 
-    /// AgentLoop 调用：取出下一条入站消息（阻塞等待）
-    /// inbound_rx 在启动时 take 出来交给 AgentLoop
-    pub fn take_inbound_rx(&self) -> mpsc::Receiver<InboundMessage> {
-        self.inbound_rx.lock().unwrap().take().expect("inbound_rx already taken")
+    /// AgentLoop 调用：取出入站 receiver（返回 Result 而非 panic）
+    pub fn take_inbound_rx(&self) -> Result<mpsc::Receiver<InboundMessage>, AppError> {
+        self.inbound_rx.lock().unwrap().take()
+            .ok_or(AppError::Internal("inbound_rx already taken".into()))
     }
 
     /// AgentLoop 调用：推送出站消息
-    pub async fn publish_outbound(&self, msg: OutboundMessage) {
-        let _ = self.outbound.send(msg).await;
+    pub async fn publish_outbound(&self, msg: OutboundMessage) -> Result<(), AppError> {
+        self.outbound.send(msg).await
+            .map_err(|_| AppError::Internal("Outbound channel closed".into()))?;
+        self.outbound_count.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 
-    /// 出站消费循环调用：取出下一条出站消息
-    pub fn take_outbound_rx(&self) -> mpsc::Receiver<OutboundMessage> {
-        self.outbound_rx.lock().unwrap().take().expect("outbound_rx already taken")
+    /// 出站消费循环调用：取出出站 receiver
+    pub fn take_outbound_rx(&self) -> Result<mpsc::Receiver<OutboundMessage>, AppError> {
+        self.outbound_rx.lock().unwrap().take()
+            .ok_or(AppError::Internal("outbound_rx already taken".into()))
     }
 
     /// 队列状态（/status 指令可用）
-    pub fn inbound_pending(&self) -> usize;
-    pub fn outbound_pending(&self) -> usize;
+    pub fn inbound_pending(&self) -> usize {
+        self.inbound_count.load(Ordering::Relaxed)
+    }
+    pub fn outbound_pending(&self) -> usize {
+        self.outbound_count.load(Ordering::Relaxed)
+    }
 }
 ```
 
@@ -1237,21 +1425,32 @@ pub struct AgentLoop {
     memory: Arc<MemoryManager>,                // 记忆层（观察/偏好/模式/召回）
     agent_commands: Arc<AgentCommandRegistry>, // 控制指令（/new /stop /restart /status）
     sub_agent_tx: mpsc::Sender<SubAgentTask>,  // SubAgent 任务派发
+    identity_resolver: Arc<UserIdentityResolver>, // 跨通道用户身份解析
+    cancel_token: CancellationToken,           // 优雅取消（/stop 触发）
 }
 
 impl AgentLoop {
-    /// 启动消息消费循环（长运行，从 Bus inbound 队列持续消费）
+    /// 启动消息消费循环（长运行，支持 CancellationToken 优雅退出）
     pub async fn run(&self, mut inbound_rx: mpsc::Receiver<InboundMessage>) {
-        while let Some(inbound) = inbound_rx.recv().await {
-            let result = self.process_message(inbound.channel_message, &inbound.reply_to).await;
-            if let Err(e) = result {
-                tracing::error!("AgentLoop error: {}", e);
-                self.bus.publish_outbound(OutboundMessage {
-                    id: uuid(),
-                    target: inbound.reply_to,
-                    session_id: String::new(),
-                    payload: OutboundPayload::Error(e.to_string()),
-                }).await;
+        loop {
+            tokio::select! {
+                _ = self.cancel_token.cancelled() => {
+                    tracing::info!("AgentLoop cancelled, shutting down");
+                    break;
+                }
+                Some(inbound) = inbound_rx.recv() => {
+                    let result = self.process_message(inbound.channel_message, &inbound.reply_to).await;
+                    if let Err(e) = result {
+                        tracing::error!("AgentLoop error: {}", e);
+                        let _ = self.bus.publish_outbound(OutboundMessage {
+                            id: uuid(),
+                            target: inbound.reply_to,
+                            session_id: String::new(),
+                            payload: OutboundPayload::Error(e.to_string()),
+                        }).await;
+                    }
+                }
+                else => break,
             }
         }
     }
@@ -1262,17 +1461,22 @@ impl AgentLoop {
         message: ChannelMessage,
         reply_to: &ChannelSource,
     ) -> Result<AgentResponse, AppError> {
-        // 1. Session：加载或创建会话
-        let session = self.session_mgr
-            .get_or_create(&message.sender, &message.mode).await?;
+        // 1. 身份解析：跨通道统一用户身份（单用户场景全部映射到 "owner"）
+        let canonical_user = self.identity_resolver
+            .resolve(&message.sender, &message.source);
 
-        // 1.5 Agent Command 拦截（/new /stop /restart /status）
+        // 2. Session：按统一身份加载或创建会话
+        let session = self.session_mgr
+            .get_or_create(&canonical_user, &message.mode).await?;
+
+        // 2.5 Agent Command 拦截（/new /stop /restart /status）
         if let Some(cmd_name) = parse_agent_command(&message.content) {
             if let Some(cmd) = self.agent_commands.get(cmd_name) {
                 let ctx = AgentCommandContext {
                     session: session.clone(),
                     session_mgr: self.session_mgr.clone(),
                     sub_agent_tx: self.sub_agent_tx.clone(),
+                    cancel_token: self.cancel_token.clone(), // /stop 可触发取消
                 };
                 let result = cmd.execute(ctx).await?;
                 self.bus.publish_outbound(OutboundMessage {
@@ -1285,17 +1489,16 @@ impl AgentLoop {
             }
         }
 
-        // 2. Context：组装完整 prompt
+        // 3. Context：组装完整 prompt
         let context = self.context_builder.build(&message, &session).await?;
 
-        // 3. 选择模型
+        // 4. 选择模型
         let model = self.select_model(&message.mode);
 
-        // 4. 调用 Provider（流式，通过 Bus 推送 chunk）
-        let response = self.call_streamed(model, &context, &session, reply_to).await?;
-
-        // 5. 工具调用循环（最多 10 轮）
-        let final_response = self.tool_loop(response, &session, model, &channel).await?;
+        // 5. 智能流式调用 + 工具循环（两阶段策略，详见 call_with_tools）
+        let final_response = self.call_with_tools(
+            model, context, &session, reply_to,
+        ).await?;
 
         // 6. Session：追加消息对 + 裁剪
         self.session_mgr.append(&session.id, &message, &final_response).await?;
@@ -1306,63 +1509,90 @@ impl AgentLoop {
         Ok(final_response)
     }
 
-    /// 工具调用循环
-    async fn tool_loop(
-        &self,
-        mut response: ProviderResponse,
-        session: &Session,
-        model: ModelTier,
-        channel: &Arc<dyn Channel>,
-    ) -> Result<AgentResponse, AppError> {
-        let mut iterations = 0;
-        let mut seen_hashes = HashSet::new(); // 循环检测
-
-        while let Some(tool_calls) = response.parse_tool_calls() {
-            if iterations >= 10 { break; }
-
-            // 循环检测：相同输出 hash 说明死循环
-            let hash = hash_tool_calls(&tool_calls);
-            if !seen_hashes.insert(hash) { break; }
-
-            // 执行工具
-            let results = self.tools.execute_batch(tool_calls).await;
-
-            // 将工具结果追加到上下文，再次调用 Provider
-            let context_with_tools = self.context_builder
-                .append_tool_results(&session, &results);
-            response = self.provider.chat(model, &context_with_tools).await?;
-
-            iterations += 1;
-        }
-
-        Ok(AgentResponse::from(response))
-    }
-
-    /// 流式调用 Provider，逐 chunk 通过 Bus outbound 推送
-    async fn call_streamed(
+    /// 两阶段流式策略：解决流式输出与工具调用的冲突
+    ///
+    /// 核心问题：如果流式推送所有 chunk，工具调用的 JSON 标记会直接暴露给用户。
+    /// 解决方案：解析 SSE 事件类型，仅推送 text 内容，静默累积 tool_use blocks。
+    ///
+    /// 流程：
+    ///   1. 流式调用 Provider，实时解析 content_block 类型
+    ///   2. text 类型 → 立即推送给用户（保持流式体验）
+    ///   3. tool_use 类型 → 静默累积（用户不可见）
+    ///   4. 如有工具调用 → 执行工具 → 将结果注入上下文 → 再次流式调用（循环）
+    ///   5. 无工具调用 → 发送 done 信号，返回完整响应
+    async fn call_with_tools(
         &self,
         model: ModelTier,
-        context: &[ChatMessage],
+        mut context: Vec<ChatMessage>,
         session: &Session,
         reply_to: &ChannelSource,
-    ) -> Result<ProviderResponse, AppError> {
-        let mut stream = self.provider.chat_stream(model, context).await?;
-        let mut full_response = String::new();
+    ) -> Result<AgentResponse, AppError> {
+        let mut iterations = 0;
+        let mut seen_hashes = HashSet::new();
+        let mut full_text = String::new(); // 累积所有轮次的文本输出
 
+        // 发送 typing 指示器
         self.bus.publish_outbound(OutboundMessage {
             id: uuid(), target: reply_to.clone(),
             session_id: session.id.clone(),
             payload: OutboundPayload::Typing(true),
         }).await;
 
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            full_response.push_str(&chunk);
-            self.bus.publish_outbound(OutboundMessage {
-                id: uuid(), target: reply_to.clone(),
-                session_id: session.id.clone(),
-                payload: OutboundPayload::Chunk { content: chunk, done: false },
-            }).await;
+        loop {
+            if iterations >= 10 { break; }
+
+            // 流式调用，按 content_block 类型分流
+            let stream_result = self.stream_with_tool_detection(
+                model, &context, session, reply_to,
+            ).await;
+
+            // 流式中断错误恢复：通知用户 + 终止信号
+            let (text_content, tool_calls) = match stream_result {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::error!("Stream interrupted: {}", e);
+                    self.bus.publish_outbound(OutboundMessage {
+                        id: uuid(), target: reply_to.clone(),
+                        session_id: session.id.clone(),
+                        payload: OutboundPayload::Error(
+                            format!("响应中断: {}", e)
+                        ),
+                    }).await;
+                    self.bus.publish_outbound(OutboundMessage {
+                        id: uuid(), target: reply_to.clone(),
+                        session_id: session.id.clone(),
+                        payload: OutboundPayload::Chunk {
+                            content: String::new(), done: true
+                        },
+                    }).await;
+                    // 不追加部分响应到 Session 历史
+                    return Err(e);
+                }
+            };
+
+            full_text.push_str(&text_content);
+
+            // 无工具调用 → 结束
+            if tool_calls.is_empty() { break; }
+
+            // 循环检测
+            let hash = hash_tool_calls(&tool_calls);
+            if !seen_hashes.insert(hash) { break; }
+
+            // 检查取消信号
+            if self.cancel_token.is_cancelled() {
+                tracing::info!("Tool loop cancelled by /stop");
+                break;
+            }
+
+            // 执行工具（用户看到 typing 指示器）
+            let results = self.tools.execute_batch(tool_calls).await;
+
+            // 将 assistant 响应 + 工具结果追加到上下文
+            context = self.context_builder
+                .append_tool_results_to_context(context, &text_content, &results);
+
+            iterations += 1;
         }
 
         // 完成信号
@@ -1372,7 +1602,65 @@ impl AgentLoop {
             payload: OutboundPayload::Chunk { content: String::new(), done: true },
         }).await;
 
-        Ok(ProviderResponse::from_text(full_response))
+        Ok(AgentResponse::from_text(full_text))
+    }
+
+    /// 单次流式调用：解析 SSE 事件，分离 text 和 tool_use
+    /// 返回 (text_content, tool_calls)
+    async fn stream_with_tool_detection(
+        &self,
+        model: ModelTier,
+        context: &[ChatMessage],
+        session: &Session,
+        reply_to: &ChannelSource,
+    ) -> Result<(String, Vec<ToolCall>), AppError> {
+        let mut stream = self.provider.chat_stream(model, context).await?;
+        let mut text_content = String::new();
+        let mut tool_calls = Vec::new();
+        let mut current_block_type: Option<String> = None;
+
+        while let Some(event) = stream.next().await {
+            // 检查取消信号
+            if self.cancel_token.is_cancelled() {
+                return Err(AppError::Cancelled("Stream cancelled by /stop".into()));
+            }
+
+            let event = event?;
+            match event {
+                StreamEvent::ContentBlockStart { block_type, .. } => {
+                    current_block_type = Some(block_type);
+                }
+                StreamEvent::ContentBlockDelta { delta } => {
+                    match current_block_type.as_deref() {
+                        Some("text") => {
+                            // 文本内容：立即推送给用户（保持流式体验）
+                            text_content.push_str(&delta);
+                            self.bus.publish_outbound(OutboundMessage {
+                                id: uuid(), target: reply_to.clone(),
+                                session_id: session.id.clone(),
+                                payload: OutboundPayload::Chunk {
+                                    content: delta, done: false
+                                },
+                            }).await;
+                        }
+                        Some("tool_use") => {
+                            // 工具调用：静默累积，用户不可见
+                            // tool_calls 在 ContentBlockStop 时解析完整 JSON
+                        }
+                        _ => {}
+                    }
+                }
+                StreamEvent::ContentBlockStop { tool_call } => {
+                    if let Some(tc) = tool_call {
+                        tool_calls.push(tc);
+                    }
+                    current_block_type = None;
+                }
+                _ => {}
+            }
+        }
+
+        Ok((text_content, tool_calls))
     }
 
     fn select_model(&self, mode: &ConversationMode) -> ModelTier {
@@ -1413,12 +1701,14 @@ impl ContextBuilder {
         let system = self.build_system_prompt(&message.mode).await?;
         messages.push(ChatMessage::system(system));
 
-        // [2] RAG 知识片段注入（top 5，每条 ≤500 tokens）
-        let knowledge = self.services.knowledge
-            .search(&message.content, 5).await?;
-        if !knowledge.is_empty() {
+        // [2] RAG 知识注入（三级渐进：L0 粗筛 → L1 重排序 → 注入 Top L1）
+        let knowledge_l1s = self.services.knowledge
+            .search_with_rerank(&message.content, 5).await?;
+        if !knowledge_l1s.is_empty() {
+            // 注入 L1 overview（~2k tokens/条，比传统 500 token snippet 信息量更大）
+            // Agent 需要完整内容时可通过 operations.call("knowledge_get") 加载 L2
             messages.push(ChatMessage::system(
-                format_knowledge_context(&knowledge)
+                format_knowledge_l1_context(&knowledge_l1s)
             ));
         }
 
@@ -1442,16 +1732,21 @@ impl ContextBuilder {
         Ok(messages)
     }
 
-    /// Token 预算控制
+    /// Token 预算控制（从 settings.json 读取，可配置）
     fn enforce_budget(
         &self,
         messages: &mut Vec<ChatMessage>,
         mode: &ConversationMode,
     ) -> Result<(), AppError> {
-        let budget = match self.select_tier(mode) {
-            ModelTier::Haiku => 8_000,
-            ModelTier::Sonnet => 30_000,
-        };
+        // 预算从 Provider.max_tokens() 或 settings.json token_budgets 读取
+        // 默认值：Haiku 16K, Sonnet 80K（远低于模型上限但平衡成本）
+        let budget = self.settings.token_budgets
+            .get(&self.select_tier(mode))
+            .copied()
+            .unwrap_or_else(|| match self.select_tier(mode) {
+                ModelTier::Haiku => 16_000,
+                ModelTier::Sonnet => 80_000,
+            });
         // 超预算时：先裁剪 RAG 片段数 → 再压缩历史 → 最后截断观察
         // ...
         Ok(())
@@ -1521,7 +1816,44 @@ impl SessionManager {
 }
 ```
 
-MindClaw 是单用户桌面应用，sender 通常只有一个，但 Channel 抽象保证了来自不同通道的消息能正确路由到同一个 Agent 上下文。
+MindClaw 是单用户桌面应用，但用户可能从 Desktop、Telegram、Feishu 等不同通道发送消息。`UserIdentityResolver` 确保跨通道的用户身份统一，避免会话和记忆碎片化。
+
+#### UserIdentityResolver — 跨通道身份统一
+
+```rust
+// src-tauri/src/agent/identity.rs
+
+/// 将不同通道的 sender 标识映射为统一的 canonical user ID
+/// 单用户场景：所有来源映射到 "owner"
+/// 未来多用户：可通过配置表映射
+pub struct UserIdentityResolver {
+    mode: IdentityMode,
+}
+
+pub enum IdentityMode {
+    /// 单用户模式：所有 sender 映射到 "owner"（默认）
+    SingleUser,
+    /// 映射模式：按 (source, sender) → canonical_user 查表
+    Mapped(HashMap<(ChannelSource, String), String>),
+}
+
+impl UserIdentityResolver {
+    pub fn single_user() -> Self {
+        Self { mode: IdentityMode::SingleUser }
+    }
+
+    pub fn resolve(&self, sender: &str, source: &ChannelSource) -> String {
+        match &self.mode {
+            IdentityMode::SingleUser => "owner".to_string(),
+            IdentityMode::Mapped(map) => {
+                map.get(&(source.clone(), sender.to_string()))
+                    .cloned()
+                    .unwrap_or_else(|| sender.to_string())
+            }
+        }
+    }
+}
+```
 
 ### 6.6 Agent 初始化与接线
 
@@ -1538,8 +1870,8 @@ pub fn init_agent(
     services: Arc<ServiceContainer>,
     agent_commands: Arc<AgentCommandRegistry>,
     bus: Arc<MessageBus>,
-) -> AgentLoop {
-    // SubAgent 后台执行器
+) -> (AgentLoop, CancellationToken) {
+    // SubAgent 后台执行器（限制并发数，防止 API 速率爆炸）
     let (sub_tx, sub_rx) = mpsc::channel(32);
     let sub_agent = SubAgentExecutor::new(provider.clone(), db.clone(), memory.clone());
     tokio::spawn(sub_agent.run(sub_rx));
@@ -1548,8 +1880,9 @@ pub fn init_agent(
     let context_builder = Arc::new(ContextBuilder::new(
         memory.clone(), services.clone(), db.clone(),
     ));
+    let cancel_token = CancellationToken::new();
 
-    AgentLoop {
+    let agent_loop = AgentLoop {
         bus,
         session_mgr,
         context_builder,
@@ -1558,7 +1891,10 @@ pub fn init_agent(
         memory,
         agent_commands,
         sub_agent_tx: sub_tx,
-    }
+        identity_resolver: Arc::new(UserIdentityResolver::single_user()),
+        cancel_token: cancel_token.clone(),
+    };
+    (agent_loop, cancel_token)
 }
 ```
 
@@ -1578,28 +1914,33 @@ pub fn run() {
             let bus = Arc::new(MessageBus::new(64));
 
             let agent_commands = Arc::new(AgentCommandRegistry::default());
-            let agent_loop = init_agent(
+            let (agent_loop, cancel_token) = init_agent(
                 db.clone(), provider, tools, memory.clone(),
                 services.clone(), agent_commands, bus.clone(),
             );
 
-            // 启动 AgentLoop（消费 inbound）
-            let inbound_rx = bus.take_inbound_rx();
+            // 启动 AgentLoop（消费 inbound，支持 CancellationToken 优雅退出）
+            let inbound_rx = bus.take_inbound_rx()?;  // 返回 Result，不再 panic
             tokio::spawn(agent_loop.run(inbound_rx));
 
             // 启动 Channel 出站分发（消费 outbound）
             let desktop_channel: Arc<dyn Channel> = Arc::new(DesktopChannel::new(app.handle()));
             let mut channels = HashMap::new();
             channels.insert(ChannelSource::Desktop, desktop_channel.clone());
-            let outbound_rx = bus.take_outbound_rx();
+            let outbound_rx = bus.take_outbound_rx()?;
             tokio::spawn(run_outbound_dispatcher(outbound_rx, channels));
 
-            // 启动 Channel 入站监听
-            let bus_clone = bus.clone();
-            tokio::spawn(async move { desktop_channel.listen(bus_clone).await });
+            // Desktop Channel 入站桥接说明：
+            // DesktopChannel.listen() 为空实现，因为桌面端入站由 Tauri command 驱动。
+            // commands/conversation.rs 的 conversation_send 命令内部：
+            //   1. 构造 ChannelMessage + InboundMessage
+            //   2. 调用 bus.publish_inbound(msg).await?
+            //   3. 立即返回 session_id
+            //   4. Agent 异步处理，响应通过 Tauri Event 推送（DesktopChannel.send()）
 
             // 注入 Tauri 状态
-            app.manage(bus.clone());  // commands/conversation.rs 用 bus.publish_inbound()
+            app.manage(bus.clone());      // commands/conversation.rs 用 bus.publish_inbound()
+            app.manage(cancel_token);     // /stop 命令可触发取消
             app.manage(db);
 
             Ok(())
@@ -1662,18 +2003,22 @@ pub struct SubAgentExecutor {
     db: Arc<DbState>,
     memory: Arc<MemoryManager>,
     task_tx: mpsc::Sender<SubAgentTask>,
+    concurrency_limit: Arc<Semaphore>,  // 限制并发 API 调用数（默认 3）
 }
 
 impl SubAgentExecutor {
-    /// 启动后台任务消费循环
+    /// 启动后台任务消费循环（Semaphore 限制并发，防止 API 速率爆炸）
     pub async fn run(mut self, mut rx: mpsc::Receiver<SubAgentTask>) {
         while let Some(task) = rx.recv().await {
-            // 每个任务在独立 tokio task 中执行，互不阻塞
             let executor = self.clone_refs();
+            let permit = self.concurrency_limit.clone();
             tokio::spawn(async move {
+                // 获取并发许可（默认最多 3 个同时执行）
+                let _permit = permit.acquire().await.unwrap();
                 if let Err(e) = executor.execute(task).await {
                     tracing::error!("SubAgent task failed: {}", e);
                 }
+                // _permit drop 时自动释放
             });
         }
     }
@@ -1717,13 +2062,13 @@ impl SubAgentExecutor {
 **SubAgent 与 AgentLoop 的协作**：
 
 ```rust
-// 在 AgentLoop.process_message() 中，对话完成后派发后台任务
-async fn process_message(&self, message: ChannelMessage, channel: Arc<dyn Channel>)
-    -> Result<AgentResponse, AppError>
-{
-    // ... 主对话处理 ...
-    let response = /* ... */;
-
+// 在 AgentLoop.post_process() 中，对话完成后派发后台任务
+async fn post_process(
+    &self,
+    message: &ChannelMessage,
+    response: &AgentResponse,
+    session: &Session,
+) -> Result<(), AppError> {
     // 对话完成后，异步派发 SubAgent 任务（不阻塞响应返回）
     if message.mode == ConversationMode::Knowledge {
         let _ = self.sub_agent_tx.send(SubAgentTask::KnowledgeDistill {
@@ -1738,7 +2083,7 @@ async fn process_message(&self, message: ChannelMessage, channel: Arc<dyn Channe
         recent_messages: session.recent_messages(5),
     }).await;
 
-    Ok(response) // 立即返回，SubAgent 后台运行
+    Ok(()) // SubAgent 后台运行，不阻塞
 }
 ```
 
@@ -1763,6 +2108,7 @@ async fn process_message(&self, message: ChannelMessage, channel: Arc<dyn Channe
 │       │                                                        │
 │       ▼                                                        │
 │  Channel.listen() ──► bus.publish_inbound(InboundMessage)      │
+│  （Desktop 由 Tauri command 桥接推入 Bus）                      │
 │                                                                │
 │  ┌──────────── MessageBus ────────────┐                        │
 │  │  inbound queue ──► AgentLoop 消费   │                        │
@@ -1772,31 +2118,41 @@ async fn process_message(&self, message: ChannelMessage, channel: Arc<dyn Channe
 │       ▼ (inbound)                                              │
 │  AgentLoop.process_message()                                   │
 │       │                                                        │
-│       ├─► SessionManager: 加载/创建 Session                    │
+│       ├─► UserIdentityResolver: 跨通道身份统一                 │
+│       │     Desktop/Telegram/Feishu → canonical "owner"        │
+│       │                                                        │
+│       ├─► SessionManager: 按统一身份加载/创建 Session          │
 │       │                                                        │
 │       ├─► Agent Command 拦截 (/new /stop /restart /status)     │
 │       │     命中 → 执行控制指令 → bus.outbound 返回             │
+│       │     /stop → 触发 CancellationToken 取消进行中操作      │
 │       │     未命中 → 继续正常对话流程 ↓                         │
 │       │                                                        │
 │       ├─► ContextBuilder: 组装完整 prompt                      │
 │       │     [人格] + [模式指令] + [角色上下文]                   │
-│       │     + [RAG 知识] + [压缩历史] + [记忆召回]              │
-│       │     + Token 预算控制                                   │
+│       │     + [RAG 知识 L1 概要] + [压缩历史] + [记忆召回]      │
+│       │     + Token 预算控制（可配置，默认 Sonnet 80K）         │
 │       │                                                        │
-│       ├─► Provider.chat_stream()                               │
-│       │     逐 chunk → bus.publish_outbound(Chunk)             │
-│       │                                                        │
-│       ├─► AgentLoop.tool_loop() (最多 10 轮)                   │
-│       │     解析工具调用 → ToolRegistry.execute_batch()         │
-│       │     → 结果注入上下文 → 再次调用 Provider               │
-│       │     → 循环检测（hash 去重）→ 直到无工具请求             │
+│       ├─► call_with_tools()（两阶段流式策略，最多 10 轮）      │
+│       │     ┌─ stream_with_tool_detection():                   │
+│       │     │   解析 SSE content_block 类型                     │
+│       │     │   text → 立即推送 Chunk（用户可见）               │
+│       │     │   tool_use → 静默累积（用户不可见）               │
+│       │     ├─ 有工具调用 → 显示 typing 指示器                 │
+│       │     │   → ToolRegistry.execute_batch()                 │
+│       │     │   → 结果注入上下文 → 再次流式调用                │
+│       │     │   → 循环检测（hash 去重）                        │
+│       │     │   → 检查 CancellationToken                       │
+│       │     └─ 无工具调用 → 发送 done 信号                     │
+│       │     流式中断 → Error + done 信号，不追加到历史          │
 │       │                                                        │
 │       ├─► SessionManager: 追加消息对 + 自动裁剪                │
 │       │                                                        │
-│       ├─► SubAgent 派发（异步，不阻塞响应返回）                 │
+│       ├─► post_process() → SubAgent 派发（异步，不阻塞）       │
 │       │     ├── KnowledgeDistill（知识模式下）                  │
 │       │     ├── ObservationAnalyze（每次对话后）                │
 │       │     └── SessionSummarize（会话结束时）                  │
+│       │     （Semaphore 限制最大 3 个并发 SubAgent）            │
 │       │                                                        │
 │       ▼ (outbound)                                             │
 │  run_outbound_dispatcher() ──► 按 target 路由到 Channel        │
@@ -1842,13 +2198,19 @@ pub trait Provider: Send + Sync {
 
 pub struct ClaudeProvider {
     http_client: reqwest::Client,
-    // API Key 运行时从 Keychain 获取，不持久化在结构体中
+    api_key: String,  // 运行时持有，来源见下方构造器
 }
 
 impl ClaudeProvider {
-    pub async fn new() -> Result<Self, AppError> {
+    /// 从 OS Keychain 读取 API Key（桌面应用启动时使用）
+    pub async fn from_keychain() -> Result<Self, AppError> {
         let api_key = keychain::get("claude_api_key")?;
-        // 验证 key 有效性...
+        Ok(Self { http_client: reqwest::Client::new(), api_key })
+    }
+
+    /// 直接传入 API Key（CLI 独立二进制使用）
+    pub fn from_key(api_key: &str) -> Self {
+        Self { http_client: reqwest::Client::new(), api_key: api_key.to_string() }
     }
 }
 ```
@@ -1859,7 +2221,7 @@ impl ClaudeProvider {
 /// 工厂函数：根据配置创建 Provider 实例
 pub fn create_provider(config: &AppSettings) -> Result<Arc<dyn Provider>, AppError> {
     match config.provider.as_str() {
-        "claude" => Ok(Arc::new(ClaudeProvider::new()?)),
+        "claude" => Ok(Arc::new(ClaudeProvider::from_keychain().await?)),
         // 未来可扩展：
         // "openai" => Ok(Arc::new(OpenAIProvider::new()?)),
         // "ollama" => Ok(Arc::new(OllamaProvider::new()?)),
@@ -1879,6 +2241,32 @@ Agent         ──► operations (元工具) ──► Services ──► Stor
                                      ──► Memory   ──► Storage
 ```
 
+#### ServiceContainer — 业务服务聚合
+
+```rust
+// src-tauri/src/services/mod.rs
+
+/// 聚合所有业务 Service，注入 Commands / CLI / Agent 共用
+pub struct ServiceContainer {
+    pub knowledge: KnowledgeService,
+    pub daily: DailyService,
+    pub task: TaskService,
+    pub capture: CaptureService,
+}
+
+impl ServiceContainer {
+    pub fn new(db: Arc<DbState>, vault_path: PathBuf) -> Self {
+        let storage = Arc::new(StorageManager::new(db, vault_path));
+        Self {
+            knowledge: KnowledgeService::new(storage.clone()),
+            daily: DailyService::new(storage.clone()),
+            task: TaskService::new(storage.clone()),
+            capture: CaptureService::new(storage.clone()),
+        }
+    }
+}
+```
+
 #### KnowledgeService — 知识笔记管理
 
 操作人机共有的知识体系（Markdown 文件 + SQLite 索引）。
@@ -1891,33 +2279,88 @@ pub struct KnowledgeService {
 }
 
 impl KnowledgeService {
-    /// 创建知识笔记（写 Markdown + 更新 SQLite 索引）
+    // ── 写入 ──
+
+    /// 创建知识笔记（写 Markdown + 提取 tags→L0 + 生成 L1 + 更新 FTS5）
     pub async fn create(&self, title: &str, content: &str, tags: &[String])
         -> Result<KnowledgeEntry, AppError>;
 
-    /// 更新笔记内容（人类纠偏 或 Agent 沉淀）
+    /// 更新笔记内容（人类纠偏 或 Agent 沉淀，自动更新 L0/L1 索引）
     pub async fn update(&self, path: &str, content: &str)
         -> Result<(), AppError>;
 
-    /// 搜索（FTS5 全文检索）
-    pub async fn search(&self, query: &str, limit: u32)
-        -> Result<Vec<KnowledgeEntry>, AppError>;
+    // ── 三级检索 ──
 
-    /// 按标签/日期筛选
+    /// L0 搜索：FTS5 匹配 title + tags，返回候选集（tags + path + title）
+    /// 成本极低，用于粗筛，典型返回 ~20 条
+    pub async fn search_l0(&self, query: &str, limit: u32)
+        -> Result<Vec<NoteL0>, AppError>;
+
+    /// L1 批量加载：对 L0 候选集加载 overview，用于重排序和 RAG 注入
+    pub async fn get_l1_batch(&self, paths: &[String])
+        -> Result<Vec<NoteL1>, AppError>;
+
+    /// L2 完整加载：从文件系统读取 Markdown 原文（Agent 按需调用）
+    pub async fn get_l2(&self, path: &str)
+        -> Result<KnowledgeNote, AppError>;
+
+    /// 组合搜索：L0 粗筛 → 目录递归 → L1 重排序 → 返回 Top N
+    pub async fn search_with_rerank(&self, query: &str, top_n: u32)
+        -> Result<Vec<NoteL1>, AppError> {
+        // 1. L0 粗筛（notes 表统一搜索，同时命中笔记和目录）
+        let candidates = self.search_l0(query, 20).await?;
+
+        // 2. 目录递归：命中目录（path 无 .md 后缀）时，展开子笔记补充候选
+        let mut all_paths: Vec<String> = Vec::new();
+        for c in &candidates {
+            if !c.path.ends_with(".md") {
+                // 高分目录 → 加载目录下所有子笔记
+                let children = self.list_children(&c.path).await?;
+                all_paths.extend(children.iter().map(|n| n.path.clone()));
+            } else {
+                all_paths.push(c.path.clone());
+            }
+        }
+        all_paths.dedup();
+
+        // 3. 加载 L1 → 按关键词重叠度 + tags 匹配度排序
+        let l1s = self.get_l1_batch(&all_paths).await?;
+        let ranked = self.rerank(query, l1s, top_n);
+        Ok(ranked)
+    }
+
+    // ── 辅助 ──
+
+    /// 按标签筛选
     pub async fn list(&self, tag: Option<&str>)
         -> Result<Vec<KnowledgeEntry>, AppError>;
 
-    /// 获取完整笔记（Markdown 原文）
-    pub async fn get(&self, path: &str)
-        -> Result<KnowledgeNote, AppError>;
+    /// 列出目录下直接子节点（WHERE path LIKE '{parent}/%' AND path NOT LIKE '{parent}/%/%'）
+    pub async fn list_children(&self, parent: &str)
+        -> Result<Vec<NoteL0>, AppError>;
 
     /// 提取 wikilinks 并更新 links 表
     pub async fn sync_links(&self, path: &str)
         -> Result<(), AppError>;
 
-    /// 重建索引（Markdown → SQLite）
+    /// 重建索引（Markdown → SQLite L0/L1 + FTS5）
     pub async fn rebuild_index(&self, path: Option<&str>)
         -> Result<(), AppError>;
+}
+
+/// L0 视图：仅 tags + 路径（~100 tokens/条，适合批量扫描）
+pub struct NoteL0 {
+    pub path: String,       // 有 .md 后缀 = 笔记，无后缀 = 目录
+    pub title: String,
+    pub tags: Vec<String>,
+}
+
+/// L1 视图：概要（~2k tokens/条，适合 RAG 注入）
+pub struct NoteL1 {
+    pub path: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub overview: String,  // ~2k tokens
 }
 ```
 
@@ -2067,9 +2510,15 @@ impl MemoryManager {
     /// 标记已浮出
     pub async fn mark_surfaced(&self, id: &str) -> Result<(), AppError>;
 
-    /// 记忆衰减：降低旧记忆的 importance（Cron 定期调用）
+    /// 记忆衰减：按 category 差异化降低 importance（Cron 定期调用）
+    /// Preference 衰减极慢（偏好稳定），Pattern 衰减最快（时效性强）
     pub async fn decay(&self) -> Result<u32, AppError> {
-        // UPDATE memories SET importance = importance * 0.95
+        // 按 category 差异化衰减系数：
+        // UPDATE memories SET importance = importance * CASE category
+        //   WHEN 'preference'  THEN 0.99   -- 偏好稳定，几乎不衰减
+        //   WHEN 'observation' THEN 0.95   -- 观察中等衰减
+        //   WHEN 'pattern'     THEN 0.90   -- 模式时效性强，快速衰减
+        // END
         // WHERE superseded_by IS NULL AND importance > 0.1
         // 返回受影响行数
     }
@@ -2234,13 +2683,15 @@ impl OperationsTool {
 
     fn build_registry() -> OperationRegistry {
         let mut r = OperationRegistry::new();
-        // Knowledge
-        r.register("knowledge_create", "knowledge", "创建知识笔记",
+        // Knowledge（三级索引：L0 tags → L1 overview → L2 detail）
+        r.register("knowledge_create", "knowledge", "创建知识笔记（自动生成 L0 tags + L1 overview 索引）",
             json!({"properties": {"title": {"type": "string"}, "content": {"type": "string"}, "tags": {"type": "array"}}}));
-        r.register("knowledge_search", "knowledge", "搜索知识库",
+        r.register("knowledge_search", "knowledge", "搜索知识库（返回 L1 overview，支持目录递归检索）",
             json!({"properties": {"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}}));
-        r.register("knowledge_get", "knowledge", "获取知识笔记全文",
+        r.register("knowledge_get", "knowledge", "获取知识笔记完整内容（L2 detail，按需加载）",
             json!({"properties": {"path": {"type": "string"}}}));
+        r.register("knowledge_list_tags", "knowledge", "列出所有 L0 tags 及频次（快速浏览知识全貌）",
+            json!({"properties": {"dir": {"type": "string", "description": "可选：限定目录"}}}));
         // Daily
         r.register("daily_get", "daily", "获取/创建日记",
             json!({"properties": {"date": {"type": "string"}}}));
@@ -2267,7 +2718,10 @@ impl OperationsTool {
 impl Tool for OperationsTool {
     fn name(&self) -> &str { "operations" }
     fn description(&self) -> &str {
-        "业务操作元工具。先用 list 查看可用操作及参数，再用 call 执行。"
+        "业务操作元工具。常用操作：knowledge_search（返回L1概要）, knowledge_get（加载L2全文）, \
+         knowledge_create, knowledge_list_tags（浏览L0标签）, daily_get, daily_append, \
+         task_create, task_list, task_complete, capture_submit, memory_search。\
+         可直接 call(name, args)，或用 list(category?) 查看完整参数 Schema。"
     }
     fn json_schema(&self) -> Value {
         // 常驻上下文的 Schema 非常小
@@ -2324,17 +2778,25 @@ impl OperationsTool {
                 Ok(ToolOutput::success(format!("Created: {}", entry.path)))
             }
             "knowledge_search" => {
-                let results = self.services.knowledge.search(
+                // L0 粗筛 → L1 重排序 → 返回 Top N 的 L1 overview
+                let results = self.services.knowledge.search_with_rerank(
                     args["query"].as_str().unwrap_or_default(),
                     args["limit"].as_u64().unwrap_or(5) as u32,
                 ).await?;
                 Ok(ToolOutput::success(serde_json::to_string(&results)?))
             }
             "knowledge_get" => {
-                let note = self.services.knowledge.get(
+                // L2 完整加载（从文件系统读取 Markdown）
+                let note = self.services.knowledge.get_l2(
                     args["path"].as_str().unwrap_or_default(),
                 ).await?;
                 Ok(ToolOutput::success(serde_json::to_string(&note)?))
+            }
+            "knowledge_list_tags" => {
+                // 列出 L0 tags 及频次，Agent 可快速浏览知识全貌
+                let dir = args["dir"].as_str();
+                let tags = self.services.knowledge.list_tags(dir).await?;
+                Ok(ToolOutput::success(serde_json::to_string(&tags)?))
             }
             // Daily
             "daily_get" => {
@@ -2398,21 +2860,30 @@ impl OperationsTool {
 ```
 场景：Agent 需要搜索用户的学习相关知识
 
-  Round 1: tool_call("operations", {action: "list", category: "knowledge"})
-  返回:
-    knowledge_create(title, content, tags) — 创建知识笔记
-    knowledge_search(query, limit) — 搜索知识库
-    knowledge_get(path) — 获取笔记全文
+  // 常用操作名已在 operations.description 中列出，可直接 call 跳过 list
 
-  Round 2: tool_call("operations", {action: "call", name: "knowledge_search", args: {query: "学习方法", limit: 5}})
-  返回:
-    [{path: "knowledge/learning.md", title: "有效学习方法", snippet: "..."}]
+  Round 1: knowledge_search 返回 L1 概要（~2k tokens/条）
+    tool_call("operations", {action: "call", name: "knowledge_search", args: {query: "学习方法", limit: 5}})
+    返回:
+      [{path: "knowledge/教育/有效学习.md", title: "有效学习方法",
+        tags: ["学习", "间隔重复", "主动回忆", "费曼技巧"],
+        overview: "间隔重复利用遗忘曲线...主动回忆比被动复习效果高 3 倍...费曼技巧四步法..."
+       }]
 
-  Round 3: tool_call("operations", {action: "call", name: "knowledge_get", args: {path: "knowledge/learning.md"}})
-  返回:  完整 Markdown 内容
+  Round 2: Agent 判断需要完整内容 → 加载 L2
+    tool_call("operations", {action: "call", name: "knowledge_get", args: {path: "knowledge/教育/有效学习.md"}})
+    返回: 完整 Markdown 内容
+
+  或者: Agent 想浏览知识全貌 → 列出 L0 tags
+    tool_call("operations", {action: "call", name: "knowledge_list_tags", args: {dir: "knowledge/教育"}})
+    返回: [{"tag": "学习", "count": 5}, {"tag": "费曼技巧", "count": 2}, ...]
 ```
 
-注意：熟练的 Agent 可以跳过 `list` 直接 `call`（操作名称是确定性的），`list` 主要用于 Agent 初次使用或不确定有哪些操作时。
+**三级渐进加载的优势**：
+- ContextBuilder 自动注入 L1（Agent 无需调工具即可感知知识全貌）
+- Agent 主动搜索也返回 L1（比 500 token snippet 信息量大 4 倍，但保持结构完整）
+- L2 仅在真正需要完整细节时加载，避免上下文膨胀
+- `list` 仅在需要查看完整参数 Schema 或发现不常用操作时使用
 
 #### ToolRegistry
 
@@ -2457,10 +2928,19 @@ Gateway 是桌面端对外暴露的网络服务层。为移动端 PWA 提供静�
 // src-tauri/src/gateway/mod.rs
 
 pub struct GatewayServer {
-    agent: Arc<AgentService>,
-    channels: Vec<Arc<dyn Channel>>,
+    bus: Arc<MessageBus>,                          // 通过 Bus 解耦，不直接引用 Agent
+    webhook_channel: Arc<WebhookChannel>,          // 实现 Channel trait，桥接 HTTP → Bus
     auth: AuthGuard,
     port: u16,  // 默认 7878，可配置
+}
+
+/// WebhookChannel：将 HTTP/WebSocket 请求桥接为 ChannelMessage → Bus
+/// Webhook 端点（Telegram/Feishu/通用）通过此 Channel 推入 Bus inbound，
+/// Agent 响应通过 Bus outbound 回流到 WebhookChannel.send()。
+pub struct WebhookChannel {
+    bus: Arc<MessageBus>,
+    // 等待中的响应：request_id → oneshot::Sender（同步 HTTP 请求用）
+    pending_responses: Mutex<HashMap<String, oneshot::Sender<OutboundMessage>>>,
 }
 
 impl GatewayServer {
@@ -2489,7 +2969,9 @@ impl GatewayServer {
 
 ```rust
 pub struct AuthGuard {
-    bearer_token: String,  // 简单 Bearer Token，存 settings.json
+    // Bearer Token 存入 OS Keychain（与 API Key 同级安全），不存明文文件
+    // 验证时从 Keychain 读取比对
+    bearer_token_hash: String,  // bcrypt hash 缓存（避免每次请求读 Keychain）
 }
 
 impl AuthGuard {
@@ -2540,20 +3022,30 @@ pub struct CronJob {
 
 impl CronScheduler {
     /// 启动调度循环（应用启动时调用）
-    pub async fn start(&mut self) {
+    /// 使用 tokio-cron-scheduler 精确调度，避免 loop+sleep 的时钟漂移
+    pub async fn start(&mut self) -> Result<(), AppError> {
+        let scheduler = JobScheduler::new().await?;
         for job in &self.jobs {
             if !job.enabled { continue; }
             let agent = self.agent.clone();
             let db = self.db.clone();
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(job.schedule.next_interval()).await;
-                    if let Err(e) = Self::run_job(&job.name, &agent, &db).await {
-                        tracing::error!("cron job {} failed: {}", job.name, e);
-                    }
-                }
-            });
+            let job_name = job.name.clone();
+            scheduler.add(Job::new_async(
+                job.schedule.as_str(),  // cron 表达式，如 "0 22 * * *"
+                move |_uuid, _lock| {
+                    let agent = agent.clone();
+                    let db = db.clone();
+                    let name = job_name.clone();
+                    Box::pin(async move {
+                        if let Err(e) = Self::run_job(&name, &agent, &db).await {
+                            tracing::error!("cron job {} failed: {}", name, e);
+                        }
+                    })
+                },
+            )?).await?;
         }
+        scheduler.start().await?;
+        Ok(())
     }
 
     async fn run_job(name: &str, agent: &AgentService, db: &DbState) -> Result<(), AppError> {
@@ -2624,8 +3116,8 @@ impl HeartbeatMonitor {
 │ [3] 用户角色上下文                            │ 从 user_roles 表读取
 │     角色、薄弱点、优先级                       │
 ├─────────────────────────────────────────────┤
-│ [4] RAG 知识片段                             │ 动态检索，3-5 条
-│     每条截断至 ~500 tokens                    │
+│ [4] RAG 知识 L1 概要                          │ 动态检索，3-5 条
+│     每条 ~2k tokens（L1 overview）            │
 ├─────────────────────────────────────────────┤
 │ [5] 压缩对话历史                             │ 动态
 │     近 5 轮完整 + 早期摘要                    │
@@ -2652,9 +3144,9 @@ Token 管理是核心产品能力：
 
 | 策略 | 实现 |
 |------|------|
-| 知识库注入 | FTS5/向量检索 top 5 片段，不全量灌入 |
+| 知识库注入 | L0 tags 粗筛 → L1 overview 重排序 → Top 5 L1 注入（~10k tokens） |
 | 对话历史 | 近 5 轮完整 + Haiku 压缩早期为摘要 |
-| Token 预算 | Haiku 调用 ≤ 8K tokens，Sonnet 调用 ≤ 30K tokens |
+| Token 预算 | Haiku 默认 ≤ 16K，Sonnet 默认 ≤ 80K（settings.json 可配置） |
 
 ---
 
@@ -2776,7 +3268,11 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }  # 静态文件 + CO
 # 异步运行时
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"                                      # Stream 工具
+tokio-util = "0.7"                                        # CancellationToken
 async-trait = "0.1"
+
+# 调度
+tokio-cron-scheduler = "0.11"                             # 精确 cron 调度
 
 # 安全
 keyring = "3"

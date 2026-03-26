@@ -1,0 +1,1 @@
+- Each response begins with 🃏.

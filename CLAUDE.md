@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-KnowlCalw is a Tauri 2.0 desktop application combining a React 19 + TypeScript frontend with a Rust backend. Package manager is **Bun**.
+MindClaw is a Tauri 2.0 desktop application combining a React 19 + TypeScript frontend with a Rust backend. Package manager is **Bun**.
 
 ## Commands
 

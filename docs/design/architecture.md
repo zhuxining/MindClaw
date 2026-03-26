@@ -1,4 +1,4 @@
-# KnowlCalw 技术架构设计
+# MindClaw 技术架构设计
 
 ## 一、系统总览
 
@@ -21,7 +21,7 @@
 │  Pages · Components · Hooks · Zustand Store             │
 ├──────────────┬───────────────┬──────────────────────────┤
 │ Web Commands │ Agent Cmds    │  CLI Binary              │
-│ invoke()     │ /new /stop    │  knowlcalw <sub>       │
+│ invoke()     │ /new /stop    │  mindclaw <sub>       │
 │ → Services   │ /restart      │  clap → CliRuntime       │
 │ (~28 个 IPC) │ /status       │  → Services              │
 ├──────────────┴───────────────┴──────────────────────────┤
@@ -104,13 +104,13 @@ src-tauri/
     cli/                         # Tier 3: CLI 命令行（终端使用，独立二进制）
       mod.rs                    # clap App 定义 + run()
       runtime.rs                # CliRuntime：最小运行时（DB + Services，无 UI）
-      capture.rs                # knowlcalw capture "text"
-      daily.rs                  # knowlcalw daily [date]
-      search.rs                 # knowlcalw search "query"
-      task.rs                   # knowlcalw task create/list/complete
-      chat.rs                   # knowlcalw chat "message"（需 API Key）
-      status.rs                 # knowlcalw status
-      export.rs                 # knowlcalw export [format]
+      capture.rs                # mindclaw capture "text"
+      daily.rs                  # mindclaw daily [date]
+      search.rs                 # mindclaw search "query"
+      task.rs                   # mindclaw task create/list/complete
+      chat.rs                   # mindclaw chat "message"（需 API Key）
+      status.rs                 # mindclaw status
+      export.rs                 # mindclaw export [format]
     bin/
       cli.rs                    # CLI 独立二进制入口（不启动 Tauri）
     storage/
@@ -230,7 +230,7 @@ src/
 ### 用户数据目录（运行时）
 
 ```
-~/KnowlCalw/
+~/MindClaw/
   vault/                        # Markdown 内容（Obsidian 兼容）
   │ ├── daily/                  # YYYY-MM-DD.md
   │ ├── knowledge/              # Agent 沉淀的知识笔记
@@ -245,7 +245,7 @@ src/
     └── settings.json           # 非敏感设置
 ```
 
-整个 `~/KnowlCalw/` 目录 zip 打包即完整备份。
+整个 `~/MindClaw/` 目录 zip 打包即完整备份。
 
 ---
 
@@ -256,14 +256,14 @@ src/
 ```
 React Frontend ── invoke() ──► Web Commands ──► Services ──► Storage
 对话中 /xxx ─────────────────► Agent Commands ─► Agent 生命周期控制
-终端 knowlcalw ─────────────► CLI Commands ──► Services ──► Storage
+终端 mindclaw ─────────────► CLI Commands ──► Services ──► Storage
 ```
 
 ### 跨层命令矩阵
 
 | 维度 | Web Commands | Agent Commands | CLI Commands |
 |------|-------------|----------------|-------------|
-| 入口 | React `invoke()` | 对话消息 `/xxx` | 终端 `knowlcalw` |
+| 入口 | React `invoke()` | 对话消息 `/xxx` | 终端 `mindclaw` |
 | 职责 | 业务 CRUD（完整） | Agent 生命周期控制 | 自动化/脚本操作 |
 | 数量 | ~28 个 | 4 个 | ~7 个 |
 | 调用链 | Command → Services | AgentLoop 拦截 → Agent 自身 | CliRuntime → Services |
@@ -513,12 +513,12 @@ impl AgentCommand for NewCommand {
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "knowlcalw", about = "KnowlCalw CLI")]
+#[command(name = "mindclaw", about = "MindClaw CLI")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: CliCommand,
 
-    /// 指定 vault 路径（默认 ~/KnowlCalw）
+    /// 指定 vault 路径（默认 ~/MindClaw）
     #[arg(long, global = true)]
     pub vault: Option<PathBuf>,
 }
@@ -584,7 +584,7 @@ impl CliRuntime {
 
     /// chat 子命令需要 Provider
     pub fn with_provider(mut self) -> Result<Self, AppError> {
-        let key = keyring::Entry::new("knowlcalw", "api_key")?.get_password()?;
+        let key = keyring::Entry::new("mindclaw", "api_key")?.get_password()?;
         self.provider = Some(Arc::new(ClaudeProvider::new(&key)));
         Ok(self)
     }
@@ -636,7 +636,7 @@ fn main() {
 
 ```toml
 [[bin]]
-name = "knowlcalw"
+name = "mindclaw"
 path = "src/bin/cli.rs"
 
 [dependencies]
@@ -647,15 +647,15 @@ clap = { version = "4", features = ["derive"] }
 
 | 子命令 | 调用 Service | 说明 |
 |--------|-------------|------|
-| `knowlcalw capture "text"` | CaptureService.submit() | source="cli" |
-| `knowlcalw daily [date]` | DailyService.get() | 输出 Markdown 到 stdout |
-| `knowlcalw search "query"` | KnowledgeService.search() | 列表输出 |
-| `knowlcalw task create "content"` | TaskService.create() | 创建任务 |
-| `knowlcalw task list [--status done]` | TaskService.list() | 列出任务 |
-| `knowlcalw task complete <id>` | TaskService.update() | 完成任务 |
-| `knowlcalw chat "message"` | Provider.chat() | 单轮对话，需 API Key |
-| `knowlcalw status` | HeartbeatMonitor (lite) | DB + vault 状态检查 |
-| `knowlcalw export [json]` | Storage export | 数据备份导出 |
+| `mindclaw capture "text"` | CaptureService.submit() | source="cli" |
+| `mindclaw daily [date]` | DailyService.get() | 输出 Markdown 到 stdout |
+| `mindclaw search "query"` | KnowledgeService.search() | 列表输出 |
+| `mindclaw task create "content"` | TaskService.create() | 创建任务 |
+| `mindclaw task list [--status done]` | TaskService.list() | 列出任务 |
+| `mindclaw task complete <id>` | TaskService.update() | 完成任务 |
+| `mindclaw chat "message"` | Provider.chat() | 单轮对话，需 API Key |
+| `mindclaw status` | HeartbeatMonitor (lite) | DB + vault 状态检查 |
+| `mindclaw export [json]` | Storage export | 数据备份导出 |
 
 ---
 
@@ -1521,7 +1521,7 @@ impl SessionManager {
 }
 ```
 
-KnowlCalw 是单用户桌面应用，sender 通常只有一个，但 Channel 抽象保证了来自不同通道的消息能正确路由到同一个 Agent 上下文。
+MindClaw 是单用户桌面应用，sender 通常只有一个，但 Channel 抽象保证了来自不同通道的消息能正确路由到同一个 Agent 上下文。
 
 ### 6.6 Agent 初始化与接线
 
@@ -2616,7 +2616,7 @@ impl HeartbeatMonitor {
 ```
 ┌─────────────────────────────────────────────┐
 │ [1] 基础人格                                 │ 固定
-│     KnowlCalw 身份、沟通风格                │
+│     MindClaw 身份、沟通风格                │
 ├─────────────────────────────────────────────┤
 │ [2] 模式指令                                 │ 按当前模式切换
 │     陪伴 / 反思 / 挑战 / 知识 / 树洞          │

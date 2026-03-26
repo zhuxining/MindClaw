@@ -7,18 +7,12 @@
 ### 4.1 捕获流（Capture Flow）
 
 ```
-用户在 QuickCapture 输入
-  → invoke("capture_submit", { raw, source: "desktop" })
-  → Command → CaptureService.submit(): 写入 capture_queue 表，返回 CaptureItem
-  → SubAgent 异步: Haiku 分类 → { task | thought | feeling | link }
-  → CaptureService.update_route(): 更新 suggested_route
-  → 前端: InboxPage 轮询/监听 → 展示待审核项
-  → 用户确认 → invoke("capture_confirm_route")
-  → Command → CaptureService.confirm(): 按路由委托对应 Service
-      ├── task    → TaskService.create()
-      ├── thought → KnowledgeService.create() → vault/knowledge/ 草稿
-      ├── feeling → DailyService.append() → vault/daily/当日.md
-      └── link    → CaptureService.mark_processed()
+用户输入（文字/URL/文件）
+  → Agent / routing skill 判断类型并直接写入目标：
+      ├── task     → TaskService.create() → tasks 表 + Daily checkbox
+      ├── thought  → KnowledgeService.create() → vault/knowledge/ 草稿
+      ├── feeling  → DailyService.append() → vault/daily/当日.md
+      └── resource → ResourceService.create() → resources 表 → 异步结晶为知识笔记
 ```
 
 ### 4.2 对话流（Conversation Flow）
@@ -27,16 +21,16 @@
 
 ```
 用户发送消息（桌面 UI / Telegram / Feishu）
-  → Channel 将平台消息转为 ChannelMessage { sender, content, source, mode }
+  → Channel 将平台消息转为 ChannelMessage { sender, content, source }
   → Bus.publish_inbound() → AgentLoop 消费
       ├─ UserIdentityResolver: 跨通道身份统一（→ "owner"）
       ├─ SessionManager: 按统一身份加载/创建 Session
       ├─ ContextBuilder: 组装 prompt
-      │    [1] 基础人格 + 模式指令
-      │    [2] 用户角色上下文（user_roles 表）
+      │    [1] 基础人格指令
+      │    [2] 用户画像上下文（memories 表 category='profile'）
       │    [3] KnowledgeService.search_with_rerank(): L0 粗筛 → L1 注入
       │    [4] 压缩对话历史（近 5 轮完整 + 早期摘要）
-      │    [5] Memory.unsurfaced_observations(): 记忆召回
+      │    [5] Memory.unsurfaced(): 记忆召回
       │    [6] 用户消息
       ├─ call_with_tools(): 两阶段流式策略
       │    stream_with_tool_detection(): 解析 SSE 事件

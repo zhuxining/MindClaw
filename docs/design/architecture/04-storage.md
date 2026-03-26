@@ -6,14 +6,14 @@
 
 ### 核心原则
 
-**Markdown 是内容真相，SQLite 是查询索引。** SQLite 和向量索引都是 Markdown 的派生层，丢失可从 Markdown 完整重建。
+**Markdown 优先，SQLite 分治。** 知识笔记以 Markdown 为真相源，SQLite 是派生索引，可从 Markdown 重建。任务、记忆、会话等结构化状态以 SQLite 为真相源，必要时同步到 Markdown 作为人类友好视图。
 
 ### SQLite 表结构
 
 ```sql
 -- Markdown 索引（派生，可从文件系统重建）
 -- 三级索引：L0 Tags / L1 Overview / L2 Detail（全文在文件系统）
--- 笔记和目录统一存储，kind 区分类型，共享 L0/L1 检索路径
+-- 笔记和目录统一存储，path 后缀区分类型（%.md 为笔记，否则为目录）
 CREATE TABLE notes (
   id         TEXT PRIMARY KEY,
   path       TEXT UNIQUE NOT NULL,  -- 笔记: "knowledge/投资/价值投资.md"（有 .md 后缀）
@@ -25,16 +25,11 @@ CREATE TABLE notes (
   overview   TEXT,           -- ~2k tokens 概要（L1）
                              --   笔记: 从 frontmatter 提取（Haiku 生成或人工编写）
                              --   目录: 聚合子笔记概要
-  source     TEXT,           -- 来源标识（从 frontmatter 提取，仅笔记有）
-                             --   NULL             — 用户手动创建
-                             --   'https://...'    — 从 URL 解析
-                             --   'file://...pdf'  — 从 PDF 解析
-                             --   'session:abc123' — 对话沉淀（关联会话 ID）
-                             --   'capture:xyz'    — 捕获路由（关联 capture ID）
-  -- parent_dir 和 note_count 不需要：
-  --   父目录从 path 推导（如 "knowledge/投资/价值投资.md" → "knowledge/投资"）
-  --   子节点查询用 WHERE path LIKE 'knowledge/投资/%'
-  --   子笔记计数用 COUNT(*) 实时计算
+  source     TEXT,           -- 创建方式（从 frontmatter 提取，仅笔记有）
+                             --   NULL         — 用户手动创建
+                             --   'resource'   — 从资源结晶（URL/PDF，详见 resources 表）
+                             --   'session:ID' — 对话蒸馏（关联会话 ID，非资源）
+  -- parent_dir / note_count 不需要：父目录从 path 推导，子节点用 LIKE 'dir/%.md' 查询
   created    TEXT NOT NULL,
   updated    TEXT NOT NULL,
   status     TEXT DEFAULT 'active',
@@ -50,17 +45,34 @@ CREATE VIRTUAL TABLE notes_fts USING fts5(
 
 -- 子节点查询直接用 path LIKE 'dir/%'，path 的 UNIQUE 索引已覆盖前缀匹配
 
--- 任务（一等公民，独立结构）
+-- 任务（SQLite 是真相源，Daily Markdown 是人类友好视图）
+-- Daily 中格式：- [ ] 买菜 <!--task:abc123-->
+-- 写入方向：SQLite → Markdown；用户在 Obsidian 手写无 ID 的 checkbox 时反向创建
 CREATE TABLE tasks (
   id        TEXT PRIMARY KEY,
   content   TEXT NOT NULL,
   status    TEXT DEFAULT 'pending',  -- pending | in_progress | done | cancelled
   due       TEXT,
-  note_path TEXT,
+  note_path TEXT,                    -- 关联笔记路径（daily 或 knowledge，created 日期关联当天 daily）
   context   TEXT,
   created   TEXT NOT NULL,
   completed TEXT
 );
+
+-- 资源（外部文件/URL，结晶前的原始材料）
+-- 生命周期：pending → parsing → done | failed
+-- 与知识笔记 1:1：一个资源结晶为一篇知识笔记
+CREATE TABLE resources (
+  id          TEXT PRIMARY KEY,
+  uri         TEXT UNIQUE NOT NULL,   -- 统一资源标识（https://... | file:///... | skill://name）
+  title       TEXT,                   -- 资源标题（从元数据提取）
+  type        TEXT NOT NULL,          -- url | pdf | epub | file | skill
+  status      TEXT DEFAULT 'pending', -- pending | parsing | done | failed
+  note_path   TEXT,                   -- 结晶后指向 notes.path（未结晶时为 NULL）
+  created     TEXT NOT NULL,
+  updated     TEXT NOT NULL
+);
+CREATE INDEX idx_resources_status ON resources(status);
 
 -- 笔记链接关系（从 wikilinks 提取，派生）
 CREATE TABLE links (
@@ -70,55 +82,46 @@ CREATE TABLE links (
   PRIMARY KEY (source_path, target_path)
 );
 
--- Memory Layer: Agent 私有记忆（单表统一，不进 Markdown）
+-- Memory Layer: 记忆系统（单表统一，不进 Markdown）
+-- category 隐含 owner：profile/preferences/entities/events 归 user，cases/patterns 归 agent
 CREATE TABLE memories (
   id             TEXT PRIMARY KEY,
   key            TEXT UNIQUE NOT NULL,   -- 去重键，同一认知 upsert 而非 insert
   content        TEXT NOT NULL,          -- 记忆内容
-  category       TEXT NOT NULL,          -- observation | preference | pattern
-  type           TEXT,                   -- 子类型：insight/blindspot/emotion | communication_style | emotion_trend
-  namespace      TEXT DEFAULT 'default', -- 上下文隔离（不同角色/模式下的记忆）
+  category       TEXT NOT NULL,          -- profile | preferences | entities | events | cases | patterns
+                                         --   profile:     用户基本信息（角色、背景、目标）
+                                         --   preferences: 用户偏好（沟通风格、主题偏好）
+                                         --   entities:    实体记忆（人物、项目、组织）
+                                         --   events:      事件记录（决策、里程碑、事故）
+                                         --   cases:       Agent 学到的案例（成功方案、调试经验）
+                                         --   patterns:    Agent 学到的模式（行为规律、偏好趋势）
   importance     REAL DEFAULT 0.5,       -- 重要度（recall 排序、衰减基准）
   session_id     TEXT,                   -- 关联会话（溯源）
   related_path   TEXT,                   -- 关联笔记路径
   embedding      BLOB,                   -- 向量（Phase 2 语义检索）
   surfaced       INTEGER DEFAULT 0,      -- 是否已浮出给用户
   superseded_by  TEXT,                   -- 被哪条新记忆替代（认知演进链）
-  created_at     TEXT NOT NULL,
-  updated_at     TEXT NOT NULL
+  created        TEXT NOT NULL,
+  updated        TEXT NOT NULL
 );
 
--- 索引：按 category 筛选 + importance 排序
 CREATE INDEX idx_memories_category ON memories(category, importance DESC);
--- 索引：按 namespace 隔离
-CREATE INDEX idx_memories_namespace ON memories(namespace);
--- 索引：未浮出的记忆（ContextBuilder 注入用）
 CREATE INDEX idx_memories_unsurfaced ON memories(surfaced, importance DESC)
   WHERE surfaced = 0 AND superseded_by IS NULL;
 
--- 捕获队列
-CREATE TABLE capture_queue (
-  id         TEXT PRIMARY KEY,
-  raw        TEXT NOT NULL,
-  type       TEXT,  -- task | thought | feeling | link
-  source     TEXT DEFAULT 'desktop',
-  created    TEXT NOT NULL,
-  processed  INTEGER DEFAULT 0,
-  routed_to  TEXT
-);
+-- 捕获路由不需要中间表：用户输入由 Agent / routing skill 判断后直接写入目标表
+-- （tasks / resources / daily notes / knowledge notes）
 
 -- 对话会话
 CREATE TABLE sessions (
-  id      TEXT PRIMARY KEY,
-  sender  TEXT NOT NULL,  -- canonical user ID（经 UserIdentityResolver 统一后）
-  mode    TEXT NOT NULL,  -- companion | reflect | challenge | knowledge | treehole
-  created TEXT NOT NULL,
-  updated TEXT NOT NULL,
-  summary TEXT
+  id        TEXT PRIMARY KEY,
+  initiator TEXT NOT NULL,  -- user | system | agent
+  created   TEXT NOT NULL,
+  updated   TEXT NOT NULL,
+  summary   TEXT
 );
 
--- 索引：按 sender + mode 查找活跃会话
-CREATE INDEX idx_sessions_sender_mode ON sessions(sender, mode);
+CREATE INDEX idx_sessions_initiator ON sessions(initiator);
 
 -- 对话消息（热存，90 天后转冷归档）
 CREATE TABLE messages (
@@ -129,24 +132,29 @@ CREATE TABLE messages (
   created    TEXT NOT NULL
 );
 
--- 用户角色
-CREATE TABLE user_roles (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  priority   INTEGER DEFAULT 0,
-  weak_point TEXT,
-  created    TEXT NOT NULL
-);
-
--- Agent 记忆偏好等在 memories 表中（category='preference'）
+-- 用户角色信息已归入 memories 表（category='profile'），不需要独立表
 ```
 
 ### Markdown 与 SQLite 同步
+
+**Knowledge（知识笔记）— Markdown 是真相源：**
 
 - **写入时**：Markdown 先写，然后更新 SQLite 索引（frontmatter tags/overview → notes 表 L0/L1）
 - **写入失败恢复**：如果 SQLite 索引更新失败，写入 `data/.index_dirty` 脏标记文件，下次启动时立即触发全量重建
 - **冲突时**：Markdown frontmatter 为权威，SQLite 索引可随时从文件系统重建
 - **重建索引**：启动时先检查 `.index_dirty` 标记，再检查 `last_indexed` 与文件 mtime，仅增量更新
+
+**Task（任务）— SQLite 是真相源：**
+
+- **正向同步（SQLite → Markdown）**：任务创建/状态变更时，更新关联笔记中的 checkbox
+
+  ```markdown
+  - [ ] 买菜 <!--task:abc123-->       ← pending
+  - [x] 写周报 <!--task:def456-->     ← done
+  ```
+
+- **反向识别（Markdown → SQLite）**：解析 daily 时发现无 ID 的 checkbox（`- [ ] 新任务`），自动创建 task 记录并回写 `<!--task:id-->` 标记
+- **冲突时**：SQLite 为权威。用户在 Obsidian 中勾选 checkbox 不会自动同步（避免文件监听复杂度），状态以 SQLite 为准，下次 daily 更新时覆盖
 
 ### 知识笔记三级索引（L0 / L1 / L2）
 
@@ -173,7 +181,7 @@ overview: |
   能力圈（只投资自己理解的领域）、长期持有（利用复利效应）。
   关键指标包括 PE/PB 估值、自由现金流、护城河宽度。
   与成长投资的本质区别在于对"确定性"的定价方式不同。
-source: https://example.com/value-investing-guide
+source: resource
 created: 2026-03-15
 updated: 2026-03-20
 ---
@@ -186,17 +194,15 @@ updated: 2026-03-20
 ……完整内容……
 ```
 
-**`source` 字段**——单一字段，类型从值自身推断：
+**`source` 字段**——标识知识笔记的创建方式：
 
-| 值 | 含义 | 示例 |
+| 值 | 含义 | 说明 |
 |----|------|------|
-| NULL | 用户手动创建 | — |
-| `https://...` | 从 URL 网页解析 | `https://example.com/article` |
-| `file://...` | 从本地 PDF/文件解析 | `file:///Users/.../paper.pdf` |
-| `session:ID` | 对话沉淀（SubAgent 提炼） | `session:abc123` |
-| `capture:ID` | 捕获路由（Inbox → Knowledge） | `capture:xyz789` |
+| NULL | 用户手动创建 | 直接在 vault 中编写 |
+| `resource` | 从资源结晶 | URL/PDF 解析产出，原始资源详见 `resources` 表 |
+| `session:ID` | 对话蒸馏 | SubAgent 从会话中提炼的洞见，非资源 |
 
-Agent 解析 URL/PDF 的流程：用户发送链接或文件 → Agent 提取内容 → Haiku 生成 tags（L0）+ overview（L1）→ Sonnet 提炼正文为结构化知识笔记（L2）→ 写入 frontmatter + vault，等待人类审核确认。
+**资源结晶流程**：用户提交 URL/PDF → 写入 `resources` 表（status=pending）→ Agent 提取内容（status=parsing）→ Haiku 生成 tags（L0）+ overview（L1）→ Sonnet 提炼正文为结构化知识笔记（L2）→ 写入 frontmatter + vault → 更新 `resources.note_path` + `status=done`，等待人类审核确认。
 
 - `tags` = **L0**（~100 tokens，从 frontmatter 提取，存入 SQLite + FTS5）
   - tags 是 Agent 的第一视角——扫描 tags 就能判断这篇笔记"关于什么"
@@ -226,7 +232,7 @@ SQLite notes 表（目录也是一条记录，path 无 .md 后缀）：
   overview: "3 篇笔记：价值投资核心原则、风险管理框架、量化策略入门..."  (聚合 L1)
 ```
 
-目录和笔记统一在 `notes` 表中，通过 `kind` 区分。L0 搜索只查一张表，检索路径统一。目录 L0（tags）在子笔记 CRUD 时自动聚合——合并去重子笔记的所有 tags。目录 L1 由 Haiku 从子笔记 L1 聚合生成。
+目录和笔记统一在 `notes` 表中，通过 path 后缀区分（`.md` 为笔记，否则为目录）。L0 搜索只查一张表，检索路径统一。目录 L0（tags）在子笔记 CRUD 时自动聚合——合并去重子笔记的所有 tags。目录 L1 由 Haiku 从子笔记 L1 聚合生成。
 
 #### RAG 检索流程（渐进式加载）
 
@@ -274,7 +280,7 @@ overview 的生命周期：笔记创建 → SubAgent 异步生成 overview → �
 |---------|---------|
 | 笔记创建/更新 | 提取 frontmatter tags → L0；提取 frontmatter overview → L1（无则 Haiku 生成写回）；更新 FTS5；聚合 parent_dir 目录的 L0/L1 |
 | 笔记删除 | 移除 notes/notes_fts 记录；重新聚合所属目录 |
-| 新目录出现 | 自动插入 kind='dir' 记录，聚合子笔记 tags → L0，Haiku 生成 L1 |
+| 新目录出现 | 自动插入目录记录（path 无 .md 后缀），聚合子笔记 tags → L0，Haiku 生成 L1 |
 | 定时任务 index_rebuild | 增量对比 mtime，修复不一致，补全缺失的目录记录 |
 
 ### 对话历史分层
@@ -292,9 +298,9 @@ overview 的生命周期：笔记创建 → SubAgent 异步生成 overview → �
 ```
 settings.json              OS Keychain                 SQLite
 ─────────────              ─────────────               ──────
-LLM 模型选择               API Key（加密）              角色模版
-主题 / 语言                Gateway Bearer Token        Agent 学习偏好
-Vault 路径                                              使用统计
+LLM 模型选择               API Key（加密）              记忆（memories 表）
+主题 / 语言                Gateway Bearer Token        使用统计
+Vault 路径
 同步配置
 Token 预算（可选覆盖）
 ```

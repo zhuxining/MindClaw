@@ -17,7 +17,7 @@
 | Markdown 读写 | storage::markdown | 日记和知识笔记 |
 | Provider 层 | providers::claude | Claude API Haiku/Sonnet 调用 |
 | 基础工具 | tools::search, file_ops | 知识库搜索 + Markdown 文件操作 |
-| Cron 基础任务 | cron | capture_process, index_rebuild, daily_summary |
+| Cron 基础任务 | cron | index_rebuild, daily_summary |
 | Heartbeat | heartbeat | 系统健康检测（DB、Vault、API Key） |
 | 统一错误处理 | error.rs | AppError → 前端展示 |
 | 结构化日志 | tracing crate | 开发调试 |
@@ -44,7 +44,7 @@
 | PWA 移动查看 | Gateway 提供静态文件服务 |
 | Tailscale 远程穿透 | 移动端远程接入 |
 | JSONL 冷归档 | history_prune cron，90 天后才需要 |
-| Cron 高级任务 | knowledge_review, observation_surface |
+| Cron 高级任务 | knowledge_review, memory_surface |
 | Agent 主动推送 | 异步日志与浮出机制 |
 | 知识图谱可视化 | — |
 | 本地 Embedding 模型 | 用 API embedding 或延期向量搜索 |

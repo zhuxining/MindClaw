@@ -685,11 +685,11 @@ impl ContextBuilder {
             ));
         }
 
-        // [3] Memory 记忆召回：未浮出的观察 + 用户偏好
-        let observations = self.memory.unsurfaced_observations(3).await?;
-        if !observations.is_empty() {
+        // [3] Memory 记忆召回：未浮出的记忆
+        let memories = self.memory.unsurfaced(3).await?;
+        if !memories.is_empty() {
             messages.push(ChatMessage::system(
-                format_observations(&observations)
+                format_memories(&memories)
             ));
         }
 
@@ -1016,9 +1016,9 @@ impl SubAgentExecutor {
             }
             SubAgentTask::ObservationAnalyze { session_id, recent_messages } => {
                 // Sonnet 调用：分析模式，发现盲区
-                let observations = self.analyze_patterns(&recent_messages).await?;
-                for obs in observations {
-                    self.memory.record_observation(obs).await?;
+                let insights = self.analyze_patterns(&recent_messages).await?;
+                for insight in insights {
+                    self.memory.remember(insight).await?;
                 }
             }
             SubAgentTask::DailySummary { date } => {
@@ -1432,22 +1432,25 @@ pub struct Memory {
     pub id: String,
     pub key: String,                        // 唯一去重键，同一认知 upsert
     pub content: String,                    // 记忆内容
-    pub category: MemoryCategory,           // observation | preference | pattern
-    pub memory_type: Option<String>,        // 子类型
-    pub namespace: String,                  // 上下文隔离（default / companion / reflect）
+    pub category: MemoryCategory,           // 6 类，隐含 owner（user/agent）
     pub importance: f32,                    // 重要度 0.0-1.0（衰减基准、recall 排序）
     pub session_id: Option<String>,         // 关联会话（溯源）
     pub related_path: Option<String>,       // 关联笔记路径
     pub surfaced: bool,                     // 是否已浮出给用户
     pub superseded_by: Option<String>,      // 被哪条新记忆替代
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
 }
 
 pub enum MemoryCategory {
-    Observation,  // 模式识别、盲区发现、跨域关联
-    Preference,   // 沟通风格、兴趣倾向、角色薄弱点
-    Pattern,      // 对话频率、情绪曲线、主题热度
+    // user 拥有
+    Profile,      // 用户基本信息（角色、背景、目标）
+    Preferences,  // 用户偏好（沟通风格、主题偏好）
+    Entities,     // 实体记忆（人物、项目、组织）
+    Events,       // 事件记录（决策、里程碑、事故）
+    // agent 拥有
+    Cases,        // 学到的案例（成功方案、调试经验）
+    Patterns,     // 学到的模式（行为规律、偏好趋势）
 }
 ```
 
@@ -1488,9 +1491,12 @@ impl MemoryManager {
     pub async fn decay(&self) -> Result<u32, AppError> {
         // 按 category 差异化衰减系数：
         // UPDATE memories SET importance = importance * CASE category
-        //   WHEN 'preference'  THEN 0.99   -- 偏好稳定，几乎不衰减
-        //   WHEN 'observation' THEN 0.95   -- 观察中等衰减
-        //   WHEN 'pattern'     THEN 0.90   -- 模式时效性强，快速衰减
+        //   WHEN 'profile'     THEN 0.99   -- 用户信息稳定，几乎不衰减
+        //   WHEN 'preferences' THEN 0.99   -- 偏好稳定
+        //   WHEN 'entities'    THEN 0.98   -- 实体信息较稳定
+        //   WHEN 'events'      THEN 0.95   -- 事件中等衰减
+        //   WHEN 'cases'       THEN 0.95   -- 案例中等衰减
+        //   WHEN 'patterns'    THEN 0.90   -- 模式时效性强，快速衰减
         // END
         // WHERE superseded_by IS NULL AND importance > 0.1
         // 返回受影响行数
@@ -1508,19 +1514,16 @@ impl MemoryManager {
 }
 ```
 
-#### 记忆类别与子类型
+#### 记忆类别与示例
 
-| category | 子类型 (type) | 说明 | key 示例 |
-|----------|-------------|------|---------|
-| **observation** | pattern | "这是第三次提到工作疲惫感" | `obs:work_fatigue_pattern` |
-| **observation** | insight | "工作压力与陪孩子质量高度相关" | `obs:work_parenting_correlation` |
-| **observation** | blindspot | "用户从未考虑过健康问题" | `obs:health_blindspot` |
-| **observation** | emotion | "周一情绪持续低落" | `obs:monday_mood_low` |
-| **preference** | communication_style | "偏好直接简洁的沟通方式" | `pref:communication_style` |
-| **preference** | interest_topic | "对教育方法论很感兴趣" | `pref:interest_education` |
-| **pattern** | emotion_trend | "近两周焦虑情绪上升" | `pat:emotion_trend_2w` |
-| **pattern** | topic_frequency | "「创业」话题本月提及 12 次" | `pat:topic_startup_monthly` |
-| **pattern** | engagement | "晚上 10 点后对话质量最高" | `pat:engagement_peak_time` |
+| category | 说明 | key 示例 |
+|----------|------|---------|
+| **profile** | "用户是创业者，关注教育和投资" | `profile:role_entrepreneur` |
+| **preferences** | "偏好直接简洁的沟通方式" | `pref:communication_style` |
+| **entities** | "张三是用户的合伙人，负责技术" | `entity:person_zhangsan` |
+| **events** | "2026-03 决定转型做教育方向" | `event:pivot_education_202603` |
+| **cases** | "工作压力与陪孩子质量高度相关" | `case:work_parenting_correlation` |
+| **patterns** | "晚上 10 点后对话质量最高" | `pat:engagement_peak_time` |
 
 #### 认知演进链（superseded_by）
 
@@ -1983,11 +1986,11 @@ pub struct CronJob {
 | 任务 | 默认频率 | 说明 | Phase |
 |------|---------|------|-------|
 | `daily_summary` | 每日 22:00 | Agent 生成当日回顾摘要，写入日记 | MVP |
-| `capture_process` | 每 5 分钟 | 处理未路由的捕获队列 | MVP |
+| `resource_process` | 每 5 分钟 | 处理 pending 状态的资源（解析 + 结晶） | MVP |
 | `history_prune` | 每日 03:00 | 压缩旧对话历史，超 90 天转冷归档 | Phase 2 |
 | `knowledge_review` | 每周日 10:00 | Agent 回顾知识库，发现新关联（Layer 2） | Phase 2 |
 | `index_rebuild` | 每日 04:00 | 增量重建 SQLite 索引（Markdown → notes 表） | MVP |
-| `observation_surface` | 每日 09:00 | 检查 Layer 3 观察是否到浮出时机 | Phase 2 |
+| `memory_surface` | 每日 09:00 | 检查未浮出记忆是否到浮出时机 | Phase 2 |
 | `heartbeat_check` | 每 30 秒 | 系统健康检测 | MVP |
 
 ```rust
@@ -2086,8 +2089,8 @@ impl HeartbeatMonitor {
 │ [2] 模式指令                                 │ 按当前模式切换
 │     陪伴 / 反思 / 挑战 / 知识 / 树洞          │
 ├─────────────────────────────────────────────┤
-│ [3] 用户角色上下文                            │ 从 user_roles 表读取
-│     角色、薄弱点、优先级                       │
+│ [3] 用户画像上下文                             │ 从 memories 表读取
+│     category='profile' 的记忆                 │
 ├─────────────────────────────────────────────┤
 │ [4] RAG 知识 L1 概要                          │ 动态检索，3-5 条
 │     每条 ~2k tokens（L1 overview）            │

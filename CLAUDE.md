@@ -68,11 +68,11 @@ fn greet(name: &str) -> String { ... }
 | `src-tauri/src/error.rs` | Unified `AppError` type (Serialize for IPC) |
 | `src-tauri/src/commands/` | Web Commands (Tauri IPC handlers) |
 | `src-tauri/src/agent/` | AgentLoop, ContextBuilder, SessionManager |
-| `src-tauri/src/services/` | Core business logic (Knowledge, Daily, Task, Capture) |
+| `src-tauri/src/services/` | Core business logic (Knowledge, Daily, Task, Resource) |
 | `src-tauri/src/storage/` | SQLite, Markdown read/write, Keychain |
 | `src-tauri/src/providers/` | LLM abstraction (Claude API, Haiku/Sonnet) |
 | `src-tauri/src/tools/` | Agent tool registry (filesystem, shell, operations) |
-| `src-tauri/src/memory/` | Agent private memory (observations, preferences, patterns) |
+| `src-tauri/src/memory/` | Memory system (profile, preferences, entities, events, cases, patterns) |
 | `src-tauri/src/channels/` | Channel trait + Desktop/Telegram/Feishu implementations |
 | `src-tauri/src/bus/` | MessageBus: bidirectional async queue (Channel ↔ Agent) |
 | `src-tauri/src/models/` | Data models (Note, Task, Message, Session, Settings) |
@@ -85,7 +85,7 @@ fn greet(name: &str) -> String { ... }
 
 ### Storage Principles
 
-- **Markdown is the source of truth, SQLite is the query index.** SQLite can be fully rebuilt from Markdown files.
+- **Markdown first, SQLite complements.** Knowledge notes use Markdown as source of truth (SQLite is derived index). Tasks, memories, sessions use SQLite as source of truth.
 - Knowledge notes use three-level indexing: L0 (tags, ~100 tokens) → L1 (overview, ~2k tokens) → L2 (full Markdown on disk).
 - Write order: Markdown first, then update SQLite index. On index failure, write `.index_dirty` marker for rebuild on next startup.
 - API Keys and Gateway tokens must be stored in OS Keychain (via `keyring` crate), never in plaintext files.
@@ -104,7 +104,7 @@ fn greet(name: &str) -> String { ... }
 - **MessageBus**: Decouples Channel ↔ Agent via async inbound/outbound queues. Outbound queue survives Channel disconnects.
 - **AgentLoop**: Main loop consumes Bus.inbound → SessionManager → ContextBuilder → Provider.chat() → ToolRegistry → Bus.outbound.
 - **Agent Commands** (`/new`, `/stop`, `/restart`, `/status`): Intercepted in AgentLoop before context assembly, no LLM call.
-- **SubAgent**: Async background tasks (knowledge distill, observation analyze, capture route, etc.) dispatched from AgentLoop.
+- **SubAgent**: Async background tasks (knowledge distill, memory analyze, resource parse, etc.) dispatched from AgentLoop.
 - **Provider**: Haiku for lightweight tasks (routing, classification, L1 generation), Sonnet for deep conversation.
 - **Tools**: 4 always-in-context tools (filesystem, shell, mcp_client, operations). `operations` is a meta-tool for dynamic Service/Memory access.
 
@@ -123,8 +123,7 @@ fn greet(name: &str) -> String { ... }
     knowledge/              # Topic-organized knowledge notes
     private/                # Private zone (Agent cannot see)
   data/
-    main.db                 # SQLite (indexes + FTS5 + memory)
-    queue.db                # Offline capture queue
+    main.db                 # SQLite (indexes + FTS5 + memories + resources)
     archive/                # Cold archive (YYYY-MM.jsonl)
   config/
     settings.json           # Non-sensitive settings

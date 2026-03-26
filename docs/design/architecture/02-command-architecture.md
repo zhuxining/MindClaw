@@ -29,20 +29,19 @@ React Frontend ── invoke() ──► Web Commands ──► Services ──�
 
 调用链：`React invoke() → #[tauri::command] → Services → Storage`
 
-#### Capture（捕获）
+#### Resource（资源）
 
 | 命令 | 参数 | 返回 | 说明 |
 |------|------|------|------|
-| `capture_submit` | `{ raw: String, source: String }` | `CaptureItem` | 提交原始捕获 |
-| `capture_list_pending` | `{}` | `Vec<CaptureItem>` | 待处理列表 |
-| `capture_route` | `{ id: String }` | `CaptureRoute` | Agent 路由建议（Haiku） |
-| `capture_confirm_route` | `{ id: String, route: String, adjusted: bool }` | `()` | 确认/调整路由 |
+| `resource_submit` | `{ uri: String, type: String }` | `Resource` | 提交资源（URL/文件） |
+| `resource_list` | `{ status: Option<String> }` | `Vec<Resource>` | 资源列表（可按状态过滤） |
+| `resource_retry` | `{ id: String }` | `()` | 重试失败的资源解析 |
 
 #### Conversation（对话）
 
 | 命令 | 参数 | 返回 | 说明 |
 |------|------|------|------|
-| `conversation_send` | `{ message: String, mode: String }` | `String`（session_id） | 发起对话，响应通过 Event 流式推送 |
+| `conversation_send` | `{ message: String }` | `String`（session_id） | 发起对话，响应通过 Event 流式推送 |
 | `conversation_history` | `{ session_id: String, limit: u32 }` | `Vec<Message>` | 获取会话历史 |
 | `conversation_sessions` | `{ limit: u32 }` | `Vec<Session>` | 会话列表 |
 

@@ -233,15 +233,12 @@ tasks (id, content, status, due, note_path, context, created, completed)
 -- 笔记链接关系（从 wikilinks 提取，派生）
 links (source_path, target_path, context)
 
--- Agent 私有观察（不进 Markdown）
-agent_observations (id, type, content, related_path, created, surfaced)
+-- 记忆系统（6 类统一存储，不进 Markdown）
+memories (id, key, content, category, importance, session_id, related_path, surfaced, superseded_by, created, updated)
+-- category: profile | preferences | entities | events | cases | patterns
 
--- 捕获队列（离线时暂存）
-capture_queue (id, raw, type, created, processed, routed_to)
-
--- 用户角色与 Agent 学习偏好
-user_roles (id, name, priority, weak_point, created)
-agent_preferences (key, value, source, updated)
+-- 资源（外部文件/URL，结晶为知识笔记）
+resources (id, uri, title, type, status, note_path, created, updated)
 ```
 
 #### 对话历史：SQLite 热存 + JSONL 冷归档

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    partnerclaw_lib::run()
+    knowlcalw_lib::run()
 }

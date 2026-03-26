@@ -1,21 +1,21 @@
 {
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun run check && bun run check-types",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
-  },
-  "enabledPlugins": {
-    "security-guidance@claude-plugins-official": true,
-    "feature-dev@claude-plugins-official": true,
-    "code-simplifier@claude-plugins-official": true
-  }
+	"hooks": {
+		"PostToolUse": [
+			{
+				"matcher": "Write|Edit",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "bun run check && bun run check-types",
+						"timeout": 30
+					}
+				]
+			}
+		]
+	},
+	"enabledPlugins": {
+		"security-guidance@claude-plugins-official": true,
+		"feature-dev@claude-plugins-official": true,
+		"code-simplifier@claude-plugins-official": true
+	}
 }

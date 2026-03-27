@@ -6,130 +6,59 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MindClaw is a Tauri 2.0 desktop application combining a React 19 + TypeScript frontend with a Rust backend. Package manager is **Bun**.
 
-> 详细架构文档见 `docs/design/architecture/README.md`
+> Full architecture docs: `docs/design/architecture/README.md`
 
 ## Commands
 
 ```bash
-# Start full desktop app in dev mode (Rust + frontend with HMR)
-bunx tauri dev
-
-# Frontend only (Vite dev server on port 1420)
-bun run dev
-
-# Type-check + production build (frontend)
-bun run build
-
-# Build distributable desktop app
-bunx tauri build
+bunx tauri dev          # Full desktop app dev mode (Rust + frontend HMR)
+bun run dev             # Frontend only (Vite on port 1420)
+bun run build           # Type-check + production build (frontend)
+bunx tauri build        # Build distributable desktop app
+bun run check           # Biome lint + format
+bun run check-types     # TypeScript type-check
 ```
-
-No test or lint commands are configured yet.
 
 ## Architecture
 
-### Three-Tier Command Architecture
+### Layer Principles
 
-系统有三种命令入口，底层共享 Services 层：
+> Details: `docs/design/architecture/08-dependencies.md`
 
-| Tier | 入口 | 位置 | 数量 |
-|------|------|------|------|
-| Web Commands | React `invoke()` | `src-tauri/src/commands/` | ~25 |
-| Agent Commands | 对话中 `/xxx` | `src-tauri/src/agent_commands/` | 4 |
-| CLI Commands | 终端 `mindclaw` | `src-tauri/src/cli/` | ~6 |
+- **Web (React)** = thin client: render UI, collect input, call `invoke()`. No HTTP requests, no persistence, no business logic.
+- **Tauri (Plugins)** = glue: bridge OS capabilities only. Use Plugin JS API for clipboard/dialog/notification/fs. Never use plugins for HTTP, WebSocket, KV storage, or shell execution.
+- **Rust (Services)** = core: all business logic lives here, must NOT `use tauri::*` in Services. Three command tiers (Web/Agent/CLI) share the same Services layer.
+- **Data flow**: `Command (thin) → Service (thick) → Storage (thin)`.
+- **Secrets**: stored in Stronghold (`tauri-plugin-stronghold`), never in plaintext.
 
-调用链：`Command → Services → Storage`（Web/CLI 共用），Agent Commands 由 AgentLoop 拦截处理。
+### Frontend Stack
 
-### IPC Pattern (Frontend ↔ Rust)
+- **UI**: shadcn/ui (based on **Base UI**, not Radix). Add components via `bunx shadcn@latest add <name>`.
+- **Editor**: Milkdown (Crepe) for Markdown WYSIWYG editing.
+- **State**: Zustand for UI state, TanStack Query for server state (invoke caching).
+- **Routing**: TanStack Router.
+- **Anti-patterns**: No `asChild` (Base UI uses `render` prop). No `@radix-ui/*` packages.
 
-All frontend-to-backend calls go through Tauri's `invoke()`:
+### IPC Pattern
 
-```ts
-import { invoke } from "@tauri-apps/api/core";
-const result = await invoke("greet", { name });
-```
-
-```rust
-#[tauri::command]
-fn greet(name: &str) -> String { ... }
-```
-
-- New Rust commands must be registered in `lib.rs` inside `.invoke_handler(tauri::generate_handler![...])`.
-- Commands return `Result<T, AppError>`, error type defined in `error.rs` (implements `Serialize` for IPC).
-- Tauri state injection via `.manage()`, commands access via `State<'_, T>`.
+- All frontend-to-backend calls go through Tauri `invoke()`.
+- New Rust commands must be registered in `lib.rs` via `tauri::generate_handler![...]`.
+- Commands return `Result<T, AppError>` (`error.rs`, implements `Serialize`).
 
 ### Key Locations
 
 | Path | Purpose |
 |------|---------|
-| `src/App.tsx` | Root React component, routing, global providers |
-| `src-tauri/src/lib.rs` | Tauri Builder: plugin/command registration, state injection |
-| `src-tauri/src/main.rs` | Rust binary entry (delegates to lib) |
-| `src-tauri/src/error.rs` | Unified `AppError` type (Serialize for IPC) |
-| `src-tauri/src/commands/` | Web Commands (Tauri IPC handlers) |
-| `src-tauri/src/agent/` | AgentLoop, ContextPipeline, SessionManager, HookRegistry, SkillRegistry |
-| `src-tauri/src/services/` | Core business logic (Knowledge, Daily, Task, Resource) |
-| `src-tauri/src/storage/` | SQLite, Markdown read/write, Keychain |
-| `src-tauri/src/providers/` | LLM abstraction (Claude API, Haiku/Sonnet) |
-| `src-tauri/src/tools/` | Agent tool registry (filesystem, shell, operations) |
-| `src-tauri/src/memory/` | Memory system (profile, preferences, entities, events, cases, patterns) |
-| `src-tauri/src/channels/` | Channel trait + Desktop/Telegram/Feishu implementations |
-| `src-tauri/src/bus/` | MessageBus: bidirectional async queue (Channel ↔ Agent) |
-| `src-tauri/src/models/` | Data models (Note, Task, Message, Session, Settings) |
-| `src-tauri/tauri.conf.json` | App config (identifier, window size, bundle) |
-| `src-tauri/capabilities/default.json` | Tauri permission grants |
-| `src/pages/` | React pages (Daily, Knowledge, Conversation, Settings) |
-| `src/components/` | UI components organized by feature |
-| `src/hooks/` | Custom hooks (useIpc, useConversation, useDaily, useTasks, etc.) |
-| `src/store/` | Zustand stores (app, conversation) |
-
-### Storage Principles
-
-- **Markdown first, SQLite complements.** Knowledge notes use Markdown as source of truth (SQLite is derived index). Tasks, memories, sessions use SQLite as source of truth.
-- Knowledge notes use three-level indexing: L0 (tags, ~100 tokens) → L1 (overview, ~2k tokens) → L2 (full Markdown on disk).
-- Write order: Markdown first, then update SQLite index. On index failure, write `.index_dirty` marker for rebuild on next startup.
-- API Keys and Gateway tokens must be stored in OS Keychain (via `keyring` crate), never in plaintext files.
-- Conversation messages: hot in SQLite for 90 days, then archived to JSONL cold storage.
+| `src/App.tsx` | Root React component |
+| `src/components/ui/` | shadcn/ui generated components |
+| `src-tauri/src/lib.rs` | Tauri Builder: plugin/command registration |
+| `src-tauri/src/main.rs` | Rust binary entry |
+| `src-tauri/tauri.conf.json` | App config (identifier, window, bundle) |
+| `src-tauri/capabilities/` | Tauri permission grants |
+| `docs/design/architecture/` | Full architecture design docs |
 
 ### Security / Permissions
 
-- Tauri 2.0 uses a capabilities-based permission model. New plugins/APIs must be declared in `src-tauri/capabilities/default.json`.
-- `vault/private/` is invisible to Agent — storage layer rejects `private/` prefix paths for Agent access.
-- Private content never enters SQLite index, RAG retrieval, or any IPC response.
-- CSP should restrict to `'self'` + `https://api.anthropic.com` (currently `null` — to be configured).
-
-### Agent Architecture (Key Patterns)
-
-- **Channel abstraction**: All message sources (Desktop/Telegram/Feishu) implement `Channel` trait → unified `ChannelMessage`.
-- **MessageBus**: Decouples Channel ↔ Agent via async inbound/outbound queues. Outbound queue survives Channel disconnects.
-- **AgentLoop**: Main loop consumes Bus.inbound → Hooks(PreMessage) → ContextPipeline → Provider.chat() → Hooks(PreToolUse/PostToolUse) → ToolRegistry → Hooks(PostMessage) → Bus.outbound.
-- **Hooks**: Event-driven extension points (PreMessage, PostMessage, PreToolUse, PostToolUse, OnSessionCreate/Close). Supports Rust trait handlers and settings.json command hooks.
-- **ContextPipeline**: Pluggable context assembly. Each `ContextSource` has priority and token budget. Built-in 5 sources + Skills can register additional sources.
-- **Agent Commands** (`/new`, `/stop`, `/restart`, `/status`): Intercepted in AgentLoop before context assembly, no LLM call.
-- **SubAgent**: Trait-based task registry. Built-in tasks (knowledge distill, session summarize, etc.) + Skills can register custom tasks via `SubAgentRegistry`.
-- **Skills**: Primary extension mechanism. A Skill package provides any combination of Tools, ContextSources, HookHandlers, SubAgentTasks, and Operations.
-- **Provider**: Haiku for lightweight tasks (routing, classification, L1 generation), Sonnet for deep conversation.
-- **Tools**: 4 always-in-context tools (filesystem, shell, mcp_client, operations). `operations` is a meta-tool for dynamic Service/Memory access.
-
-### Build Flow
-
-- Dev server: Vite on `http://localhost:1420`, HMR on port 1421
-- Tauri wraps the Vite dev server in a native window during `tauri dev`
-- Production: `bun run build` outputs to `../dist`, then Tauri bundles the binary
-
-### User Data Directory (Runtime)
-
-```
-~/MindClaw/
-  vault/                    # Markdown content (Obsidian-compatible)
-    daily/                  # YYYY-MM-DD.md
-    knowledge/              # Topic-organized knowledge notes
-    private/                # Private zone (Agent cannot see)
-  data/
-    main.db                 # SQLite (indexes + FTS5 + memories + resources)
-    archive/                # Cold archive (YYYY-MM.jsonl)
-  config/
-    settings.json           # Non-sensitive settings
-```
-
-Entire `~/MindClaw/` directory can be zip-backed up as a complete backup.
+- Tauri 2.0 capabilities-based model. New plugins/APIs must be declared in `src-tauri/capabilities/`.
+- `vault/private/` is invisible to Agent — storage layer rejects `private/` prefix paths.
+- CSP should restrict to `'self'` + `https://api.anthropic.com`.

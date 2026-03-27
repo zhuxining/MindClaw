@@ -1,0 +1,26 @@
+{
+  "identifier": "desktop-capability",
+  "platforms": [
+    "macOS",
+    "windows",
+    "linux"
+  ],
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "autostart:default",
+    "cli:default",
+    "opener:default",
+    "clipboard-manager:default",
+    "dialog:default",
+    "fs:default",
+    "global-shortcut:default",
+    "notification:default",
+    "os:default",
+    "process:default",
+    "stronghold:default",
+    "updater:default",
+    "window-state:default"
+  ]
+}

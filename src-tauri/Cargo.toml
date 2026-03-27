@@ -14,12 +14,102 @@ edition = "2021"
 name = "mindclaw_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1 # 允许 LLVM 执行更好的优化。
+lto = true        # 启用链接时优化。
+opt-level = "s"   # 优先考虑小的二进制文件大小。如果您更喜欢速度，请使用 `3`。
+panic = "abort"   # 通过禁用 panic 处理程序来提高性能。
+strip = true      # 确保移除调试符号。
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Tauri
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-os = "2"
+tauri-plugin-persisted-scope = "2"
+tauri-plugin-process = "2"
+tauri-plugin-stronghold = "2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-autostart = "2"
+tauri-plugin-cli = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-window-state = "2"
+
+# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Async runtime
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "net",
+    "io-util",
+    "sync",
+    "process",
+    "io-std",
+    "fs",
+    "signal",
+] }
+tokio-stream = { version = "0.1.18", default-features = false }
+
+# Database
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+
+# HTTP client
+reqwest = { version = "0.13.2", default-features = false, features = [
+    "json",
+    "rustls",
+] }
+
+# Configuration
+directories = "6.0"
+shellexpand = "3.1"
+toml = "1.0"
+
+# Utilities
+base64 = "0.22.1"
+image = { version = "0.25.10", default-features = false, features = [
+    "jpeg",
+    "png",
+] }
+urlencoding = "2.1.3"
+uuid = { version = "1.22", default-features = false, features = ["v4", "std"] }
+glob = "0.3"
+which = "8.0"
+nanohtml2text = "0.2"
+chrono = { version = "0.4", default-features = false, features = [
+    "clock",
+    "std",
+    "serde",
+] }
+regex = "1.10"
+async-trait = "0.1"
+futures-util = { version = "0.3", default-features = false, features = [
+    "sink",
+] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = [
+    "fmt",
+    "ansi",
+    "env-filter",
+] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"

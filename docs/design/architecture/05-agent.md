@@ -63,68 +63,56 @@
 
 **Core Agent 是唯一持有完整人模型的编排器**。Channel、Gateway、Provider、Tools 都是可替换的适配层，通过 trait 解耦。Cron 和 Heartbeat 提供后台运行能力。
 
-### 6.2 Channel Trait — 统一消息通道
+### 6.2 Channel 层 — 统一消息通道
 
 Channel 是所有通信平台的抽象接口。无论消息来自桌面 UI、Telegram 还是 Feishu，Agent 看到的都是统一的 `ChannelMessage`。
 
 ```rust
 // src-tauri/src/channels/traits.rs
 
-/// 通道消息（入站）
 pub struct ChannelMessage {
     pub id: String,
-    pub sender: String,        // 用户标识
-    pub content: String,       // 消息内容
-    pub source: ChannelSource, // 来源通道
+    pub sender: String,
+    pub content: String,
+    pub source: ChannelSource,
     pub timestamp: DateTime<Utc>,
-    pub mode: ConversationMode, // 交互模式
+    pub mode: ConversationMode,
 }
 
-/// 发送消息（出站）
 pub struct SendMessage {
     pub content: String,
     pub recipient: String,
     pub metadata: Option<serde_json::Value>,
 }
 
-/// 通道来源
 pub enum ChannelSource {
-    Desktop,    // Tauri 桌面端
-    Telegram,   // Telegram Bot
-    Feishu,     // 飞书 Bot
-    Webhook,    // 通用 Webhook
+    Desktop,
+    Telegram,
+    Feishu,
+    Webhook,
 }
 
-/// Channel trait — 所有通道实现此接口
 #[async_trait]
 pub trait Channel: Send + Sync {
-    /// 通道名称
     fn name(&self) -> &str;
-
-    /// 通道来源标识
     fn source(&self) -> ChannelSource;
-
-    /// 发送消息到通道（由 outbound 消费循环调用）
     async fn send(&self, message: OutboundMessage) -> Result<(), AppError>;
-
-    /// 监听平台消息，推入 Bus 入站队列（长运行）
     async fn listen(&self, bus: Arc<MessageBus>) -> Result<(), AppError>;
-
-    // --- 可选能力（默认空实现）---
-
-    /// 是否支持流式输出
     fn supports_streaming(&self) -> bool { false }
-
-    /// 发送流式 chunk
-    async fn send_chunk(&self, _chunk: &str, _session_id: &str) -> Result<(), AppError> {
-        Ok(())
-    }
-
-    /// 发送 typing 指示器
+    async fn send_chunk(&self, _chunk: &str, _session_id: &str) -> Result<(), AppError> { Ok(()) }
     async fn start_typing(&self) -> Result<(), AppError> { Ok(()) }
     async fn stop_typing(&self) -> Result<(), AppError> { Ok(()) }
 }
 ```
+
+#### Channel 实现一览
+
+| Channel | 传输方式 | 流式支持 | 入站机制 | Phase |
+|---------|---------|---------|---------|-------|
+| **Desktop** | Tauri IPC invoke + Event emit | Yes | Tauri command 桥接推入 Bus（listen 为空实现） | MVP |
+| **Telegram** | HTTP API / Long polling | No | getUpdates 或 Webhook → Bus | Phase 1 后期 |
+| **Feishu** | HTTP API / Webhook | No | Webhook → Bus | Phase 2 |
+| **Webhook** | HTTP POST → Bus | No | Gateway 接收 → Bus | Phase 1 后期 |
 
 ### 6.3 MessageBus — 双向异步消息队列
 
@@ -143,32 +131,30 @@ Channel.listen()                          Channel.send()
 └──────────────────────────────────────────────────┘
 ```
 
-**核心价值**：出站队列使 Channel 断线时消息不丢失，重连后可继续消费。
+**设计决策**：出站队列使 Channel 断线时消息不丢失，重连后可继续消费。使用 tokio mpsc channel 实现，Receiver 通过 `take` 语义确保单消费者。
 
 ```rust
 // src-tauri/src/bus/events.rs
 
-/// 入站消息：Channel → Agent
 pub struct InboundMessage {
     pub id: String,
     pub channel_message: ChannelMessage,
     pub source: ChannelSource,
-    pub reply_to: ChannelSource,         // 响应应发回哪个通道
+    pub reply_to: ChannelSource,
 }
 
-/// 出站消息：Agent → Channel
 pub struct OutboundMessage {
     pub id: String,
-    pub target: ChannelSource,           // 目标通道
+    pub target: ChannelSource,
     pub session_id: String,
     pub payload: OutboundPayload,
 }
 
 pub enum OutboundPayload {
-    Text(String),                        // 完整文本响应
-    Chunk { content: String, done: bool }, // 流式片段
-    Typing(bool),                        // typing 指示器
-    Error(String),                       // 错误消息
+    Text(String),
+    Chunk { content: String, done: bool },
+    Typing(bool),
+    Error(String),
 }
 ```
 
@@ -180,889 +166,23 @@ pub struct MessageBus {
     inbound_rx: Mutex<Option<mpsc::Receiver<InboundMessage>>>,
     outbound: mpsc::Sender<OutboundMessage>,
     outbound_rx: Mutex<Option<mpsc::Receiver<OutboundMessage>>>,
-    // 队列状态计数器（mpsc 不暴露 pending count，手动维护）
     inbound_count: AtomicUsize,
     outbound_count: AtomicUsize,
 }
-
-impl MessageBus {
-    pub fn new(buffer_size: usize) -> Self {
-        let (in_tx, in_rx) = mpsc::channel(buffer_size);
-        let (out_tx, out_rx) = mpsc::channel(buffer_size);
-        Self {
-            inbound: in_tx,
-            inbound_rx: Mutex::new(Some(in_rx)),
-            outbound: out_tx,
-            outbound_rx: Mutex::new(Some(out_rx)),
-            inbound_count: AtomicUsize::new(0),
-            outbound_count: AtomicUsize::new(0),
-        }
-    }
-
-    /// Channel 调用：推送入站消息（返回 Result，调用方决定错误处理策略）
-    pub async fn publish_inbound(&self, msg: InboundMessage) -> Result<(), AppError> {
-        self.inbound.send(msg).await
-            .map_err(|_| AppError::Internal("Inbound channel closed (Agent may have crashed)".into()))?;
-        self.inbound_count.fetch_add(1, Ordering::Relaxed);
-        Ok(())
-    }
-
-    /// AgentLoop 调用：取出入站 receiver（返回 Result 而非 panic）
-    pub fn take_inbound_rx(&self) -> Result<mpsc::Receiver<InboundMessage>, AppError> {
-        self.inbound_rx.lock().unwrap().take()
-            .ok_or(AppError::Internal("inbound_rx already taken".into()))
-    }
-
-    /// AgentLoop 调用：推送出站消息
-    pub async fn publish_outbound(&self, msg: OutboundMessage) -> Result<(), AppError> {
-        self.outbound.send(msg).await
-            .map_err(|_| AppError::Internal("Outbound channel closed".into()))?;
-        self.outbound_count.fetch_add(1, Ordering::Relaxed);
-        Ok(())
-    }
-
-    /// 出站消费循环调用：取出出站 receiver
-    pub fn take_outbound_rx(&self) -> Result<mpsc::Receiver<OutboundMessage>, AppError> {
-        self.outbound_rx.lock().unwrap().take()
-            .ok_or(AppError::Internal("outbound_rx already taken".into()))
-    }
-
-    /// 队列状态（/status 指令可用）
-    pub fn inbound_pending(&self) -> usize {
-        self.inbound_count.load(Ordering::Relaxed)
-    }
-    pub fn outbound_pending(&self) -> usize {
-        self.outbound_count.load(Ordering::Relaxed)
-    }
-}
 ```
 
-**出站消费循环**：根据 `target` 路由到对应 Channel：
-
-```rust
-// src-tauri/src/channels/mod.rs
-
-pub async fn run_outbound_dispatcher(
-    mut rx: mpsc::Receiver<OutboundMessage>,
-    channels: HashMap<ChannelSource, Arc<dyn Channel>>,
-) {
-    while let Some(msg) = rx.recv().await {
-        if let Some(channel) = channels.get(&msg.target) {
-            if let Err(e) = channel.send(msg).await {
-                tracing::error!("Outbound dispatch failed: {}", e);
-                // 失败消息可放回队列重试（Phase 2）
-            }
-        }
-    }
-}
-```
-
-### 6.4 Channel 实现
-
-#### Desktop Channel（MVP 核心）
-
-桌面端 Channel 是 Tauri IPC 的桥梁——前端 `invoke()` 调用通过 Desktop Channel 转化为 `ChannelMessage`，Agent 响应通过 Tauri Event 推回前端。
-
-```rust
-// src-tauri/src/channels/desktop.rs
-
-pub struct DesktopChannel {
-    app_handle: AppHandle,
-}
-
-#[async_trait]
-impl Channel for DesktopChannel {
-    fn name(&self) -> &str { "desktop" }
-    fn source(&self) -> ChannelSource { ChannelSource::Desktop }
-    fn supports_streaming(&self) -> bool { true }
-
-    async fn send(&self, msg: OutboundMessage) -> Result<(), AppError> {
-        match msg.payload {
-            OutboundPayload::Text(text) => {
-                self.app_handle.emit("agent_response", json!({
-                    "session_id": msg.session_id, "content": text
-                }))?;
-            }
-            OutboundPayload::Chunk { content, done } => {
-                self.app_handle.emit("conversation_chunk", json!({
-                    "session_id": msg.session_id, "content": content, "done": done
-                }))?;
-            }
-            OutboundPayload::Typing(active) => {
-                self.app_handle.emit("typing", json!({"active": active}))?;
-            }
-            OutboundPayload::Error(err) => {
-                self.app_handle.emit("agent_error", json!({"error": err}))?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn listen(&self, bus: Arc<MessageBus>) -> Result<(), AppError> {
-        // Desktop 的入站由 Tauri command 驱动：
-        // commands/conversation.rs 接收前端 invoke() 后调用
-        // bus.publish_inbound(InboundMessage { ... })
-        Ok(())
-    }
-}
-```
-
-#### Telegram Channel（Phase 1 后期）
-
-```rust
-// src-tauri/src/channels/telegram.rs
-
-pub struct TelegramChannel {
-    bot_token: String,
-    http_client: reqwest::Client,
-}
-
-#[async_trait]
-impl Channel for TelegramChannel {
-    fn name(&self) -> &str { "telegram" }
-    fn source(&self) -> ChannelSource { ChannelSource::Telegram }
-
-    async fn send(&self, msg: OutboundMessage) -> Result<(), AppError> {
-        match msg.payload {
-            OutboundPayload::Text(text) => {
-                // POST https://api.telegram.org/bot{token}/sendMessage
-                // ...
-            }
-            _ => {} // Telegram 不支持 chunk/typing
-        }
-        Ok(())
-    }
-
-    async fn listen(&self, bus: Arc<MessageBus>) -> Result<(), AppError> {
-        // Long polling getUpdates 或 Webhook 模式
-        // 将 Telegram Update 转为 ChannelMessage
-        // bus.publish_inbound(InboundMessage { ... })
-    }
-}
-```
-
-### 6.5 Agent 三件套：Loop · Context · Session
-
-Agent 模块内部由三个核心组件驱动，职责清晰分离：
-
-```
-              Bus.inbound (入站队列)
-                        │
-                        ▼
-┌───────────────────────────────────────────────────────┐
-│                AgentLoop (主循环)                      │
-│  消费入站 → 协调 Context/Session → 调用 Provider      │
-│  → 工具调用循环 → 派发 SubAgent → 推送 Bus.outbound   │
-│                                                       │
-│  ┌─────────────────┐  ┌────────────────────────┐      │
-│  │  SessionManager │  │   ContextBuilder       │      │
-│  │  会话生命周期    │  │   上下文组装引擎        │      │
-│  │  历史存取/裁剪   │  │   RAG/压缩/token预算   │      │
-│  └────────┬────────┘  └───────────┬────────────┘      │
-│           │                       │                   │
-│           └───────────┬───────────┘                   │
-│                       ▼                               │
-│              Provider.chat() / chat_stream()          │
-│                       │                               │
-│                       ▼                               │
-│              ToolRegistry.execute() (工具调用循环)     │
-│                       │                               │
-│              ┌────────┴────────┐                      │
-│              │                 │                      │
-│              ▼                 ▼                      │
-│   Bus.outbound 推送   SubAgent 派发 (异步)           │
-│         Channel ←      ├── KnowledgeDistill          │
-│                        ├── ObservationAnalyze         │
-│                        ├── SessionSummarize           │
-│                        └── DailySummary               │
-└───────────────────────┬───────────────────────────────┘
-                        │
-                        ▼
-                   SendMessage (出站，立即返回)
-```
-
-#### AgentLoop — 消息处理主循环
-
-AgentLoop 是 Agent 的驱动引擎。它从 Channel 接收 `ChannelMessage`，协调 Session 和 Context 组装完整 prompt，向 Provider 发起请求，处理工具调用循环，最终通过 Channel 返回响应。
-
-```rust
-// src-tauri/src/agent/agent_loop.rs
-
-pub struct AgentLoop {
-    bus: Arc<MessageBus>,                      // 双向消息总线
-    session_mgr: Arc<SessionManager>,         // 会话管理
-    context_pipeline: Arc<ContextPipeline>,    // 可插拔上下文管线（6.21）
-    hooks: Arc<HookRegistry>,                  // 事件钩子注册表（6.19）
-    provider: Arc<dyn Provider>,               // LLM 调用（外部注入）
-    tools: Arc<ToolRegistry>,                  // 工具注册表（外部注入）
-    memory: Arc<MemoryManager>,                // 记忆层（观察/偏好/模式/召回）
-    agent_commands: Arc<AgentCommandRegistry>, // 控制指令（/new /stop /restart /status）
-    sub_agent_tx: mpsc::Sender<SubAgentDispatch>, // SubAgent 任务派发（6.20）
-    identity_resolver: Arc<UserIdentityResolver>, // 跨通道用户身份解析
-    cancel_token: CancellationToken,           // 优雅取消（/stop 触发）
-}
-
-impl AgentLoop {
-    /// 启动消息消费循环（长运行，支持 CancellationToken 优雅退出）
-    pub async fn run(&self, mut inbound_rx: mpsc::Receiver<InboundMessage>) {
-        loop {
-            tokio::select! {
-                _ = self.cancel_token.cancelled() => {
-                    tracing::info!("AgentLoop cancelled, shutting down");
-                    break;
-                }
-                Some(inbound) = inbound_rx.recv() => {
-                    let result = self.process_message(inbound.channel_message, &inbound.reply_to).await;
-                    if let Err(e) = result {
-                        tracing::error!("AgentLoop error: {}", e);
-                        let _ = self.bus.publish_outbound(OutboundMessage {
-                            id: uuid(),
-                            target: inbound.reply_to,
-                            session_id: String::new(),
-                            payload: OutboundPayload::Error(e.to_string()),
-                        }).await;
-                    }
-                }
-                else => break,
-            }
-        }
-    }
-
-    /// 处理单条消息的完整生命周期
-    async fn process_message(
-        &self,
-        message: ChannelMessage,
-        reply_to: &ChannelSource,
-    ) -> Result<AgentResponse, AppError> {
-        // 1. 身份解析：跨通道统一用户身份（单用户场景全部映射到 "owner"）
-        let canonical_user = self.identity_resolver
-            .resolve(&message.sender, &message.source);
-
-        // 2. Session：按统一身份加载或创建会话
-        let session = self.session_mgr
-            .get_or_create(&canonical_user, &message.mode).await?;
-
-        // 2.5 Agent Command 拦截（/new /stop /restart /status）
-        if let Some(cmd_name) = parse_agent_command(&message.content) {
-            if let Some(cmd) = self.agent_commands.get(cmd_name) {
-                let ctx = AgentCommandContext {
-                    session: session.clone(),
-                    session_mgr: self.session_mgr.clone(),
-                    sub_agent_tx: self.sub_agent_tx.clone(),
-                    cancel_token: self.cancel_token.clone(), // /stop 可触发取消
-                };
-                let result = cmd.execute(ctx).await?;
-                self.bus.publish_outbound(OutboundMessage {
-                    id: uuid(), target: reply_to.clone(),
-                    session_id: session.id.clone(),
-                    payload: OutboundPayload::Text(result.response.clone()),
-                }).await;
-                self.handle_action(result.action).await?;
-                return Ok(AgentResponse::from_text(result.response));
-            }
-        }
-
-        // 3. Context：组装完整 prompt
-        let context = self.context_builder.build(&message, &session).await?;
-
-        // 4. 选择模型
-        let model = self.select_model(&message.mode);
-
-        // 5. 智能流式调用 + 工具循环（两阶段策略，详见 call_with_tools）
-        let final_response = self.call_with_tools(
-            model, context, &session, reply_to,
-        ).await?;
-
-        // 6. Session：追加消息对 + 裁剪
-        self.session_mgr.append(&session.id, &message, &final_response).await?;
-
-        // 7. 后处理：写入 Memory 记忆、派发 SubAgent 任务
-        self.post_process(&message, &final_response, &session).await?;
-
-        Ok(final_response)
-    }
-
-    /// 两阶段流式策略：解决流式输出与工具调用的冲突
-    ///
-    /// 核心问题：如果流式推送所有 chunk，工具调用的 JSON 标记会直接暴露给用户。
-    /// 解决方案：解析 SSE 事件类型，仅推送 text 内容，静默累积 tool_use blocks。
-    ///
-    /// 流程：
-    ///   1. 流式调用 Provider，实时解析 content_block 类型
-    ///   2. text 类型 → 立即推送给用户（保持流式体验）
-    ///   3. tool_use 类型 → 静默累积（用户不可见）
-    ///   4. 如有工具调用 → 执行工具 → 将结果注入上下文 → 再次流式调用（循环）
-    ///   5. 无工具调用 → 发送 done 信号，返回完整响应
-    async fn call_with_tools(
-        &self,
-        model: ModelTier,
-        mut context: Vec<ChatMessage>,
-        session: &Session,
-        reply_to: &ChannelSource,
-    ) -> Result<AgentResponse, AppError> {
-        let mut iterations = 0;
-        let mut seen_hashes = HashSet::new();
-        let mut full_text = String::new(); // 累积所有轮次的文本输出
-
-        // 发送 typing 指示器
-        self.bus.publish_outbound(OutboundMessage {
-            id: uuid(), target: reply_to.clone(),
-            session_id: session.id.clone(),
-            payload: OutboundPayload::Typing(true),
-        }).await;
-
-        loop {
-            if iterations >= 10 { break; }
-
-            // 流式调用，按 content_block 类型分流
-            let stream_result = self.stream_with_tool_detection(
-                model, &context, session, reply_to,
-            ).await;
-
-            // 流式中断错误恢复：通知用户 + 终止信号
-            let (text_content, tool_calls) = match stream_result {
-                Ok(result) => result,
-                Err(e) => {
-                    tracing::error!("Stream interrupted: {}", e);
-                    self.bus.publish_outbound(OutboundMessage {
-                        id: uuid(), target: reply_to.clone(),
-                        session_id: session.id.clone(),
-                        payload: OutboundPayload::Error(
-                            format!("响应中断: {}", e)
-                        ),
-                    }).await;
-                    self.bus.publish_outbound(OutboundMessage {
-                        id: uuid(), target: reply_to.clone(),
-                        session_id: session.id.clone(),
-                        payload: OutboundPayload::Chunk {
-                            content: String::new(), done: true
-                        },
-                    }).await;
-                    // 不追加部分响应到 Session 历史
-                    return Err(e);
-                }
-            };
-
-            full_text.push_str(&text_content);
-
-            // 无工具调用 → 结束
-            if tool_calls.is_empty() { break; }
-
-            // 循环检测
-            let hash = hash_tool_calls(&tool_calls);
-            if !seen_hashes.insert(hash) { break; }
-
-            // 检查取消信号
-            if self.cancel_token.is_cancelled() {
-                tracing::info!("Tool loop cancelled by /stop");
-                break;
-            }
-
-            // 执行工具（用户看到 typing 指示器）
-            let results = self.tools.execute_batch(tool_calls).await;
-
-            // 将 assistant 响应 + 工具结果追加到上下文
-            context = self.context_builder
-                .append_tool_results_to_context(context, &text_content, &results);
-
-            iterations += 1;
-        }
-
-        // 完成信号
-        self.bus.publish_outbound(OutboundMessage {
-            id: uuid(), target: reply_to.clone(),
-            session_id: session.id.clone(),
-            payload: OutboundPayload::Chunk { content: String::new(), done: true },
-        }).await;
-
-        Ok(AgentResponse::from_text(full_text))
-    }
-
-    /// 单次流式调用：解析 SSE 事件，分离 text 和 tool_use
-    /// 返回 (text_content, tool_calls)
-    async fn stream_with_tool_detection(
-        &self,
-        model: ModelTier,
-        context: &[ChatMessage],
-        session: &Session,
-        reply_to: &ChannelSource,
-    ) -> Result<(String, Vec<ToolCall>), AppError> {
-        let mut stream = self.provider.chat_stream(model, context).await?;
-        let mut text_content = String::new();
-        let mut tool_calls = Vec::new();
-        let mut current_block_type: Option<String> = None;
-
-        while let Some(event) = stream.next().await {
-            // 检查取消信号
-            if self.cancel_token.is_cancelled() {
-                return Err(AppError::Cancelled("Stream cancelled by /stop".into()));
-            }
-
-            let event = event?;
-            match event {
-                StreamEvent::ContentBlockStart { block_type, .. } => {
-                    current_block_type = Some(block_type);
-                }
-                StreamEvent::ContentBlockDelta { delta } => {
-                    match current_block_type.as_deref() {
-                        Some("text") => {
-                            // 文本内容：立即推送给用户（保持流式体验）
-                            text_content.push_str(&delta);
-                            self.bus.publish_outbound(OutboundMessage {
-                                id: uuid(), target: reply_to.clone(),
-                                session_id: session.id.clone(),
-                                payload: OutboundPayload::Chunk {
-                                    content: delta, done: false
-                                },
-                            }).await;
-                        }
-                        Some("tool_use") => {
-                            // 工具调用：静默累积，用户不可见
-                            // tool_calls 在 ContentBlockStop 时解析完整 JSON
-                        }
-                        _ => {}
-                    }
-                }
-                StreamEvent::ContentBlockStop { tool_call } => {
-                    if let Some(tc) = tool_call {
-                        tool_calls.push(tc);
-                    }
-                    current_block_type = None;
-                }
-                _ => {}
-            }
-        }
-
-        Ok((text_content, tool_calls))
-    }
-
-    fn select_model(&self, mode: &ConversationMode) -> ModelTier {
-        match mode {
-            ConversationMode::Companion => ModelTier::Sonnet,
-            ConversationMode::Knowledge => ModelTier::Sonnet,
-            ConversationMode::Reflect   => ModelTier::Sonnet,
-            ConversationMode::Challenge => ModelTier::Sonnet,
-            ConversationMode::TreeHole  => ModelTier::Sonnet,
-        }
-    }
-}
-```
-
-#### ContextBuilder → ContextPipeline — 上下文组装引擎
-
-> **注意**：ContextBuilder 已演进为可插拔的 ContextPipeline（见 6.21 节）。以下为内置源的参考实现逻辑。
-
-ContextPipeline 通过有序的 ContextSource 管线将分散的数据源组装为完整的 LLM prompt，并严格控制 token 预算。
-
-```rust
-// src-tauri/src/agent/context.rs
-
-pub struct ContextBuilder {
-    memory: Arc<MemoryManager>,       // 记忆层（观察召回 + 偏好注入）
-    services: Arc<ServiceContainer>,  // 业务层（知识检索 RAG）
-    db: Arc<DbState>,                // 用户角色等
-}
-
-impl ContextBuilder {
-    /// 组装完整 prompt（返回 ChatMessage 数组）
-    pub async fn build(
-        &self,
-        message: &ChannelMessage,
-        session: &Session,
-    ) -> Result<Vec<ChatMessage>, AppError> {
-        let mut messages = Vec::new();
-
-        // [1] System Prompt = 人格 + 模式指令 + 角色上下文 + 工具描述
-        let system = self.build_system_prompt(&message.mode).await?;
-        messages.push(ChatMessage::system(system));
-
-        // [2] RAG 知识注入（三级渐进：L0 粗筛 → L1 重排序 → 注入 Top L1）
-        let knowledge_l1s = self.services.knowledge
-            .search_with_rerank(&message.content, 5).await?;
-        if !knowledge_l1s.is_empty() {
-            // 注入 L1 overview（~2k tokens/条，比传统 500 token snippet 信息量更大）
-            // Agent 需要完整内容时可通过 operations.call("knowledge_get") 加载 L2
-            messages.push(ChatMessage::system(
-                format_knowledge_l1_context(&knowledge_l1s)
-            ));
-        }
-
-        // [3] Memory 记忆召回：未浮出的记忆
-        let memories = self.memory.unsurfaced(3).await?;
-        if !memories.is_empty() {
-            messages.push(ChatMessage::system(
-                format_memories(&memories)
-            ));
-        }
-
-        // [4] 压缩的对话历史（近 5 轮完整 + 早期摘要）
-        messages.extend(session.compressed_history());
-
-        // [5] 用户消息
-        messages.push(ChatMessage::user(&message.content));
-
-        // Token 预算检查
-        self.enforce_budget(&mut messages, &message.mode)?;
-
-        Ok(messages)
-    }
-
-    /// Token 预算控制（从 settings.json 读取，可配置）
-    fn enforce_budget(
-        &self,
-        messages: &mut Vec<ChatMessage>,
-        mode: &ConversationMode,
-    ) -> Result<(), AppError> {
-        // 预算从 Provider.max_tokens() 或 settings.json token_budgets 读取
-        // 默认值：Haiku 16K, Sonnet 80K（远低于模型上限但平衡成本）
-        let budget = self.settings.token_budgets
-            .get(&self.select_tier(mode))
-            .copied()
-            .unwrap_or_else(|| match self.select_tier(mode) {
-                ModelTier::Haiku => 16_000,
-                ModelTier::Sonnet => 80_000,
-            });
-        // 超预算时：先裁剪 RAG 片段数 → 再压缩历史 → 最后截断观察
-        // ...
-        Ok(())
-    }
-
-    /// 追加工具执行结果到上下文（用于工具调用循环）
-    pub fn append_tool_results(
-        &self,
-        session: &Session,
-        results: &[Result<ToolOutput, AppError>],
-    ) -> Vec<ChatMessage>;
-}
-```
-
-#### SessionManager — 会话生命周期管理
-
-SessionManager 管理会话的创建、历史存取、裁剪和持久化。每个 sender 维护独立的会话上下文。
-
-```rust
-// src-tauri/src/agent/session.rs
-
-pub struct Session {
-    pub id: String,
-    pub sender: String,
-    pub mode: ConversationMode,
-    pub messages: Vec<ChatMessage>,  // 内存中的活跃历史
-    pub created: DateTime<Utc>,
-    pub updated: DateTime<Utc>,
-}
-
-impl Session {
-    /// 返回压缩后的历史（近 5 轮完整 + 早期摘要）
-    pub fn compressed_history(&self) -> Vec<ChatMessage>;
-}
-
-pub struct SessionManager {
-    db: Arc<DbState>,
-    max_turns: usize,      // 内存中保留的最大轮数（默认 50）
-    keep_recent: usize,    // 裁剪时保护的近期轮数（默认 5）
-}
-
-impl SessionManager {
-    /// 按 sender 获取或创建 session
-    pub async fn get_or_create(
-        &self, sender: &str, mode: &ConversationMode
-    ) -> Result<Session, AppError>;
-
-    /// 追加消息对（user + assistant），触发自动裁剪
-    pub async fn append(
-        &self, session_id: &str, user_msg: &ChannelMessage, agent_resp: &AgentResponse
-    ) -> Result<(), AppError> {
-        // 1. 追加到内存 + SQLite
-        // 2. 如果超过 max_turns，触发 prune
-        Ok(())
-    }
-
-    /// 历史裁剪：保护近 N 轮 + 系统消息，压缩早期为摘要
-    async fn prune(&self, session: &mut Session) -> Result<(), AppError> {
-        // Phase 1: 折叠工具调用/结果对
-        // Phase 2: 用 Haiku 将早期消息压缩为摘要
-        // Phase 3: 删除超龄原始消息
-        Ok(())
-    }
-
-    /// 持久化 session 到 SQLite（追加消息时自动调用）
-    async fn persist(&self, session: &Session) -> Result<(), AppError>;
-}
-```
-
-MindClaw 是单用户桌面应用，但用户可能从 Desktop、Telegram、Feishu 等不同通道发送消息。`UserIdentityResolver` 确保跨通道的用户身份统一，避免会话和记忆碎片化。
-
-#### UserIdentityResolver — 跨通道身份统一
-
-```rust
-// src-tauri/src/agent/identity.rs
-
-/// 将不同通道的 sender 标识映射为统一的 canonical user ID
-/// 单用户场景：所有来源映射到 "owner"
-/// 未来多用户：可通过配置表映射
-pub struct UserIdentityResolver {
-    mode: IdentityMode,
-}
-
-pub enum IdentityMode {
-    /// 单用户模式：所有 sender 映射到 "owner"（默认）
-    SingleUser,
-    /// 映射模式：按 (source, sender) → canonical_user 查表
-    Mapped(HashMap<(ChannelSource, String), String>),
-}
-
-impl UserIdentityResolver {
-    pub fn single_user() -> Self {
-        Self { mode: IdentityMode::SingleUser }
-    }
-
-    pub fn resolve(&self, sender: &str, source: &ChannelSource) -> String {
-        match &self.mode {
-            IdentityMode::SingleUser => "owner".to_string(),
-            IdentityMode::Mapped(map) => {
-                map.get(&(source.clone(), sender.to_string()))
-                    .cloned()
-                    .unwrap_or_else(|| sender.to_string())
-            }
-        }
-    }
-}
-```
-
-### 6.6 Agent 初始化与接线
-
-应用启动时，各模块组装并注入 AgentLoop：
-
-```rust
-// src-tauri/src/agent/mod.rs
-
-pub fn init_agent(
-    db: Arc<DbState>,
-    provider: Arc<dyn Provider>,
-    tools: Arc<ToolRegistry>,
-    memory: Arc<MemoryManager>,
-    services: Arc<ServiceContainer>,
-    agent_commands: Arc<AgentCommandRegistry>,
-    bus: Arc<MessageBus>,
-) -> (AgentLoop, CancellationToken) {
-    // SubAgent 后台执行器（限制并发数，防止 API 速率爆炸）
-    let (sub_tx, sub_rx) = mpsc::channel(32);
-    let sub_agent = SubAgentExecutor::new(provider.clone(), db.clone(), memory.clone());
-    tokio::spawn(sub_agent.run(sub_rx));
-
-    let session_mgr = Arc::new(SessionManager::new(db.clone()));
-    let context_builder = Arc::new(ContextBuilder::new(
-        memory.clone(), services.clone(), db.clone(),
-    ));
-    let cancel_token = CancellationToken::new();
-
-    let agent_loop = AgentLoop {
-        bus,
-        session_mgr,
-        context_builder,
-        provider,
-        tools,
-        memory,
-        agent_commands,
-        sub_agent_tx: sub_tx,
-        identity_resolver: Arc::new(UserIdentityResolver::single_user()),
-        cancel_token: cancel_token.clone(),
-    };
-    (agent_loop, cancel_token)
-}
-```
-
-```rust
-// src-tauri/src/lib.rs（启动时接线）
-
-pub fn run() {
-    tauri::Builder::default()
-        .setup(|app| {
-            let db = init_database()?;
-            let provider = create_provider(&settings)?;
-            let memory = Arc::new(MemoryManager::new(db.clone()));
-            let services = Arc::new(ServiceContainer::new(db.clone()));
-            let tools = ToolRegistry::default_tools(&services, &memory, vault_path, mcp_configs);
-
-            // MessageBus：Channel ↔ Agent 双向解耦
-            let bus = Arc::new(MessageBus::new(64));
-
-            let agent_commands = Arc::new(AgentCommandRegistry::default());
-            let (agent_loop, cancel_token) = init_agent(
-                db.clone(), provider, tools, memory.clone(),
-                services.clone(), agent_commands, bus.clone(),
-            );
-
-            // 启动 AgentLoop（消费 inbound，支持 CancellationToken 优雅退出）
-            let inbound_rx = bus.take_inbound_rx()?;  // 返回 Result，不再 panic
-            tokio::spawn(agent_loop.run(inbound_rx));
-
-            // 启动 Channel 出站分发（消费 outbound）
-            let desktop_channel: Arc<dyn Channel> = Arc::new(DesktopChannel::new(app.handle()));
-            let mut channels = HashMap::new();
-            channels.insert(ChannelSource::Desktop, desktop_channel.clone());
-            let outbound_rx = bus.take_outbound_rx()?;
-            tokio::spawn(run_outbound_dispatcher(outbound_rx, channels));
-
-            // Desktop Channel 入站桥接说明：
-            // DesktopChannel.listen() 为空实现，因为桌面端入站由 Tauri command 驱动。
-            // commands/conversation.rs 的 conversation_send 命令内部：
-            //   1. 构造 ChannelMessage + InboundMessage
-            //   2. 调用 bus.publish_inbound(msg).await?
-            //   3. 立即返回 session_id
-            //   4. Agent 异步处理，响应通过 Tauri Event 推送（DesktopChannel.send()）
-
-            // 注入 Tauri 状态
-            app.manage(bus.clone());      // commands/conversation.rs 用 bus.publish_inbound()
-            app.manage(cancel_token);     // /stop 命令可触发取消
-            app.manage(db);
-
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![...])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-```
-
-### 6.7 SubAgent — 异步子任务执行器
-
-> **注意**：SubAgentTask 已从硬编码 enum 演进为 trait + 注册表模式（见 6.20 节）。以下为内置任务的参考实现逻辑。
-
-AgentLoop 负责处理主对话流，但有些任务不应阻塞对话响应，需要在后台独立完成。SubAgent 就是为这些异步任务设计的轻量执行器。
-
-```
-AgentLoop (主对话)
-    │
-    ├── 对话响应 → 立即返回给用户
-    │
-    └── 派发 SubAgent 任务（不阻塞）
-         ├── KnowledgeDistill:  从对话中提炼知识笔记
-         ├── SessionSummarize:  会话摘要生成
-         ├── ObservationAnalyze: Layer 3 模式识别
-         └── DailySummary:      当日回顾生成
-```
-
-```rust
-// src-tauri/src/agent/sub_agent.rs
-
-/// 子任务类型
-pub enum SubAgentTask {
-    /// 知识蒸馏：从对话中提炼出值得沉淀的知识笔记
-    KnowledgeDistill {
-        session_id: String,
-        messages: Vec<ChatMessage>,
-    },
-    /// 会话摘要：生成对话精华摘要
-    SessionSummarize {
-        session_id: String,
-    },
-    /// 观察分析：分析对话模式，记录 Layer 3 观察
-    ObservationAnalyze {
-        session_id: String,
-        recent_messages: Vec<ChatMessage>,
-    },
-    /// 日记摘要：生成当日回顾
-    DailySummary {
-        date: String,
-    },
-}
-
-pub struct SubAgentExecutor {
-    provider: Arc<dyn Provider>,
-    db: Arc<DbState>,
-    memory: Arc<MemoryManager>,
-    task_tx: mpsc::Sender<SubAgentTask>,
-    concurrency_limit: Arc<Semaphore>,  // 限制并发 API 调用数（默认 3）
-}
-
-impl SubAgentExecutor {
-    /// 启动后台任务消费循环（Semaphore 限制并发，防止 API 速率爆炸）
-    pub async fn run(mut self, mut rx: mpsc::Receiver<SubAgentTask>) {
-        while let Some(task) = rx.recv().await {
-            let executor = self.clone_refs();
-            let permit = self.concurrency_limit.clone();
-            tokio::spawn(async move {
-                // 获取并发许可（默认最多 3 个同时执行）
-                let _permit = permit.acquire().await.unwrap();
-                if let Err(e) = executor.execute(task).await {
-                    tracing::error!("SubAgent task failed: {}", e);
-                }
-                // _permit drop 时自动释放
-            });
-        }
-    }
-
-    async fn execute(&self, task: SubAgentTask) -> Result<(), AppError> {
-        match task {
-            SubAgentTask::KnowledgeDistill { session_id, messages } => {
-                // Sonnet 调用：从对话中提炼知识
-                let draft = self.distill_knowledge(&messages).await?;
-                // 写入 vault/knowledge/ 草稿，等待人类确认
-                self.memory.save_knowledge_draft(&draft).await?;
-            }
-            SubAgentTask::SessionSummarize { session_id } => {
-                // Haiku 调用：生成会话摘要
-                let summary = self.summarize_session(&session_id).await?;
-                self.db.update_session_summary(&session_id, &summary).await?;
-            }
-            SubAgentTask::ObservationAnalyze { session_id, recent_messages } => {
-                // Sonnet 调用：分析模式，发现盲区
-                let insights = self.analyze_patterns(&recent_messages).await?;
-                for insight in insights {
-                    self.memory.remember(insight).await?;
-                }
-            }
-            SubAgentTask::DailySummary { date } => {
-                // Sonnet 调用：生成当日回顾
-                let summary = self.generate_daily_summary(&date).await?;
-                self.memory.append_to_daily(&date, &summary).await?;
-            }
-        }
-        Ok(())
-    }
-}
-```
-
-**SubAgent 与 AgentLoop 的协作**：
-
-```rust
-// 在 AgentLoop.post_process() 中，对话完成后派发后台任务
-async fn post_process(
-    &self,
-    message: &ChannelMessage,
-    response: &AgentResponse,
-    session: &Session,
-) -> Result<(), AppError> {
-    // 对话完成后，异步派发 SubAgent 任务（不阻塞响应返回）
-    if message.mode == ConversationMode::Knowledge {
-        let _ = self.sub_agent_tx.send(SubAgentTask::KnowledgeDistill {
-            session_id: session.id.clone(),
-            messages: session.recent_messages(10),
-        }).await;
-    }
-
-    // 每次对话后都尝试 Layer 3 观察分析
-    let _ = self.sub_agent_tx.send(SubAgentTask::ObservationAnalyze {
-        session_id: session.id.clone(),
-        recent_messages: session.recent_messages(5),
-    }).await;
-
-    Ok(()) // SubAgent 后台运行，不阻塞
-}
-```
-
-**SubAgent 模型选择**：
-
-| 子任务 | 模型 | 原因 |
-|--------|------|------|
-| SessionSummarize | Haiku | 摘要生成，低成本 |
-| KnowledgeDistill | Sonnet | 需要深度理解和提炼 |
-| ObservationAnalyze | Sonnet | 需要跨域关联和模式识别 |
-| DailySummary | Sonnet | 需要综合当日全部信息 |
-
-### 6.8 消息处理流水线（完整）
+| 方法 | 调用方 | 说明 |
+|------|--------|------|
+| `publish_inbound(msg)` | Channel | 推送入站消息 |
+| `take_inbound_rx()` | AgentLoop | 取出入站 Receiver（仅一次） |
+| `publish_outbound(msg)` | AgentLoop | 推送出站消息 |
+| `take_outbound_rx()` | Dispatcher | 取出出站 Receiver（仅一次） |
+| `inbound_pending()` | /status | 入站队列待处理数 |
+| `outbound_pending()` | /status | 出站队列待处理数 |
+
+出站消费循环 `run_outbound_dispatcher()` 根据 `OutboundMessage.target` 路由到对应 Channel。
+
+### 6.4 消息流水线（端到端）
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -1093,7 +213,9 @@ async fn post_process(
 │       │     /stop → 触发 CancellationToken 取消进行中操作      │
 │       │     未命中 → 继续正常对话流程 ↓                         │
 │       │                                                        │
-│       ├─► ContextBuilder: 组装完整 prompt                      │
+│       ├─► Hooks: PreMessage（可修改消息、注入上下文、阻止处理）  │
+│       │                                                        │
+│       ├─► ContextPipeline: 组装完整 prompt                     │
 │       │     [人格] + [模式指令] + [角色上下文]                   │
 │       │     + [RAG 知识 L1 概要] + [压缩历史] + [记忆召回]      │
 │       │     + Token 预算控制（可配置，默认 Sonnet 80K）         │
@@ -1103,15 +225,16 @@ async fn post_process(
 │       │     │   解析 SSE content_block 类型                     │
 │       │     │   text → 立即推送 Chunk（用户可见）               │
 │       │     │   tool_use → 静默累积（用户不可见）               │
-│       │     ├─ 有工具调用 → 显示 typing 指示器                 │
-│       │     │   → ToolRegistry.execute_batch()                 │
+│       │     ├─ Hooks: PreToolUse / PostToolUse                 │
+│       │     ├─ 有工具调用 → ToolRegistry.execute_batch()       │
 │       │     │   → 结果注入上下文 → 再次流式调用                │
-│       │     │   → 循环检测（hash 去重）                        │
-│       │     │   → 检查 CancellationToken                       │
+│       │     │   → 循环检测（hash 去重）+ CancellationToken     │
 │       │     └─ 无工具调用 → 发送 done 信号                     │
 │       │     流式中断 → Error + done 信号，不追加到历史          │
 │       │                                                        │
 │       ├─► SessionManager: 追加消息对 + 自动裁剪                │
+│       │                                                        │
+│       ├─► Hooks: PostMessage（可触发副作用）                    │
 │       │                                                        │
 │       ├─► post_process() → SubAgent 派发（异步，不阻塞）       │
 │       │     ├── KnowledgeDistill（知识模式下）                  │
@@ -1128,411 +251,266 @@ async fn post_process(
 └────────────────────────────────────────────────────────────────┘
 ```
 
-### 6.9 Provider Layer — LLM 抽象（独立模块）
+### 6.5 Agent 核心：Loop · Session · Identity
 
-Provider 是独立于 Agent 的顶层模块，通过 trait 注入 AgentService。未来可替换为 OpenAI、Ollama 等实现。
+Agent 模块内部由三个核心组件驱动，职责清晰分离：
+
+```
+              Bus.inbound (入站队列)
+                        │
+                        ▼
+┌───────────────────────────────────────────────────────┐
+│                AgentLoop (主循环)                      │
+│  消费入站 → 协调 Context/Session → 调用 Provider      │
+│  → 工具调用循环 → 派发 SubAgent → 推送 Bus.outbound   │
+│                                                       │
+│  ┌─────────────────┐  ┌────────────────────────┐      │
+│  │  SessionManager │  │   ContextPipeline      │      │
+│  │  会话生命周期    │  │   上下文组装引擎        │      │
+│  │  历史存取/裁剪   │  │   RAG/压缩/token预算   │      │
+│  └────────┬────────┘  └───────────┬────────────┘      │
+│           │                       │                   │
+│           └───────────┬───────────┘                   │
+│                       ▼                               │
+│              Provider.chat() / chat_stream()          │
+│                       │                               │
+│                       ▼                               │
+│              ToolRegistry.execute() (工具调用循环)     │
+│                       │                               │
+│              ┌────────┴────────┐                      │
+│              │                 │                      │
+│              ▼                 ▼                      │
+│   Bus.outbound 推送   SubAgent 派发 (异步)           │
+│         Channel ←      ├── KnowledgeDistill          │
+│                        ├── ObservationAnalyze         │
+│                        ├── SessionSummarize           │
+│                        └── DailySummary               │
+└───────────────────────┬───────────────────────────────┘
+                        │
+                        ▼
+                   SendMessage (出站，立即返回)
+```
+
+#### AgentLoop — 消息处理主循环
+
+AgentLoop 是 Agent 的驱动引擎，从 Bus 接收消息，协调所有子组件完成响应。
+
+```rust
+// src-tauri/src/agent/agent_loop.rs
+
+pub struct AgentLoop {
+    bus: Arc<MessageBus>,
+    session_mgr: Arc<SessionManager>,
+    context_pipeline: Arc<ContextPipeline>,
+    hooks: Arc<HookRegistry>,
+    provider: Arc<dyn Provider>,
+    tools: Arc<ToolRegistry>,
+    memory: Arc<MemoryManager>,
+    agent_commands: Arc<AgentCommandRegistry>,
+    sub_agent_tx: mpsc::Sender<SubAgentDispatch>,
+    identity_resolver: Arc<UserIdentityResolver>,
+    cancel_token: CancellationToken,
+}
+```
+
+**`process_message()` 生命周期**：身份解析 → Session 获取 → Agent Command 拦截 → PreMessage Hook → ContextPipeline 组装 → Provider 流式调用 + 工具循环 → Session 追加 → PostMessage Hook → SubAgent 派发。详见 6.4 流水线图。
+
+**两阶段流式策略**：Claude API 的 SSE 流中 text 和 tool_use 是不同的 content_block 类型。流式输出时实时解析 block 类型——text block 立即推送给用户保持流式体验，tool_use block 静默累积等完整解析后批量执行。这样既保证了用户的实时感受，又避免了工具调用 JSON 片段暴露给前端。工具执行完成后将结果注入上下文再次调用 Provider，循环最多 10 轮，通过输出 hash 去重防止无限循环，`CancellationToken` 支持 `/stop` 中断。
+
+**初始化**：应用启动时 `init_agent()` 组装所有依赖注入 AgentLoop，然后 `tokio::spawn` 启动消息消费循环和出站分发循环。Bus、CancellationToken 等通过 `app.manage()` 注入 Tauri 状态供 commands 使用。
+
+#### SessionManager — 会话生命周期管理
+
+```rust
+// src-tauri/src/agent/session.rs
+
+pub struct Session {
+    pub id: String,
+    pub sender: String,
+    pub mode: ConversationMode,
+    pub messages: Vec<ChatMessage>,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
+}
+
+pub struct SessionManager {
+    db: Arc<DbState>,
+    max_turns: usize,   // 内存中最大轮数（默认 50）
+    keep_recent: usize,  // 裁剪时保护的近期轮数（默认 5）
+}
+```
+
+| 方法 | 说明 |
+|------|------|
+| `get_or_create(sender, mode)` | 按 sender 获取或创建 session |
+| `append(session_id, user_msg, agent_resp)` | 追加消息对，超限自动裁剪 |
+| `prune(session)` | 折叠工具调用对 → Haiku 压缩早期消息为摘要 → 删除超龄原始消息 |
+| `persist(session)` | 持久化到 SQLite |
+
+`Session.compressed_history()` 返回压缩后的历史：近 5 轮完整 + 早期摘要。
+
+#### UserIdentityResolver — 跨通道身份统一
+
+MindClaw 是单用户桌面应用，但用户可能从多个通道发消息。`UserIdentityResolver` 将不同通道的 sender 映射为统一的 canonical user ID，避免会话和记忆碎片化。
+
+```rust
+// src-tauri/src/agent/identity.rs
+
+pub struct UserIdentityResolver {
+    mode: IdentityMode,
+}
+
+pub enum IdentityMode {
+    SingleUser,                                          // 所有 sender → "owner"（默认）
+    Mapped(HashMap<(ChannelSource, String), String>),    // 按 (source, sender) 查表
+}
+```
+
+### 6.6 Context Pipeline — 可插拔上下文组装
+
+将上下文组装从硬编码改为有序的 `ContextSource` 管线。每个源有优先级（决定注入顺序）和独立 token 预算。Skills 可注册自定义源插入管线。
+
+#### System Prompt 组装结构
+
+System Prompt 由固定部分和动态检索部分组成。固定部分从配置文件加载，动态部分由 ContextSource 按需检索注入。
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  固定层（启动时加载，每次对话不变）                            │
+├─────────────────────────────────────────────────────────────┤
+│ SOUL.md        基础人格、沟通风格、价值观                     │
+│ IDENTITY.md    模式指令（按当前模式切换对应段落）               │
+│                陪伴 / 反思 / 挑战 / 知识 / 树洞               │
+│ USER.md        用户基础定义（角色、背景、关系框架）             │
+│ Tool Schema    4 个常驻工具的 JSON Schema                     │
+├─────────────────────────────────────────────────────────────┤
+│  动态层（每次对话按需检索注入）                                │
+├─────────────────────────────────────────────────────────────┤
+│ Memory 召回    按消息内容检索相关记忆（非全量注入）             │
+│                importance 排序 + 未浮出优先                   │
+│ RAG 知识       L0 粗筛 → L1 重排序 → Top N L1 注入           │
+│                仅当消息与知识库有关联时才触发                   │
+│ 对话历史       近 5 轮完整 + 早期摘要                         │
+│ Agent 观察     未浮出的 Layer 3 模式识别（候选浮出）           │
+├─────────────────────────────────────────────────────────────┤
+│ 用户消息                                                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### ContextSource Trait 与 Pipeline
+
+```rust
+// src-tauri/src/agent/context_pipeline.rs
+
+pub struct ContextFragment {
+    pub role: MessageRole,
+    pub content: String,
+    pub token_estimate: usize,
+    pub label: String,
+}
+
+#[async_trait]
+pub trait ContextSource: Send + Sync {
+    fn name(&self) -> &str;
+    fn priority(&self) -> i32;          // 数值越小越先注入
+    fn enabled(&self) -> bool { true }
+    async fn inject(
+        &self, ctx: &ContextBuildContext<'_>, budget: usize,
+    ) -> Result<Vec<ContextFragment>, AppError>;
+}
+
+pub struct ContextBuildContext<'a> {
+    pub message: &'a ChannelMessage,
+    pub session: &'a Session,
+    pub memory: &'a MemoryManager,
+    pub services: &'a ServiceContainer,
+    pub db: &'a DbState,
+}
+
+pub struct ContextPipeline {
+    sources: Vec<Arc<dyn ContextSource>>,
+    total_budget: usize,
+    budget_allocations: HashMap<String, usize>,
+}
+```
+
+构建逻辑：按 priority 顺序遍历所有 source，每个 source 在分配的 budget 内注入 fragment，累计消耗超过 total_budget 时后续 source 被压缩或跳过。
+
+#### 内置源映射
+
+| Source | Priority | 默认预算 | 数据来源 | 注入方式 |
+|--------|----------|---------|---------|---------|
+| `SystemPromptSource` | 0 | ~2K | SOUL.md + IDENTITY.md + USER.md + Tool Schema | 固定加载 |
+| `RAGKnowledgeSource` | 10 | ~10K | knowledge/ 目录 | 按消息内容检索，search_with_rerank top 5 L1 |
+| `MemoryRecallSource` | 20 | ~2K | memories 表 | 按消息内容检索 + 未浮出优先 |
+| `ConversationHistorySource` | 30 | ~50K | session 历史 | 近 5 轮完整 + 早期摘要 |
+| `UserMessageSource` | 100 | ~1K | 当前消息 | 直接注入（始终最后） |
+
+Skills 注册的自定义 ContextSource 按 priority 自动插入管线。例如 "weekly_context" source（priority: 15）在 RAG 之后、Memory 之前注入本周关键事项。
+
+#### Token 预算管理
+
+| 策略 | 实现 |
+|------|------|
+| 知识库注入 | L0 tags 粗筛 → L1 overview 重排序 → Top 5 L1 注入（~10k tokens） |
+| 对话历史 | 近 5 轮完整 + Haiku 压缩早期为摘要 |
+| Token 预算 | Haiku 默认 ≤ 16K，Sonnet 默认 ≤ 80K（settings.json 可配置） |
+
+超预算裁剪顺序：先减 RAG 片段数 → 再压缩历史 → 最后截断观察。
+
+#### settings.json 配置
+
+```json
+{
+  "context_pipeline": {
+    "total_budget": 80000,
+    "allocations": {
+      "system_prompt": 2000,
+      "rag_knowledge": 10000,
+      "memory_recall": 2000,
+      "conversation_history": 50000,
+      "user_message": 1000
+    },
+    "disabled_sources": []
+  }
+}
+```
+
+### 6.7 Provider 层 — LLM 抽象
+
+Provider 是独立于 Agent 的顶层模块，通过 trait 注入 AgentLoop。未来可替换为 OpenAI、Ollama 等实现。API Key 从 OS Keychain 读取（桌面端）或直接传入（CLI）。
 
 ```rust
 // src-tauri/src/providers/traits.rs
 
 pub enum ModelTier {
-    Haiku,   // 路由、分类、简单任务（~1x 成本）
-    Sonnet,  // 深度对话、知识沉淀、洞见生成（~10x 成本）
+    Haiku,   // 路由、分类、简单任务
+    Sonnet,  // 深度对话、知识沉淀、洞见生成
 }
 
 #[async_trait]
 pub trait Provider: Send + Sync {
-    /// 同步调用
     async fn chat(
-        &self, model: ModelTier, messages: &[ChatMessage]
+        &self, model: ModelTier, messages: &[ChatMessage],
     ) -> Result<ProviderResponse, AppError>;
-
-    /// 流式调用
     async fn chat_stream(
-        &self, model: ModelTier, messages: &[ChatMessage]
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, AppError>> + Send>>, AppError>;
-
-    /// 能力查询
+        &self, model: ModelTier, messages: &[ChatMessage],
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, AppError>> + Send>>, AppError>;
     fn supports_streaming(&self) -> bool;
     fn max_tokens(&self, model: ModelTier) -> usize;
 }
 ```
 
-```rust
-// src-tauri/src/providers/claude.rs
-
-pub struct ClaudeProvider {
-    http_client: reqwest::Client,
-    api_key: String,  // 运行时持有，来源见下方构造器
-}
-
-impl ClaudeProvider {
-    /// 从 OS Keychain 读取 API Key（桌面应用启动时使用）
-    pub async fn from_keychain() -> Result<Self, AppError> {
-        let api_key = keychain::get("claude_api_key")?;
-        Ok(Self { http_client: reqwest::Client::new(), api_key })
-    }
-
-    /// 直接传入 API Key（CLI 独立二进制使用）
-    pub fn from_key(api_key: &str) -> Self {
-        Self { http_client: reqwest::Client::new(), api_key: api_key.to_string() }
-    }
-}
-```
-
-```rust
-// src-tauri/src/providers/mod.rs
-
-/// 工厂函数：根据配置创建 Provider 实例
-pub fn create_provider(config: &AppSettings) -> Result<Arc<dyn Provider>, AppError> {
-    match config.provider.as_str() {
-        "claude" => Ok(Arc::new(ClaudeProvider::from_keychain().await?)),
-        // 未来可扩展：
-        // "openai" => Ok(Arc::new(OpenAIProvider::new()?)),
-        // "ollama" => Ok(Arc::new(OllamaProvider::new()?)),
-        _ => Err(AppError::Validation("unknown provider".into())),
-    }
-}
-```
-
-### 6.10 Services Layer — 核心业务逻辑
-
-Services 是业务操作的核心层。**Web Commands、CLI Commands 和 Agent 共用同一套 Services**，保证业务逻辑单一来源。
-
-```
-Web Commands  ──► Services ──► Storage
-CLI Commands  ──► Services ──► Storage
-Agent         ──► operations (元工具) ──► Services ──► Storage
-                                     ──► Memory   ──► Storage
-```
-
-#### ServiceContainer — 业务服务聚合
-
-```rust
-// src-tauri/src/services/mod.rs
-
-/// 聚合所有业务 Service，注入 Commands / CLI / Agent 共用
-pub struct ServiceContainer {
-    pub knowledge: KnowledgeService,
-    pub daily: DailyService,
-    pub task: TaskService,
-}
-
-impl ServiceContainer {
-    pub fn new(db: Arc<DbState>, vault_path: PathBuf) -> Self {
-        let storage = Arc::new(StorageManager::new(db, vault_path));
-        Self {
-            knowledge: KnowledgeService::new(storage.clone()),
-            daily: DailyService::new(storage.clone()),
-            task: TaskService::new(storage.clone()),
-        }
-    }
-}
-```
-
-#### KnowledgeService — 知识笔记管理
-
-操作人机共有的知识体系（Markdown 文件 + SQLite 索引）。
-
-```rust
-// src-tauri/src/services/knowledge.rs
-
-pub struct KnowledgeService {
-    storage: Arc<StorageManager>,
-}
-
-impl KnowledgeService {
-    // ── 写入 ──
-
-    /// 创建知识笔记（写 Markdown + 提取 tags→L0 + 生成 L1 + 更新 FTS5）
-    pub async fn create(&self, title: &str, content: &str, tags: &[String])
-        -> Result<KnowledgeEntry, AppError>;
-
-    /// 更新笔记内容（人类纠偏 或 Agent 沉淀，自动更新 L0/L1 索引）
-    pub async fn update(&self, path: &str, content: &str)
-        -> Result<(), AppError>;
-
-    // ── 三级检索 ──
-
-    /// L0 搜索：FTS5 匹配 title + tags，返回候选集（tags + path + title）
-    /// 成本极低，用于粗筛，典型返回 ~20 条
-    pub async fn search_l0(&self, query: &str, limit: u32)
-        -> Result<Vec<NoteL0>, AppError>;
-
-    /// L1 批量加载：对 L0 候选集加载 overview，用于重排序和 RAG 注入
-    pub async fn get_l1_batch(&self, paths: &[String])
-        -> Result<Vec<NoteL1>, AppError>;
-
-    /// L2 完整加载：从文件系统读取 Markdown 原文（Agent 按需调用）
-    pub async fn get_l2(&self, path: &str)
-        -> Result<KnowledgeNote, AppError>;
-
-    /// 组合搜索：L0 粗筛 → 目录递归 → L1 重排序 → 返回 Top N
-    pub async fn search_with_rerank(&self, query: &str, top_n: u32)
-        -> Result<Vec<NoteL1>, AppError> {
-        // 1. L0 粗筛（notes 表统一搜索，同时命中笔记和目录）
-        let candidates = self.search_l0(query, 20).await?;
-
-        // 2. 目录递归：命中目录（path 无 .md 后缀）时，展开子笔记补充候选
-        let mut all_paths: Vec<String> = Vec::new();
-        for c in &candidates {
-            if !c.path.ends_with(".md") {
-                // 高分目录 → 加载目录下所有子笔记
-                let children = self.list_children(&c.path).await?;
-                all_paths.extend(children.iter().map(|n| n.path.clone()));
-            } else {
-                all_paths.push(c.path.clone());
-            }
-        }
-        all_paths.dedup();
-
-        // 3. 加载 L1 → 按关键词重叠度 + tags 匹配度排序
-        let l1s = self.get_l1_batch(&all_paths).await?;
-        let ranked = self.rerank(query, l1s, top_n);
-        Ok(ranked)
-    }
-
-    // ── 辅助 ──
-
-    /// 按标签筛选
-    pub async fn list(&self, tag: Option<&str>)
-        -> Result<Vec<KnowledgeEntry>, AppError>;
-
-    /// 列出目录下直接子节点（WHERE path LIKE '{parent}/%' AND path NOT LIKE '{parent}/%/%'）
-    pub async fn list_children(&self, parent: &str)
-        -> Result<Vec<NoteL0>, AppError>;
-
-    /// 提取 wikilinks 并更新 links 表
-    pub async fn sync_links(&self, path: &str)
-        -> Result<(), AppError>;
-
-    /// 重建索引（Markdown → SQLite L0/L1 + FTS5）
-    pub async fn rebuild_index(&self, path: Option<&str>)
-        -> Result<(), AppError>;
-}
-
-/// L0 视图：仅 tags + 路径（~100 tokens/条，适合批量扫描）
-pub struct NoteL0 {
-    pub path: String,       // 有 .md 后缀 = 笔记，无后缀 = 目录
-    pub title: String,
-    pub tags: Vec<String>,
-}
-
-/// L1 视图：概要（~2k tokens/条，适合 RAG 注入）
-pub struct NoteL1 {
-    pub path: String,
-    pub title: String,
-    pub tags: Vec<String>,
-    pub overview: String,  // ~2k tokens
-}
-```
-
-#### DailyService — 日记管理
-
-```rust
-// src-tauri/src/services/daily.rs
-
-pub struct DailyService {
-    storage: Arc<StorageManager>,
-}
-
-impl DailyService {
-    /// 获取日记（不存在则从模板创建）+ 关联任务
-    pub async fn get(&self, date: &str)
-        -> Result<DailyNote, AppError>;
-
-    /// 保存日记内容
-    pub async fn save(&self, date: &str, content: &str)
-        -> Result<(), AppError>;
-
-    /// 追加条目到日记指定区域
-    pub async fn append_entry(&self, date: &str, content: &str, section: Option<&str>)
-        -> Result<(), AppError>;
-
-    /// 日记列表（元数据）
-    pub async fn list(&self, limit: u32)
-        -> Result<Vec<DailyMeta>, AppError>;
-}
-```
-
-#### TaskService — 任务管理
-
-```rust
-// src-tauri/src/services/task.rs
-
-pub struct TaskService {
-    storage: Arc<StorageManager>,
-}
-
-impl TaskService {
-    pub async fn create(&self, content: &str, due: Option<&str>, context: Option<&str>, note_path: Option<&str>)
-        -> Result<Task, AppError>;
-    pub async fn update(&self, id: &str, status: Option<&str>, content: Option<&str>, due: Option<&str>)
-        -> Result<Task, AppError>;
-    pub async fn list(&self, status: Option<&str>)
-        -> Result<Vec<Task>, AppError>;
-    pub async fn complete(&self, id: &str)
-        -> Result<(), AppError>;
-}
-```
-
-### 6.11 Memory Layer — Agent 私有记忆
-
-> PRD 核心命题：**记忆是 Agent 的，知识是共同的。**
-
-Memory 管理 Agent 对用户的私有认知——观察、偏好、模式识别等。这些信息存在 SQLite 中，用户不直接操作。Knowledge（Markdown）是人机共有的，由 Services 管理。
-
-```
-Memory (Agent 私有, SQLite)          Knowledge (人机共有, Markdown)
-├── 观察：第三次提到工作疲惫感        ├── vault/knowledge/工作节奏.md
-├── 偏好：偏好简短直接的回复           ├── vault/knowledge/投资策略.md
-├── 模式：周一情绪通常低落             └── vault/knowledge/育儿方法.md
-└── 召回：按相关性检索记忆
-                                      ↑
-    记忆可以升华为知识 ────────────────┘
-    （Agent 发现模式 → 沉淀为知识笔记，需人类确认）
-```
-
-#### 单表 `memories` 设计
-
-所有记忆存入单表，通过 `category` 区分类型，`key` 去重，`superseded_by` 追踪认知演进：
-
-```rust
-// src-tauri/src/memory/mod.rs
-
-/// 统一记忆结构（对应 memories 表）
-pub struct Memory {
-    pub id: String,
-    pub key: String,                        // 唯一去重键，同一认知 upsert
-    pub content: String,                    // 记忆内容
-    pub category: MemoryCategory,           // 6 类，隐含 owner（user/agent）
-    pub importance: f32,                    // 重要度 0.0-1.0（衰减基准、recall 排序）
-    pub session_id: Option<String>,         // 关联会话（溯源）
-    pub related_path: Option<String>,       // 关联笔记路径
-    pub surfaced: bool,                     // 是否已浮出给用户
-    pub superseded_by: Option<String>,      // 被哪条新记忆替代
-    pub created: DateTime<Utc>,
-    pub updated: DateTime<Utc>,
-}
-
-pub enum MemoryCategory {
-    // user 拥有
-    Profile,      // 用户基本信息（角色、背景、目标）
-    Preferences,  // 用户偏好（沟通风格、主题偏好）
-    Entities,     // 实体记忆（人物、项目、组织）
-    Events,       // 事件记录（决策、里程碑、事故）
-    // agent 拥有
-    Cases,        // 学到的案例（成功方案、调试经验）
-    Patterns,     // 学到的模式（行为规律、偏好趋势）
-}
-```
-
-#### MemoryManager — 统一入口
-
-```rust
-pub struct MemoryManager {
-    db: Arc<DbState>,
-}
-
-impl MemoryManager {
-    /// 写入记忆（upsert by key，旧记忆标记 superseded_by）
-    pub async fn remember(&self, memory: Memory) -> Result<(), AppError> {
-        // 如果 key 已存在：旧记忆.superseded_by = 新记忆.id，再 insert 新记忆
-        // 认知演进而非覆盖
-    }
-
-    /// 记忆召回：按 importance 排序，过滤 superseded_by IS NULL
-    pub async fn recall(&self, query: &str, limit: u32) -> Result<Vec<Memory>, AppError> {
-        // Phase 1: FTS5 关键词匹配 + importance 排序
-        // Phase 2: embedding 向量语义检索
-    }
-
-    /// 按 category 召回
-    pub async fn recall_by_category(&self, category: MemoryCategory, limit: u32)
-        -> Result<Vec<Memory>, AppError>;
-
-    /// 获取未浮出的记忆（ContextBuilder 注入 prompt 用）
-    pub async fn unsurfaced(&self, limit: u32) -> Result<Vec<Memory>, AppError> {
-        // WHERE surfaced = 0 AND superseded_by IS NULL ORDER BY importance DESC
-    }
-
-    /// 标记已浮出
-    pub async fn mark_surfaced(&self, id: &str) -> Result<(), AppError>;
-
-    /// 记忆衰减：按 category 差异化降低 importance（Cron 定期调用）
-    /// Preference 衰减极慢（偏好稳定），Pattern 衰减最快（时效性强）
-    pub async fn decay(&self) -> Result<u32, AppError> {
-        // 按 category 差异化衰减系数：
-        // UPDATE memories SET importance = importance * CASE category
-        //   WHEN 'profile'     THEN 0.99   -- 用户信息稳定，几乎不衰减
-        //   WHEN 'preferences' THEN 0.99   -- 偏好稳定
-        //   WHEN 'entities'    THEN 0.98   -- 实体信息较稳定
-        //   WHEN 'events'      THEN 0.95   -- 事件中等衰减
-        //   WHEN 'cases'       THEN 0.95   -- 案例中等衰减
-        //   WHEN 'patterns'    THEN 0.90   -- 模式时效性强，快速衰减
-        // END
-        // WHERE superseded_by IS NULL AND importance > 0.1
-        // 返回受影响行数
-    }
-
-    /// 记忆升华：高 importance 观察 → 知识笔记草稿
-    pub async fn propose_crystallization(&self, id: &str) -> Result<KnowledgeDraft, AppError> {
-        // 取出记忆 → 生成知识草稿 → 等人类确认后写入 vault/knowledge/
-    }
-
-    /// 清理：importance 低于阈值的旧记忆
-    pub async fn cleanup(&self, threshold: f32) -> Result<u32, AppError> {
-        // DELETE WHERE importance < threshold AND superseded_by IS NOT NULL
-    }
-}
-```
-
-#### 记忆类别与示例
-
-| category | 说明 | key 示例 |
-|----------|------|---------|
-| **profile** | "用户是创业者，关注教育和投资" | `profile:role_entrepreneur` |
-| **preferences** | "偏好直接简洁的沟通方式" | `pref:communication_style` |
-| **entities** | "张三是用户的合伙人，负责技术" | `entity:person_zhangsan` |
-| **events** | "2026-03 决定转型做教育方向" | `event:pivot_education_202603` |
-| **cases** | "工作压力与陪孩子质量高度相关" | `case:work_parenting_correlation` |
-| **patterns** | "晚上 10 点后对话质量最高" | `pat:engagement_peak_time` |
-
-#### 认知演进链（superseded_by）
-
-```
-记忆 A: "用户对教育有兴趣" (importance: 0.6)
-  ↓ 新对话后 Agent 理解更深
-记忆 B: "用户关注蒙特梭利教育方法，孩子 3 岁" (importance: 0.8)
-  A.superseded_by = B.id
-
-recall() 只返回 B（superseded_by IS NULL）
-但 A 仍保留在库中，可追溯认知变化
-```
-
-#### 记忆生命周期
-
-```
-写入 → 演进 → 衰减 → 升华/清理
-
-1. 写入：SubAgent 对话后分析 → remember() upsert by key
-2. 演进：同一 key 的新认知替代旧认知（superseded_by 链）
-3. 衰减：Cron 定期 decay()，importance *= 0.95
-4. 升华：高 importance 观察 → propose_crystallization()
-         → 知识笔记草稿 → 人类确认 → vault/knowledge/
-5. 清理：被替代 + importance < 阈值的旧记忆 cleanup()
-```
-
-#### Memory 与 ContextBuilder 的关系
-
-```rust
-// ContextBuilder 从 Memory 拉取记忆注入 prompt
-let memories = self.memory.recall(&message.content, 5).await?;
-let unsurfaced = self.memory.unsurfaced(3).await?;
-// → 注入 System Prompt 的 [Agent 记忆] 区域
-```
-
-### 6.12 Tool Layer — Agent 可用工具
+#### 模型分层调用
+
+| 任务类型 | 模型 | 成本比 |
+|---------|------|--------|
+| 内容分类 · 路由 · 任务提取 | Haiku | 1x |
+| 日常输入处理 · 简单提醒判断 | Haiku | 1x |
+| 知识沉淀 · 综合分析 · 异步总结 | Sonnet | ~10x |
+| Layer 3 洞见生成 · 深度对话 | Sonnet | ~10x |
+
+### 6.8 Tool 层 — Agent 可用工具
 
 Agent 上下文**常驻仅 4 个 Tool Schema**，业务操作通过 `operations` 元工具按需发现和调用，避免上下文膨胀。
 
@@ -1562,35 +540,29 @@ pub trait Tool: Send + Sync {
 
 #### 基础能力工具
 
-| 工具 | 文件 | 操作 | 安全约束 |
-|------|------|------|---------|
-| **filesystem** | `filesystem.rs` | read/write/append/list/move/delete | vault 内限定，private/ 禁入，审计日志 |
-| **shell** | `shell.rs` | exec (白名单) | 白名单命令，禁管道/重定向，30s 超时，10KB 输出截断 |
-| **mcp_client** | `mcp_client.rs` | call_tool, list_tools | MCP 协议调用外部工具服务 |
+| 工具 | 操作 | 安全约束 |
+|------|------|---------|
+| **filesystem** | read/write/append/list/move/delete | vault 内限定，private/ 禁入，审计日志 |
+| **shell** | exec (白名单) | 白名单命令，禁管道/重定向，30s 超时，10KB 输出截断 |
+| **mcp_client** | call_tool, list_tools | MCP 协议调用外部工具服务 |
 
 #### MCP Client — 接入外部工具服务
 
-Agent 作为 MCP Client，通过 MCP 协议调用外部工具服务（如浏览器、日历、邮件等）。
+Agent 作为 MCP Client，通过 MCP 协议调用外部工具服务（浏览器、日历、邮件等）。
 
 ```rust
 // src-tauri/src/tools/mcp_client.rs
 
 pub struct McpClientTool {
-    connections: HashMap<String, McpConnection>,  // server_name → connection
-}
-
-impl McpClientTool {
-    /// 连接 MCP Server（启动时从配置读取）
-    pub async fn connect(&mut self, name: &str, config: McpServerConfig) -> Result<(), AppError>;
-
-    /// 列举所有已连接 Server 的可用工具
-    pub fn list_tools(&self) -> Vec<ToolSpec>;
-
-    /// 调用外部工具
-    pub async fn call_tool(&self, server: &str, tool: &str, args: serde_json::Value)
-        -> Result<ToolOutput, AppError>;
+    connections: HashMap<String, McpConnection>,
 }
 ```
+
+| 方法 | 说明 |
+|------|------|
+| `connect(name, config)` | 连接 MCP Server |
+| `list_tools()` | 列举所有已连接 Server 的可用工具 |
+| `call_tool(server, tool, args)` | 调用外部工具 |
 
 MCP Server 配置（`config/settings.json`）：
 
@@ -1605,251 +577,67 @@ MCP Server 配置（`config/settings.json`）：
 
 #### Operations — 业务操作元工具
 
-`operations` 是连接 Agent 与 Services/Memory 的唯一通道。Agent 通过 `list` 按需发现可用操作（含参数 Schema），再通过 `call` 执行。**操作的 JSON Schema 不常驻上下文，仅在 list 时返回**。
+`operations` 是连接 Agent 与 Services/Memory 的唯一通道。**操作的 JSON Schema 不常驻上下文，仅在 list 时返回**。常用操作名已列在 `operations.description` 中，Agent 可直接 call 跳过 list。
 
 ```rust
 // src-tauri/src/tools/operations.rs
 
-pub struct OperationsTool {
-    services: Arc<ServiceContainer>,
-    memory: Arc<MemoryManager>,
-    registry: OperationRegistry,
-}
-
-/// 单个操作定义（Schema 按需返回，不常驻上下文）
 pub struct OperationDef {
-    pub name: String,           // "knowledge_create"
-    pub category: String,       // "knowledge"
+    pub name: String,
+    pub category: String,
     pub description: String,
-    pub parameters: Value,      // JSON Schema
-}
-
-impl OperationsTool {
-    pub fn new(services: Arc<ServiceContainer>, memory: Arc<MemoryManager>) -> Self {
-        let registry = Self::build_registry();
-        Self { services, memory, registry }
-    }
-
-    fn build_registry() -> OperationRegistry {
-        let mut r = OperationRegistry::new();
-        // Knowledge（三级索引：L0 tags → L1 overview → L2 detail）
-        r.register("knowledge_create", "knowledge", "创建知识笔记（自动生成 L0 tags + L1 overview 索引）",
-            json!({"properties": {"title": {"type": "string"}, "content": {"type": "string"}, "tags": {"type": "array"}}}));
-        r.register("knowledge_search", "knowledge", "搜索知识库（返回 L1 overview，支持目录递归检索）",
-            json!({"properties": {"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}}));
-        r.register("knowledge_get", "knowledge", "获取知识笔记完整内容（L2 detail，按需加载）",
-            json!({"properties": {"path": {"type": "string"}}}));
-        r.register("knowledge_list_tags", "knowledge", "列出所有 L0 tags 及频次（快速浏览知识全貌）",
-            json!({"properties": {"dir": {"type": "string", "description": "可选：限定目录"}}}));
-        // Daily
-        r.register("daily_get", "daily", "获取/创建日记",
-            json!({"properties": {"date": {"type": "string"}}}));
-        r.register("daily_append", "daily", "追加内容到日记",
-            json!({"properties": {"date": {"type": "string"}, "content": {"type": "string"}, "section": {"type": "string"}}}));
-        // Task
-        r.register("task_create", "task", "创建任务",
-            json!({"properties": {"content": {"type": "string"}, "due": {"type": "string"}, "context": {"type": "string"}}}));
-        r.register("task_list", "task", "列出任务",
-            json!({"properties": {"status": {"type": "string"}}}));
-        r.register("task_complete", "task", "完成任务",
-            json!({"properties": {"id": {"type": "string"}}}));
-        // Search（跨知识 + 记忆）
-        r.register("memory_search", "search", "搜索 Agent 记忆（观察/偏好/模式）",
-            json!({"properties": {"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}}));
-        r
-    }
-}
-
-#[async_trait]
-impl Tool for OperationsTool {
-    fn name(&self) -> &str { "operations" }
-    fn description(&self) -> &str {
-        "业务操作元工具。常用操作：knowledge_search（返回L1概要）, knowledge_get（加载L2全文）, \
-         knowledge_create, knowledge_list_tags（浏览L0标签）, daily_get, daily_append, \
-         task_create, task_list, task_complete, memory_search。\
-         可直接 call(name, args)，或用 list(category?) 查看完整参数 Schema。"
-    }
-    fn json_schema(&self) -> Value {
-        // 常驻上下文的 Schema 非常小
-        json!({
-            "type": "object",
-            "properties": {
-                "action": { "enum": ["list", "call"] },
-                "category": {
-                    "type": "string",
-                    "description": "筛选类别: knowledge | daily | task | search"
-                },
-                "name": {
-                    "type": "string",
-                    "description": "操作名称（call 时必填）"
-                },
-                "args": {
-                    "type": "object",
-                    "description": "操作参数（call 时必填）"
-                }
-            },
-            "required": ["action"]
-        })
-    }
-
-    async fn execute(&self, input: ToolInput) -> Result<ToolOutput, AppError> {
-        match input.args["action"].as_str() {
-            Some("list") => {
-                let category = input.args["category"].as_str();
-                let ops = self.registry.list(category);
-                // 返回操作列表 + 参数 Schema（此时才注入上下文）
-                Ok(ToolOutput::success(serde_json::to_string_pretty(&ops)?))
-            }
-            Some("call") => {
-                let name = input.args["name"].as_str()
-                    .ok_or(AppError::Validation("name required".into()))?;
-                let args = input.args.get("args").cloned().unwrap_or(json!({}));
-                self.dispatch(name, args).await
-            }
-            _ => Err(AppError::Validation("action must be 'list' or 'call'".into()))
-        }
-    }
-}
-
-impl OperationsTool {
-    async fn dispatch(&self, name: &str, args: Value) -> Result<ToolOutput, AppError> {
-        match name {
-            // Knowledge
-            "knowledge_create" => {
-                let entry = self.services.knowledge.create(
-                    args["title"].as_str().unwrap_or_default(),
-                    args["content"].as_str().unwrap_or_default(),
-                    &[],
-                ).await?;
-                Ok(ToolOutput::success(format!("Created: {}", entry.path)))
-            }
-            "knowledge_search" => {
-                // L0 粗筛 → L1 重排序 → 返回 Top N 的 L1 overview
-                let results = self.services.knowledge.search_with_rerank(
-                    args["query"].as_str().unwrap_or_default(),
-                    args["limit"].as_u64().unwrap_or(5) as u32,
-                ).await?;
-                Ok(ToolOutput::success(serde_json::to_string(&results)?))
-            }
-            "knowledge_get" => {
-                // L2 完整加载（从文件系统读取 Markdown）
-                let note = self.services.knowledge.get_l2(
-                    args["path"].as_str().unwrap_or_default(),
-                ).await?;
-                Ok(ToolOutput::success(serde_json::to_string(&note)?))
-            }
-            "knowledge_list_tags" => {
-                // 列出 L0 tags 及频次，Agent 可快速浏览知识全貌
-                let dir = args["dir"].as_str();
-                let tags = self.services.knowledge.list_tags(dir).await?;
-                Ok(ToolOutput::success(serde_json::to_string(&tags)?))
-            }
-            // Daily
-            "daily_get" => {
-                let note = self.services.daily.get(
-                    args["date"].as_str().unwrap_or_default(),
-                ).await?;
-                Ok(ToolOutput::success(serde_json::to_string(&note)?))
-            }
-            "daily_append" => {
-                self.services.daily.append_entry(
-                    args["date"].as_str().unwrap_or_default(),
-                    args["content"].as_str().unwrap_or_default(),
-                    args["section"].as_str(),
-                ).await?;
-                Ok(ToolOutput::success("Appended".into()))
-            }
-            // Task
-            "task_create" => {
-                let task = self.services.task.create(
-                    args["content"].as_str().unwrap_or_default(),
-                    args["due"].as_str(),
-                    args["context"].as_str(),
-                    None,
-                ).await?;
-                Ok(ToolOutput::success(format!("Task created: {}", task.id)))
-            }
-            "task_list" => {
-                let tasks = self.services.task.list(args["status"].as_str()).await?;
-                Ok(ToolOutput::success(serde_json::to_string(&tasks)?))
-            }
-            "task_complete" => {
-                self.services.task.complete(
-                    args["id"].as_str().unwrap_or_default(),
-                ).await?;
-                Ok(ToolOutput::success("Task completed".into()))
-            }
-            // Search（记忆）
-            "memory_search" => {
-                let results = self.memory.recall(
-                    args["query"].as_str().unwrap_or_default(),
-                    args["limit"].as_u64().unwrap_or(5) as u32,
-                ).await?;
-                Ok(ToolOutput::success(serde_json::to_string(&results)?))
-            }
-            _ => Err(AppError::Validation(format!("unknown operation: {}", name)))
-        }
-    }
+    pub parameters: Value,  // JSON Schema
 }
 ```
 
-#### Agent 调用流程示例
+常驻上下文的 Schema（极小）：
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "action": { "enum": ["list", "call"] },
+    "category": { "type": "string", "description": "筛选: knowledge | daily | task | search" },
+    "name": { "type": "string", "description": "操作名称（call 时必填）" },
+    "args": { "type": "object", "description": "操作参数（call 时必填）" }
+  },
+  "required": ["action"]
+}
+```
+
+#### 已注册操作
+
+| 操作名 | 类别 | 说明 |
+|--------|------|------|
+| `knowledge_create` | knowledge | 创建知识笔记（自动生成 L0 tags + L1 overview） |
+| `knowledge_search` | knowledge | 搜索知识库（返回 L1 overview，支持目录递归） |
+| `knowledge_get` | knowledge | 获取笔记完整内容（L2 detail，按需加载） |
+| `knowledge_list_tags` | knowledge | 列出 L0 tags 及频次（浏览知识全貌） |
+| `daily_get` | daily | 获取/创建日记 |
+| `daily_append` | daily | 追加内容到日记 |
+| `task_create` | task | 创建任务 |
+| `task_list` | task | 列出任务 |
+| `task_complete` | task | 完成任务 |
+| `memory_search` | search | 搜索 Agent 记忆 |
+
+#### 三级渐进加载
 
 ```
-场景：Agent 需要搜索用户的学习相关知识
-
-  // 常用操作名已在 operations.description 中列出，可直接 call 跳过 list
+场景：Agent 搜索用户的学习相关知识
 
   Round 1: knowledge_search 返回 L1 概要（~2k tokens/条）
-    tool_call("operations", {action: "call", name: "knowledge_search", args: {query: "学习方法", limit: 5}})
-    返回:
-      [{path: "knowledge/教育/有效学习.md", title: "有效学习方法",
-        tags: ["学习", "间隔重复", "主动回忆", "费曼技巧"],
-        overview: "间隔重复利用遗忘曲线...主动回忆比被动复习效果高 3 倍...费曼技巧四步法..."
-       }]
+    → [{path, title, tags, overview: "间隔重复利用遗忘曲线..."}]
 
-  Round 2: Agent 判断需要完整内容 → 加载 L2
-    tool_call("operations", {action: "call", name: "knowledge_get", args: {path: "knowledge/教育/有效学习.md"}})
-    返回: 完整 Markdown 内容
+  Round 2: Agent 需要完整内容 → knowledge_get 加载 L2
+    → 完整 Markdown 内容
 
-  或者: Agent 想浏览知识全貌 → 列出 L0 tags
-    tool_call("operations", {action: "call", name: "knowledge_list_tags", args: {dir: "knowledge/教育"}})
-    返回: [{"tag": "学习", "count": 5}, {"tag": "费曼技巧", "count": 2}, ...]
+  或者: Agent 浏览知识全貌 → knowledge_list_tags
+    → [{"tag": "学习", "count": 5}, ...]
 ```
 
-**三级渐进加载的优势**：
-- ContextBuilder 自动注入 L1（Agent 无需调工具即可感知知识全貌）
-- Agent 主动搜索也返回 L1（比 500 token snippet 信息量大 4 倍，但保持结构完整）
-- L2 仅在真正需要完整细节时加载，避免上下文膨胀
-- `list` 仅在需要查看完整参数 Schema 或发现不常用操作时使用
+**优势**：ContextPipeline 自动注入 L1（Agent 无需调工具即可感知知识全貌）；Agent 主动搜索也返回 L1（比 500 token snippet 信息量大 4 倍）；L2 仅在真正需要完整细节时加载，避免上下文膨胀。
 
-#### ToolRegistry
-
-```rust
-// src-tauri/src/tools/mod.rs
-
-impl ToolRegistry {
-    pub fn default_tools(
-        services: &ServiceContainer,
-        memory: &MemoryManager,
-        vault_path: PathBuf,
-        mcp_configs: Vec<McpServerConfig>,
-    ) -> Self {
-        let tools: Vec<Arc<dyn Tool>> = vec![
-            Arc::new(FilesystemTool::new(vault_path)),
-            Arc::new(ShellTool::new_sandboxed()),
-            Arc::new(McpClientTool::new(mcp_configs)),
-            Arc::new(OperationsTool::new(
-                Arc::new(services.clone()),
-                Arc::new(memory.clone()),
-            )),
-        ];
-        Self { tools }
-    }
-}
-```
-
-**工具调用循环**（在 AgentLoop.tool_loop() 中）：
+#### 工具调用循环
 
 ```
 LLM 响应 → 解析工具调用 → ToolRegistry.execute_batch()
@@ -1858,237 +646,274 @@ LLM 响应 → 解析工具调用 → ToolRegistry.execute_batch()
     → 循环检测：输出 hash 去重，防止无限循环
 ```
 
-### 6.13 Gateway Layer — HTTP/WebSocket 服务（独立模块）
+### 6.9 Services 层 — 核心业务逻辑
 
-Gateway 是桌面端对外暴露的网络服务层。为移动端 PWA 提供静态文件和 API，为 Webhook 通道提供接入点。
+Services 是业务操作的核心层。**Web Commands、CLI Commands 和 Agent 共用同一套 Services**，保证业务逻辑单一来源。
+
+```
+Web Commands  ──► Services ──► Storage
+CLI Commands  ──► Services ──► Storage
+Agent         ──► operations (元工具) ──► Services ──► Storage
+                                     ──► Memory   ──► Storage
+```
 
 ```rust
-// src-tauri/src/gateway/mod.rs
+// src-tauri/src/services/mod.rs
 
-pub struct GatewayServer {
-    bus: Arc<MessageBus>,                          // 通过 Bus 解耦，不直接引用 Agent
-    webhook_channel: Arc<WebhookChannel>,          // 实现 Channel trait，桥接 HTTP → Bus
-    auth: AuthGuard,
-    port: u16,  // 默认 7878，可配置
-}
-
-/// WebhookChannel：将 HTTP/WebSocket 请求桥接为 ChannelMessage → Bus
-/// Webhook 端点（Telegram/Feishu/通用）通过此 Channel 推入 Bus inbound，
-/// Agent 响应通过 Bus outbound 回流到 WebhookChannel.send()。
-pub struct WebhookChannel {
-    bus: Arc<MessageBus>,
-    // 等待中的响应：request_id → oneshot::Sender（同步 HTTP 请求用）
-    pending_responses: Mutex<HashMap<String, oneshot::Sender<OutboundMessage>>>,
-}
-
-impl GatewayServer {
-    /// 启动 HTTP + WebSocket 服务
-    pub async fn start(&self) -> Result<(), AppError> {
-        // 绑定本地端口，启动 axum/actix-web 服务
-    }
+pub struct ServiceContainer {
+    pub knowledge: KnowledgeService,
+    pub daily: DailyService,
+    pub task: TaskService,
 }
 ```
 
-**REST API 端点**：
+#### KnowledgeService — 知识笔记管理
 
-| 端点 | 方法 | 说明 | Phase |
-|------|------|------|-------|
-| `/api/chat` | POST | 发送消息，返回 Agent 响应 | Phase 1 后期 |
-| `/api/daily/:date` | GET | 获取日记内容 | Phase 2 |
-| `/api/knowledge` | GET | 知识库搜索 | Phase 2 |
-| `/api/tasks` | GET | 任务列表 | Phase 2 |
-| `/ws/chat` | WS | WebSocket 实时对话 | Phase 2 |
-| `/webhook/telegram` | POST | Telegram Bot Webhook 接收 | Phase 1 后期 |
-| `/webhook/feishu` | POST | 飞书 Bot Webhook 接收 | Phase 2 |
-| `/` | GET | PWA 静态文件服务 | Phase 2 |
+操作人机共有的知识体系（Markdown 文件 + SQLite 索引）。检索采用三级渐进：L0 粗筛 → L1 重排序 → L2 按需加载。`search_with_rerank` 中命中目录（path 无 .md 后缀）时自动展开子笔记补充候选。
 
-**认证**（`gateway/auth.rs`）：
-
-```rust
-pub struct AuthGuard {
-    // Bearer Token 存入 OS Keychain（与 API Key 同级安全），不存明文文件
-    // 验证时从 Keychain 读取比对
-    bearer_token_hash: String,  // bcrypt hash 缓存（避免每次请求读 Keychain）
-}
-
-impl AuthGuard {
-    /// 验证请求：Header / Query Param / WebSocket Subprotocol
-    pub fn verify(&self, request: &Request) -> Result<(), AppError>;
-}
-```
-
-- 本地 WiFi 直连：Bearer Token 认证（用户在桌面端设置中生成）
-- Tailscale 穿透：Tailscale 本身提供加密 + 身份验证，Gateway 再加 Token 双重保护
-- Webhook：平台签名验证（Telegram: X-Telegram-Bot-Api-Secret-Token, 飞书: 签名校验）
-
-### 6.14 Cron — 定时任务调度（独立模块）
-
-Agent 不仅被动响应用户消息，还需主动执行后台任务。Cron 模块基于 tokio 定时驱动。
-
-```rust
-// src-tauri/src/cron/mod.rs
-
-pub struct CronScheduler {
-    agent: Arc<AgentService>,
-    db: Arc<DbState>,
-    jobs: Vec<CronJob>,
-}
-
-pub struct CronJob {
-    pub name: String,
-    pub schedule: CronSchedule,  // cron 表达式
-    pub enabled: bool,
-    pub last_run: Option<DateTime<Utc>>,
-}
-```
-
-**内置定时任务**：
-
-| 任务 | 默认频率 | 说明 | Phase |
-|------|---------|------|-------|
-| `daily_summary` | 每日 22:00 | Agent 生成当日回顾摘要，写入日记 | MVP |
-| `resource_process` | 每 5 分钟 | 处理 pending 状态的资源（解析 + 结晶） | MVP |
-| `history_prune` | 每日 03:00 | 压缩旧对话历史，超 90 天转冷归档 | Phase 2 |
-| `knowledge_review` | 每周日 10:00 | Agent 回顾知识库，发现新关联（Layer 2） | Phase 2 |
-| `index_rebuild` | 每日 04:00 | 增量重建 SQLite 索引（Markdown → notes 表） | MVP |
-| `memory_surface` | 每日 09:00 | 检查未浮出记忆是否到浮出时机 | Phase 2 |
-| `heartbeat_check` | 每 30 秒 | 系统健康检测 | MVP |
-
-```rust
-// src-tauri/src/cron/scheduler.rs
-
-impl CronScheduler {
-    /// 启动调度循环（应用启动时调用）
-    /// 使用 tokio-cron-scheduler 精确调度，避免 loop+sleep 的时钟漂移
-    pub async fn start(&mut self) -> Result<(), AppError> {
-        let scheduler = JobScheduler::new().await?;
-        for job in &self.jobs {
-            if !job.enabled { continue; }
-            let agent = self.agent.clone();
-            let db = self.db.clone();
-            let job_name = job.name.clone();
-            scheduler.add(Job::new_async(
-                job.schedule.as_str(),  // cron 表达式，如 "0 22 * * *"
-                move |_uuid, _lock| {
-                    let agent = agent.clone();
-                    let db = db.clone();
-                    let name = job_name.clone();
-                    Box::pin(async move {
-                        if let Err(e) = Self::run_job(&name, &agent, &db).await {
-                            tracing::error!("cron job {} failed: {}", name, e);
-                        }
-                    })
-                },
-            )?).await?;
-        }
-        scheduler.start().await?;
-        Ok(())
-    }
-
-    async fn run_job(name: &str, agent: &AgentService, db: &DbState) -> Result<(), AppError> {
-        match name {
-            "daily_summary" => { /* Agent 生成日记摘要 */ }
-            "index_rebuild" => { /* 增量同步 Markdown → SQLite */ }
-            _ => {}
-        }
-        Ok(())
-    }
-}
-```
-
-### 6.15 Heartbeat — 健康检测与系统状态
-
-Heartbeat 持续监控系统各组件的运行状态，确保服务可靠性。
-
-```rust
-// src-tauri/src/heartbeat/mod.rs
-
-pub struct HeartbeatMonitor {
-    db: Arc<DbState>,
-    provider: Arc<dyn Provider>,
-    gateway: Option<Arc<GatewayServer>>,
-    channels: Vec<Arc<dyn Channel>>,
-}
-
-/// 系统健康状态
-pub struct SystemHealth {
-    pub status: HealthStatus,          // healthy | degraded | down
-    pub db_connected: bool,            // SQLite 连接正常
-    pub api_key_valid: bool,           // Claude API Key 存在且可用
-    pub vault_accessible: bool,        // Vault 目录可读写
-    pub gateway_running: bool,         // Gateway 服务运行中
-    pub channels: Vec<ChannelHealth>,  // 各通道状态
-    pub last_check: DateTime<Utc>,
-    pub uptime_seconds: u64,
-}
-
-pub struct ChannelHealth {
-    pub name: String,
-    pub connected: bool,
-    pub last_message: Option<DateTime<Utc>>,
-}
-
-impl HeartbeatMonitor {
-    /// 执行一次健康检查
-    pub async fn check(&self) -> SystemHealth;
-
-    /// 通道重连（带指数退避：2s → 4s → 8s → ... → 60s）
-    pub async fn reconnect_channel(&self, name: &str) -> Result<(), AppError>;
-}
-```
-
-**前端集成**：通过 IPC 命令 `system_health` 查询，Settings 页面展示系统状态。
-
-### 6.16 System Prompt 组装
-
-```
-┌─────────────────────────────────────────────┐
-│ [1] 基础人格                                 │ 固定
-│     MindClaw 身份、沟通风格                │
-├─────────────────────────────────────────────┤
-│ [2] 模式指令                                 │ 按当前模式切换
-│     陪伴 / 反思 / 挑战 / 知识 / 树洞          │
-├─────────────────────────────────────────────┤
-│ [3] 用户画像上下文                             │ 从 memories 表读取
-│     category='profile' 的记忆                 │
-├─────────────────────────────────────────────┤
-│ [4] RAG 知识 L1 概要                          │ 动态检索，3-5 条
-│     每条 ~2k tokens（L1 overview）            │
-├─────────────────────────────────────────────┤
-│ [5] 压缩对话历史                             │ 动态
-│     近 5 轮完整 + 早期摘要                    │
-├─────────────────────────────────────────────┤
-│ [6] Agent 观察                               │ Layer 3 候选
-│     未浮出的模式识别                          │
-├─────────────────────────────────────────────┤
-│ [7] 用户消息                                 │
-└─────────────────────────────────────────────┘
-```
-
-### 6.17 模型分层调用
-
-| 任务类型 | 模型 | 成本比 |
-|---------|------|--------|
-| 内容分类 · 路由 · 任务提取 | Haiku | 1x |
-| 日常输入处理 · 简单提醒判断 | Haiku | 1x |
-| 知识沉淀 · 综合分析 · 异步总结 | Sonnet | ~10x |
-| Layer 3 洞见生成 · 深度对话 | Sonnet | ~10x |
-
-### 6.18 上下文工程
-
-Token 管理是核心产品能力：
-
-| 策略 | 实现 |
+| 方法 | 说明 |
 |------|------|
-| 知识库注入 | L0 tags 粗筛 → L1 overview 重排序 → Top 5 L1 注入（~10k tokens） |
-| 对话历史 | 近 5 轮完整 + Haiku 压缩早期为摘要 |
-| Token 预算 | Haiku 默认 ≤ 16K，Sonnet 默认 ≤ 80K（settings.json 可配置） |
+| `create(title, content, tags)` | 写 Markdown + 提取 L0 tags + 生成 L1 + 更新 FTS5 |
+| `update(path, content)` | 更新笔记，自动更新 L0/L1 索引 |
+| `search_l0(query, limit)` | FTS5 匹配 title + tags，返回候选集（~100 tokens/条） |
+| `get_l1_batch(paths)` | 批量加载 L1 overview（~2k tokens/条） |
+| `get_l2(path)` | 从文件系统读取完整 Markdown |
+| `search_with_rerank(query, top_n)` | L0 粗筛 → 目录递归 → L1 重排序 → Top N |
+| `list(tag?)` | 按标签筛选 |
+| `list_children(parent)` | 列出目录下直接子节点 |
+| `sync_links(path)` | 提取 wikilinks 并更新 links 表 |
+| `rebuild_index(path?)` | 重建 Markdown → SQLite 索引 |
 
-### 6.19 Agent Hooks — 事件钩子系统
+```rust
+pub struct NoteL0 {
+    pub path: String,       // 有 .md = 笔记，无后缀 = 目录
+    pub title: String,
+    pub tags: Vec<String>,
+}
 
-AgentLoop 当前各处理步骤为硬编码逻辑。Hooks 在关键位置引入事件驱动的扩展点，支持 Rust trait 实现和 Shell 命令两种 handler 类型（灵感来自 Claude Code 的 hooks 模型）。
+pub struct NoteL1 {
+    pub path: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub overview: String,   // ~2k tokens
+}
+```
 
-#### 钩子事件
+#### DailyService — 日记管理
+
+| 方法 | 说明 |
+|------|------|
+| `get(date)` | 获取日记（不存在则从模板创建）+ 关联任务 |
+| `save(date, content)` | 保存日记内容 |
+| `append_entry(date, content, section?)` | 追加条目到指定区域 |
+| `list(limit)` | 日记列表（元数据） |
+
+#### TaskService — 任务管理
+
+| 方法 | 说明 |
+|------|------|
+| `create(content, due?, context?, note_path?)` | 创建任务 |
+| `update(id, status?, content?, due?)` | 更新任务 |
+| `list(status?)` | 列出任务 |
+| `complete(id)` | 完成任务 |
+
+### 6.10 Memory 层 — Agent 私有记忆
+
+> PRD 核心命题：**记忆是 Agent 的，知识是共同的。**
+
+Memory 管理 Agent 对用户的私有认知——观察、偏好、模式识别等。存在 SQLite 中，用户不直接操作。Knowledge（Markdown）是人机共有的，由 Services 管理。
+
+```
+Memory (Agent 私有, SQLite)          Knowledge (人机共有, Markdown)
+├── 观察：第三次提到工作疲惫感        ├── vault/knowledge/工作节奏.md
+├── 偏好：偏好简短直接的回复           ├── vault/knowledge/投资策略.md
+├── 模式：周一情绪通常低落             └── vault/knowledge/育儿方法.md
+└── 召回：按相关性检索记忆
+                                      ↑
+    记忆可以升华为知识 ────────────────┘
+    （Agent 发现模式 → 沉淀为知识笔记，需人类确认）
+```
+
+#### 单表 `memories` 设计
+
+所有记忆存入单表，通过 `category` 区分类型，`key` 去重，`superseded_by` 追踪认知演进：
+
+```rust
+// src-tauri/src/memory/mod.rs
+
+pub struct Memory {
+    pub id: String,
+    pub key: String,                     // 唯一去重键，同一认知 upsert
+    pub content: String,
+    pub category: MemoryCategory,        // 6 类，隐含 owner（user/agent）
+    pub importance: f32,                 // 重要度 0.0-1.0
+    pub session_id: Option<String>,      // 关联会话（溯源）
+    pub related_path: Option<String>,    // 关联笔记路径
+    pub surfaced: bool,                  // 是否已浮出给用户
+    pub superseded_by: Option<String>,   // 被哪条新记忆替代
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
+}
+
+pub enum MemoryCategory {
+    // user 拥有
+    Profile,      // 用户基本信息（角色、背景、目标）
+    Preferences,  // 用户偏好（沟通风格、主题偏好）
+    Entities,     // 实体记忆（人物、项目、组织）
+    Events,       // 事件记录（决策、里程碑、事故）
+    // agent 拥有
+    Cases,        // 学到的案例（成功方案、调试经验）
+    Patterns,     // 学到的模式（行为规律、偏好趋势）
+}
+```
+
+#### 记忆类别与示例
+
+| category | 说明 | key 示例 |
+|----------|------|---------|
+| **profile** | "用户是创业者，关注教育和投资" | `profile:role_entrepreneur` |
+| **preferences** | "偏好直接简洁的沟通方式" | `pref:communication_style` |
+| **entities** | "张三是用户的合伙人，负责技术" | `entity:person_zhangsan` |
+| **events** | "2026-03 决定转型做教育方向" | `event:pivot_education_202603` |
+| **cases** | "工作压力与陪孩子质量高度相关" | `case:work_parenting_correlation` |
+| **patterns** | "晚上 10 点后对话质量最高" | `pat:engagement_peak_time` |
+
+#### MemoryManager
+
+```rust
+pub struct MemoryManager {
+    db: Arc<DbState>,
+}
+```
+
+| 方法 | 说明 |
+|------|------|
+| `remember(memory)` | 写入记忆（upsert by key，旧记忆标记 superseded_by） |
+| `recall(query, limit)` | FTS5 关键词匹配 + importance 排序（Phase 2: embedding 向量检索） |
+| `recall_by_category(category, limit)` | 按类别召回 |
+| `unsurfaced(limit)` | 获取未浮出的记忆（ContextPipeline 注入用） |
+| `mark_surfaced(id)` | 标记已浮出 |
+| `decay()` | 按 category 差异化衰减 importance（Cron 定期调用） |
+| `propose_crystallization(id)` | 高 importance 记忆 → 知识笔记草稿（需人类确认） |
+| `cleanup(threshold)` | 删除 superseded + importance 低于阈值的旧记忆 |
+
+#### 衰减系数
+
+| category | 衰减系数 | 原因 |
+|----------|---------|------|
+| profile | 0.99 | 用户信息稳定 |
+| preferences | 0.99 | 偏好稳定 |
+| entities | 0.98 | 实体信息较稳定 |
+| events | 0.95 | 事件中等衰减 |
+| cases | 0.95 | 案例中等衰减 |
+| patterns | 0.90 | 模式时效性强，快速衰减 |
+
+#### 认知演进链（superseded_by）
+
+**设计决策**：记忆更新不覆盖旧值，而是通过 `superseded_by` 链追踪认知变化。`recall()` 只返回 `superseded_by IS NULL` 的最新认知，但旧记忆保留可追溯。
+
+```
+记忆 A: "用户对教育有兴趣" (importance: 0.6)
+  ↓ 新对话后 Agent 理解更深
+记忆 B: "用户关注蒙特梭利教育方法，孩子 3 岁" (importance: 0.8)
+  A.superseded_by = B.id
+```
+
+#### 记忆生命周期
+
+```
+写入 → 演进 → 衰减 → 升华/清理
+
+1. 写入：SubAgent 对话后分析 → remember() upsert by key
+2. 演进：同一 key 的新认知替代旧认知（superseded_by 链）
+3. 衰减：Cron 定期 decay()，importance *= 衰减系数
+4. 升华：高 importance 观察 → propose_crystallization()
+         → 知识笔记草稿 → 人类确认 → vault/knowledge/
+5. 清理：被替代 + importance < 阈值的旧记忆 cleanup()
+```
+
+### 6.11 SubAgent — 异步后台任务
+
+AgentLoop 负责主对话流，SubAgent 处理不应阻塞响应的后台任务。从硬编码 enum 演进为 trait + 注册表模式，Skills 可动态添加新任务类型。
+
+```
+AgentLoop (主对话)
+    │
+    ├── 对话响应 → 立即返回给用户
+    │
+    └── 派发 SubAgent 任务（不阻塞）
+         ├── KnowledgeDistill:  从对话中提炼知识笔记
+         ├── SessionSummarize:  会话摘要生成
+         ├── ObservationAnalyze: Layer 3 模式识别
+         └── DailySummary:      当日回顾生成
+```
+
+#### SubAgentTask Trait
+
+```rust
+// src-tauri/src/agent/sub_agent.rs
+
+#[async_trait]
+pub trait SubAgentTask: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn model_tier(&self) -> ModelTier;
+    async fn execute(
+        &self, ctx: SubAgentContext, input: Value,
+    ) -> Result<SubAgentOutput, AppError>;
+}
+
+pub struct SubAgentContext {
+    pub provider: Arc<dyn Provider>,
+    pub db: Arc<DbState>,
+    pub memory: Arc<MemoryManager>,
+    pub services: Arc<ServiceContainer>,
+}
+
+pub struct SubAgentOutput {
+    pub success: bool,
+    pub summary: String,
+    pub artifacts: Vec<Artifact>,
+}
+
+pub struct Artifact {
+    pub kind: String,    // "knowledge_draft" | "summary" | "observation"
+    pub content: String,
+    pub metadata: Value,
+}
+```
+
+#### SubAgentRegistry 与派发
+
+```rust
+pub struct SubAgentRegistry {
+    tasks: HashMap<String, Arc<dyn SubAgentTask>>,
+}
+
+pub struct SubAgentDispatch {
+    pub task_name: String,
+    pub input: Value,
+}
+```
+
+`SubAgentRegistry::with_builtins()` 注册 4 个内置任务。`SubAgentExecutor` 消费 `mpsc::Receiver<SubAgentDispatch>`，通过 `Semaphore` 限制最大 3 个并发 API 调用，防止速率爆炸。
+
+#### 内置任务与模型选择
+
+| 任务 | model_tier() | 原因 |
+|------|-------------|------|
+| `knowledge_distill` | Sonnet | 需深度理解和提炼 |
+| `session_summarize` | Haiku | 摘要生成，低成本 |
+| `observation_analyze` | Sonnet | 跨域关联和模式识别 |
+| `daily_summary` | Sonnet | 综合当日全部信息 |
+
+**派发时机**：`post_process()` 中，知识模式下派发 KnowledgeDistill，每次对话后派发 ObservationAnalyze，会话结束时派发 SessionSummarize。
+
+### 6.12 扩展性：Hooks · Skills · 基础设施
+
+#### Agent Hooks — 事件钩子系统
+
+AgentLoop 在关键位置引入事件驱动的扩展点，支持 Rust trait 实现和 Shell 命令两种 handler 类型。
 
 ```
 process_message() 中的 Hook 触发点：
@@ -2108,479 +933,73 @@ process_message() 中的 Hook 触发点：
   10. Session close ──────── ► OnSessionClose ◄
 ```
 
-#### 核心定义
-
 ```rust
 // src-tauri/src/agent/hooks.rs
 
-/// 钩子事件类型
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum HookEvent {
-    PreMessage,       // 消息处理前（可修改消息、注入上下文）
-    PostMessage,      // 响应发送后（可触发副作用）
-    PreToolUse,       // 工具执行前（可验证、修改、阻止）
-    PostToolUse,      // 工具执行后（可审计、修改结果）
-    OnSessionCreate,  // 新会话创建
-    OnSessionClose,   // 会话关闭
+    PreMessage,
+    PostMessage,
+    PreToolUse,
+    PostToolUse,
+    OnSessionCreate,
+    OnSessionClose,
 }
 
-/// 钩子执行结果 — 控制流走向
 pub enum HookResult<T> {
-    Continue,            // 正常继续
-    Modified(T),         // 替换输入为新值
-    Block(String),       // 阻止继续，返回消息给用户
+    Continue,
+    Modified(T),
+    Block(String),
 }
 
-/// 钩子上下文（传递给 handler 的只读引用）
-pub struct HookContext<'a> {
-    pub session: &'a Session,
-    pub user: &'a str,
-    pub mode: &'a ConversationMode,
-    pub metadata: HashMap<String, Value>,
-}
-
-/// PreMessage 事件负载
-pub struct PreMessagePayload {
-    pub message: ChannelMessage,
-    pub extra_context: Vec<ChatMessage>,  // handler 可注入额外上下文
-}
-
-/// PreToolUse 事件负载
-pub struct PreToolUsePayload {
-    pub tool_name: String,
-    pub tool_input: ToolInput,
-}
-
-/// PostToolUse 事件负载
-pub struct PostToolUsePayload {
-    pub tool_name: String,
-    pub tool_input: ToolInput,
-    pub tool_output: ToolOutput,
-}
-```
-
-#### HookHandler Trait
-
-```rust
-/// Rust 钩子 trait — 编译时类型安全
 #[async_trait]
 pub trait HookHandler: Send + Sync {
     fn name(&self) -> &str;
     fn event(&self) -> HookEvent;
-    fn priority(&self) -> i32 { 0 }  // 数值越小越先执行
-
-    async fn on_pre_message(
-        &self, _ctx: &HookContext<'_>, payload: PreMessagePayload,
-    ) -> Result<HookResult<PreMessagePayload>, AppError> {
-        Ok(HookResult::Continue)
-    }
-
-    async fn on_post_message(
-        &self, _ctx: &HookContext<'_>, message: &ChannelMessage, response: &AgentResponse,
-    ) -> Result<(), AppError> {
-        Ok(())
-    }
-
-    async fn on_pre_tool_use(
-        &self, _ctx: &HookContext<'_>, payload: PreToolUsePayload,
-    ) -> Result<HookResult<PreToolUsePayload>, AppError> {
-        Ok(HookResult::Continue)
-    }
-
-    async fn on_post_tool_use(
-        &self, _ctx: &HookContext<'_>, payload: PostToolUsePayload,
-    ) -> Result<HookResult<PostToolUsePayload>, AppError> {
-        Ok(HookResult::Continue)
-    }
+    fn priority(&self) -> i32 { 0 }
+    async fn on_pre_message(&self, _ctx: &HookContext<'_>, payload: PreMessagePayload)
+        -> Result<HookResult<PreMessagePayload>, AppError> { Ok(HookResult::Continue) }
+    async fn on_post_message(&self, _ctx: &HookContext<'_>, message: &ChannelMessage, response: &AgentResponse)
+        -> Result<(), AppError> { Ok(()) }
+    async fn on_pre_tool_use(&self, _ctx: &HookContext<'_>, payload: PreToolUsePayload)
+        -> Result<HookResult<PreToolUsePayload>, AppError> { Ok(HookResult::Continue) }
+    async fn on_post_tool_use(&self, _ctx: &HookContext<'_>, payload: PostToolUsePayload)
+        -> Result<HookResult<PostToolUsePayload>, AppError> { Ok(HookResult::Continue) }
 }
 ```
 
-#### CommandHook — Shell 命令钩子（配置驱动）
+**Shell 命令钩子**（Claude Code 风格）：通过 `settings.json` 配置，无需编译。
 
 ```rust
-/// 命令钩子 — 执行 shell 命令（Claude Code 风格）
 pub struct CommandHook {
     pub name: String,
     pub event: HookEvent,
-    pub matcher: Option<String>,  // 工具名匹配（仅 PreToolUse/PostToolUse）
-    pub command: String,          // shell 命令模板，支持 ${tool_name} ${tool_input} 变量
-    pub timeout_ms: u64,          // 默认 10_000
+    pub matcher: Option<String>,  // 工具名匹配（仅 ToolUse 事件）
+    pub command: String,          // 支持 ${tool_name} ${tool_input} 变量
+    pub timeout_ms: u64,
     pub priority: i32,
 }
 ```
-
-`config/settings.json` 配置：
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
-      {
-        "name": "audit-shell",
-        "matcher": "shell",
-        "command": "echo '${tool_name}: ${tool_input}' >> ~/MindClaw/data/audit.log",
-        "timeout_ms": 5000
-      }
+      { "name": "audit-shell", "matcher": "shell",
+        "command": "echo '${tool_name}: ${tool_input}' >> ~/MindClaw/data/audit.log" }
     ],
     "PostMessage": [
-      {
-        "name": "notify-mobile",
-        "command": "curl -s https://api.telegram.org/bot${TG_TOKEN}/sendMessage ...",
-        "timeout_ms": 10000
-      }
+      { "name": "notify-mobile",
+        "command": "curl -s https://api.telegram.org/bot${TG_TOKEN}/sendMessage ..." }
     ]
   }
 }
 ```
 
-#### HookRegistry
+`HookRegistry` 按 `priority` 排序执行所有 handler，遇到 `Block` 立即返回阻止后续流程。
 
-```rust
-/// 钩子注册表
-pub struct HookRegistry {
-    handlers: HashMap<HookEvent, Vec<Arc<dyn HookHandler>>>,
-}
+#### Agent Skills — 技能系统
 
-impl HookRegistry {
-    pub fn new() -> Self { ... }
-    pub fn register(&mut self, handler: Arc<dyn HookHandler>) { ... }
-
-    /// 从 settings.json 加载命令钩子
-    pub fn load_command_hooks(&mut self, config: &Value) -> Result<(), AppError> { ... }
-
-    /// 按 priority 排序执行，遇到 Block 立即返回
-    pub async fn run_pre_message(
-        &self, ctx: &HookContext<'_>, payload: PreMessagePayload,
-    ) -> Result<HookResult<PreMessagePayload>, AppError> {
-        let mut current = payload;
-        for handler in self.sorted_handlers(&HookEvent::PreMessage) {
-            match handler.on_pre_message(ctx, current).await? {
-                HookResult::Continue => {}
-                HookResult::Modified(new) => { current = new; }
-                HookResult::Block(msg) => return Ok(HookResult::Block(msg)),
-            }
-        }
-        Ok(HookResult::Modified(current))
-    }
-    // run_pre_tool_use, run_post_tool_use, run_post_message 同理
-}
-```
-
-#### AgentLoop 集成
-
-`AgentLoop` 新增字段 `hooks: Arc<HookRegistry>`，`process_message()` 修改为：
-
-```rust
-async fn process_message(&self, message: ChannelMessage, reply_to: &ChannelSource)
-    -> Result<AgentResponse, AppError>
-{
-    let canonical_user = self.identity_resolver.resolve(&message.sender, &message.source);
-    let session = self.session_mgr.get_or_create(&canonical_user, &message.mode).await?;
-
-    // Agent Command 拦截
-    if let Some(cmd_name) = parse_agent_command(&message.content) { /* ... */ }
-
-    // ★ PreMessage Hook
-    let hook_ctx = HookContext { session: &session, user: &canonical_user, mode: &message.mode, .. };
-    let pre_result = self.hooks.run_pre_message(&hook_ctx, PreMessagePayload {
-        message: message.clone(),
-        extra_context: vec![],
-    }).await?;
-    let (message, extra_context) = match pre_result {
-        HookResult::Block(msg) => { /* 发送 msg 给用户，返回 */ }
-        HookResult::Modified(p) => (p.message, p.extra_context),
-        HookResult::Continue => (message, vec![]),
-    };
-
-    // Context + Provider + Tool Loop（tool loop 内部调用 PreToolUse/PostToolUse）
-    let context = self.context_pipeline.build(&message, &session, ...).await?;
-    let final_response = self.call_with_tools(model, context, &session, reply_to).await?;
-
-    // Session append
-    self.session_mgr.append(&session.id, &message, &final_response).await?;
-
-    // ★ PostMessage Hook
-    self.hooks.run_post_message(&hook_ctx, &message, &final_response).await?;
-
-    // SubAgent dispatch
-    self.post_process(&message, &final_response, &session).await?;
-
-    Ok(final_response)
-}
-```
-
-### 6.20 SubAgent 任务注册表
-
-将硬编码的 `SubAgentTask` enum 替换为 trait + 注册表模式。内置任务在启动时注册，Skills 可动态添加新任务类型。
-
-#### SubAgentTask Trait
-
-```rust
-// src-tauri/src/agent/sub_agent.rs
-
-/// SubAgent 任务 trait
-#[async_trait]
-pub trait SubAgentTask: Send + Sync {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn model_tier(&self) -> ModelTier;
-
-    async fn execute(
-        &self,
-        ctx: SubAgentContext,
-        input: Value,
-    ) -> Result<SubAgentOutput, AppError>;
-}
-
-/// 执行上下文（注入共享依赖）
-pub struct SubAgentContext {
-    pub provider: Arc<dyn Provider>,
-    pub db: Arc<DbState>,
-    pub memory: Arc<MemoryManager>,
-    pub services: Arc<ServiceContainer>,
-}
-
-/// 任务输出
-pub struct SubAgentOutput {
-    pub success: bool,
-    pub summary: String,
-    pub artifacts: Vec<Artifact>,
-}
-
-pub struct Artifact {
-    pub kind: String,    // "knowledge_draft" | "summary" | "observation"
-    pub content: String,
-    pub metadata: Value,
-}
-```
-
-#### SubAgentRegistry
-
-```rust
-pub struct SubAgentRegistry {
-    tasks: HashMap<String, Arc<dyn SubAgentTask>>,
-}
-
-impl SubAgentRegistry {
-    pub fn new() -> Self { ... }
-
-    pub fn register(&mut self, task: Arc<dyn SubAgentTask>) {
-        self.tasks.insert(task.name().to_string(), task);
-    }
-
-    pub fn get(&self, name: &str) -> Option<Arc<dyn SubAgentTask>> {
-        self.tasks.get(name).cloned()
-    }
-
-    /// 注册内置任务
-    pub fn with_builtins() -> Self {
-        let mut r = Self::new();
-        r.register(Arc::new(KnowledgeDistillTask));
-        r.register(Arc::new(SessionSummarizeTask));
-        r.register(Arc::new(ObservationAnalyzeTask));
-        r.register(Arc::new(DailySummaryTask));
-        r
-    }
-}
-```
-
-#### 任务派发改造
-
-```rust
-/// 派发消息（替代原来的 enum 变体）
-pub struct SubAgentDispatch {
-    pub task_name: String,
-    pub input: Value,
-}
-
-/// 改造后的 Executor — 通过 registry 分派
-pub struct SubAgentExecutor {
-    ctx: SubAgentContext,
-    registry: Arc<SubAgentRegistry>,
-    concurrency_limit: Arc<Semaphore>,  // 默认 3
-}
-
-impl SubAgentExecutor {
-    pub async fn run(self, mut rx: mpsc::Receiver<SubAgentDispatch>) {
-        while let Some(dispatch) = rx.recv().await {
-            if let Some(task) = self.registry.get(&dispatch.task_name) {
-                let ctx = self.ctx.clone();
-                let permit = self.concurrency_limit.clone();
-                tokio::spawn(async move {
-                    let _permit = permit.acquire().await.unwrap();
-                    if let Err(e) = task.execute(ctx, dispatch.input).await {
-                        tracing::error!("SubAgent task {} failed: {}", task.name(), e);
-                    }
-                });
-            } else {
-                tracing::warn!("Unknown sub-agent task: {}", dispatch.task_name);
-            }
-        }
-    }
-}
-```
-
-原来的 `post_process()` 从构造 enum 变体改为构造 `SubAgentDispatch`：
-
-```rust
-// 原来：
-self.sub_agent_tx.send(SubAgentTask::KnowledgeDistill { session_id, messages }).await;
-// 改为：
-self.sub_agent_tx.send(SubAgentDispatch {
-    task_name: "knowledge_distill".into(),
-    input: json!({ "session_id": session.id, "message_count": 10 }),
-}).await;
-```
-
-#### 模型选择
-
-每个任务自行声明 `model_tier()`，不再需要外部映射表：
-
-| 内置任务 | model_tier() | 原因 |
-|---------|-------------|------|
-| `knowledge_distill` | Sonnet | 需深度理解和提炼 |
-| `session_summarize` | Haiku | 摘要生成，低成本 |
-| `observation_analyze` | Sonnet | 跨域关联和模式识别 |
-| `daily_summary` | Sonnet | 综合当日全部信息 |
-
-### 6.21 可插拔上下文管线（Context Pipeline）
-
-将硬编码的 5 步 `ContextBuilder.build()` 替换为有序的 `ContextSource` 管线。每个源有优先级（决定注入顺序）和 token 预算分配。
-
-#### ContextSource Trait
-
-```rust
-// src-tauri/src/agent/context_pipeline.rs
-
-/// 上下文片段
-pub struct ContextFragment {
-    pub role: MessageRole,     // System | User
-    pub content: String,
-    pub token_estimate: usize, // 预估 token 数
-    pub label: String,         // 调试标签
-}
-
-/// 上下文源 trait
-#[async_trait]
-pub trait ContextSource: Send + Sync {
-    fn name(&self) -> &str;
-    fn priority(&self) -> i32;        // 数值越小越先注入
-    fn enabled(&self) -> bool { true }
-
-    async fn inject(
-        &self,
-        ctx: &ContextBuildContext<'_>,
-        budget: usize,
-    ) -> Result<Vec<ContextFragment>, AppError>;
-}
-
-/// 构建时的只读环境
-pub struct ContextBuildContext<'a> {
-    pub message: &'a ChannelMessage,
-    pub session: &'a Session,
-    pub memory: &'a MemoryManager,
-    pub services: &'a ServiceContainer,
-    pub db: &'a DbState,
-}
-```
-
-#### ContextPipeline
-
-```rust
-pub struct ContextPipeline {
-    sources: Vec<Arc<dyn ContextSource>>,
-    total_budget: usize,
-    budget_allocations: HashMap<String, usize>,  // source_name → 固定预算
-}
-
-impl ContextPipeline {
-    /// 注册源（按 priority 自动排序）
-    pub fn register(&mut self, source: Arc<dyn ContextSource>) {
-        self.sources.push(source);
-        self.sources.sort_by_key(|s| s.priority());
-    }
-
-    /// 构建完整上下文（替代原 ContextBuilder.build()）
-    pub async fn build(
-        &self,
-        message: &ChannelMessage,
-        session: &Session,
-        memory: &MemoryManager,
-        services: &ServiceContainer,
-        db: &DbState,
-    ) -> Result<Vec<ChatMessage>, AppError> {
-        let ctx = ContextBuildContext { message, session, memory, services, db };
-        let mut messages = Vec::new();
-        let mut remaining = self.total_budget;
-
-        for source in &self.sources {
-            if !source.enabled() { continue; }
-            let budget = self.budget_allocations
-                .get(source.name())
-                .copied()
-                .unwrap_or(remaining / 2);
-
-            let fragments = source.inject(&ctx, budget).await?;
-            let used: usize = fragments.iter().map(|f| f.token_estimate).sum();
-
-            for frag in fragments {
-                messages.push(frag.into_chat_message());
-            }
-            remaining = remaining.saturating_sub(used);
-        }
-        Ok(messages)
-    }
-
-    /// 内置管线（对应原 ContextBuilder 的 5 步）
-    pub fn with_builtins(
-        memory: Arc<MemoryManager>,
-        services: Arc<ServiceContainer>,
-        db: Arc<DbState>,
-    ) -> Self {
-        let mut p = Self::new(80_000);
-        p.register(Arc::new(SystemPromptSource::new(db)));        // priority: 0
-        p.register(Arc::new(RAGKnowledgeSource::new(services)));  // priority: 10
-        p.register(Arc::new(MemoryRecallSource::new(memory)));    // priority: 20
-        p.register(Arc::new(ConversationHistorySource));           // priority: 30
-        p.register(Arc::new(UserMessageSource));                   // priority: 100
-        p
-    }
-}
-```
-
-#### 内置源映射
-
-| Source | Priority | 默认预算 | 对应原步骤 |
-|--------|----------|---------|-----------|
-| `SystemPromptSource` | 0 | ~2K | [1] 人格 + 模式 + 角色 + 工具描述 |
-| `RAGKnowledgeSource` | 10 | ~10K | [2] search_with_rerank, top 5 L1 |
-| `MemoryRecallSource` | 20 | ~2K | [3] unsurfaced(3) 记忆 |
-| `ConversationHistorySource` | 30 | ~50K | [4] 近 5 轮 + 早期摘要 |
-| `UserMessageSource` | 100 | ~1K | [5] 用户消息（始终最后） |
-
-#### settings.json 配置
-
-```json
-{
-  "context_pipeline": {
-    "total_budget": 80000,
-    "allocations": {
-      "system_prompt": 2000,
-      "rag_knowledge": 10000,
-      "memory_recall": 2000,
-      "conversation_history": 50000,
-      "user_message": 1000
-    },
-    "disabled_sources": []
-  }
-}
-```
-
-Skills 注册的自定义 ContextSource 会按 priority 自动插入管线。例如一个 "weekly_context" source（priority: 15）会在 RAG 知识之后、Memory 之前注入本周关键事项。
-
-### 6.22 Agent Skills — 技能系统
-
-Skill 是核心扩展机制，一个技能包可以提供 Tools、ContextSources、HookHandlers、SubAgentTasks、Operations 的任意组合。所有 4 个可插拔子系统（6.19-6.21）通过 Skills 统一扩展。
+Skill 是核心扩展机制。一个技能包可提供 Tools、ContextSources、HookHandlers、SubAgentTasks、Operations 的任意组合，通过 SkillRegistry 统一分发到各注册表。
 
 ```mermaid
 graph TB
@@ -2620,86 +1039,25 @@ graph TB
     SR -.-> PP
 ```
 
-#### Skill Trait
-
 ```rust
 // src-tauri/src/agent/skills.rs
 
 pub trait Skill: Send + Sync {
     fn manifest(&self) -> &SkillManifest;
-
-    /// 提供的工具（注册到 ToolRegistry）
     fn tools(&self) -> Vec<Arc<dyn Tool>> { vec![] }
-
-    /// 提供的上下文源（注册到 ContextPipeline）
     fn context_sources(&self) -> Vec<Arc<dyn ContextSource>> { vec![] }
-
-    /// 提供的钩子（注册到 HookRegistry）
     fn hooks(&self) -> Vec<Arc<dyn HookHandler>> { vec![] }
-
-    /// 提供的子任务（注册到 SubAgentRegistry）
     fn sub_agent_tasks(&self) -> Vec<Arc<dyn SubAgentTask>> { vec![] }
-
-    /// 提供的 Operations（注册到 OperationRegistry）
     fn operations(&self) -> Vec<OperationDef> { vec![] }
-
-    /// 初始化（可访问共享状态）
     fn init(&self, _ctx: &SkillInitContext) -> Result<(), AppError> { Ok(()) }
 }
 
-#[derive(Debug, Deserialize)]
 pub struct SkillManifest {
     pub name: String,
     pub version: String,
     pub description: String,
 }
-
-pub struct SkillInitContext {
-    pub db: Arc<DbState>,
-    pub memory: Arc<MemoryManager>,
-    pub services: Arc<ServiceContainer>,
-    pub config: Value,  // skill-specific config from settings.json
-}
 ```
-
-#### SkillRegistry
-
-```rust
-pub struct SkillRegistry {
-    skills: HashMap<String, Arc<dyn Skill>>,
-}
-
-impl SkillRegistry {
-    pub fn new() -> Self { ... }
-
-    pub fn register(&mut self, skill: Arc<dyn Skill>) {
-        self.skills.insert(skill.manifest().name.clone(), skill);
-    }
-
-    /// 将所有技能的提供物分发到各注册表
-    pub fn distribute(
-        &self,
-        tools: &mut ToolRegistry,
-        pipeline: &mut ContextPipeline,
-        hooks: &mut HookRegistry,
-        sub_agents: &mut SubAgentRegistry,
-        operations: &mut OperationRegistry,
-        init_ctx: &SkillInitContext,
-    ) -> Result<(), AppError> {
-        for skill in self.skills.values() {
-            skill.init(init_ctx)?;
-            for tool in skill.tools()           { tools.register(tool); }
-            for source in skill.context_sources() { pipeline.register(source); }
-            for hook in skill.hooks()           { hooks.register(hook); }
-            for task in skill.sub_agent_tasks() { sub_agents.register(task); }
-            for op in skill.operations()        { operations.register_def(op); }
-        }
-        Ok(())
-    }
-}
-```
-
-#### skill.toml 清单
 
 ```toml
 # config/skills/weekly-report/skill.toml
@@ -2716,95 +1074,63 @@ sub_agent_tasks = ["weekly_report_generate"]
 operations = ["weekly_report_generate", "weekly_report_list"]
 ```
 
-#### Built-in Skill 示例
-
-```rust
-pub struct WeeklyReportSkill;
-
-impl Skill for WeeklyReportSkill {
-    fn manifest(&self) -> &SkillManifest {
-        &SkillManifest {
-            name: "weekly-report".into(),
-            version: "0.1.0".into(),
-            description: "Generate weekly reports".into(),
-        }
-    }
-
-    fn context_sources(&self) -> Vec<Arc<dyn ContextSource>> {
-        vec![Arc::new(WeeklyContextSource)]  // priority: 15，注入本周关键事项
-    }
-
-    fn sub_agent_tasks(&self) -> Vec<Arc<dyn SubAgentTask>> {
-        vec![Arc::new(WeeklyReportGenerateTask)]
-    }
-
-    fn operations(&self) -> Vec<OperationDef> {
-        vec![
-            OperationDef::new("weekly_report_generate", "task", "生成周报",
-                json!({"properties": {"week": {"type": "string"}}})),
-            OperationDef::new("weekly_report_list", "task", "列出历史周报",
-                json!({"properties": {"limit": {"type": "integer"}}})),
-        ]
-    }
-}
-```
-
-#### 改造后的 init_agent()
-
-```rust
-pub fn init_agent(
-    db: Arc<DbState>, provider: Arc<dyn Provider>,
-    memory: Arc<MemoryManager>, services: Arc<ServiceContainer>,
-    agent_commands: Arc<AgentCommandRegistry>, bus: Arc<MessageBus>,
-) -> (AgentLoop, CancellationToken) {
-    // 1. 核心注册表（内置默认值）
-    let mut tools = ToolRegistry::default_tools(..);
-    let mut pipeline = ContextPipeline::with_builtins(..);
-    let mut hooks = HookRegistry::new();
-    let mut sub_agents = SubAgentRegistry::with_builtins();
-    let mut operations = OperationRegistry::default();
-
-    // 2. 加载 settings.json 命令钩子
-    hooks.load_command_hooks(&settings);
-
-    // 3. 加载技能 → 分发到各注册表
-    let mut skills = SkillRegistry::new();
-    skills.register(Arc::new(WeeklyReportSkill));  // built-in
-    // skills.load_from_dir(&skills_dir);           // Phase 2: 外部技能
-
-    let init_ctx = SkillInitContext { db: db.clone(), memory: memory.clone(), .. };
-    skills.distribute(
-        &mut tools, &mut pipeline, &mut hooks,
-        &mut sub_agents, &mut operations, &init_ctx,
-    )?;
-
-    // 4. 组装 AgentLoop
-    let (sub_tx, sub_rx) = mpsc::channel(32);
-    let executor = SubAgentExecutor::new(ctx, Arc::new(sub_agents));
-    tokio::spawn(executor.run(sub_rx));
-
-    let cancel = CancellationToken::new();
-    let loop_ = AgentLoop {
-        bus, session_mgr: .., context_pipeline: Arc::new(pipeline),
-        hooks: Arc::new(hooks), provider, tools: Arc::new(tools),
-        memory, agent_commands, sub_agent_tx: sub_tx,
-        identity_resolver: .., cancel_token: cancel.clone(),
-    };
-    (loop_, cancel)
-}
-```
-
 #### 扩展性分阶段实现
 
 | 组件 | MVP | Phase 1 后期 | Phase 2 |
 |------|-----|-------------|---------|
-| HookRegistry（Rust handlers） | ✓ | | |
-| HookRegistry（command hooks） | | ✓ | |
-| ContextPipeline（内置源） | ✓ | | |
-| ContextPipeline（自定义源） | | ✓ | |
-| SubAgentRegistry（内置任务） | ✓ | | |
-| SubAgentRegistry（自定义任务） | | ✓ | |
-| SkillRegistry（built-in skills） | | ✓ | |
-| SkillRegistry（外部加载/WASM） | | | ✓ |
+| HookRegistry（Rust handlers） | Y | | |
+| HookRegistry（command hooks） | | Y | |
+| ContextPipeline（内置源） | Y | | |
+| ContextPipeline（自定义源） | | Y | |
+| SubAgentRegistry（内置任务） | Y | | |
+| SubAgentRegistry（自定义任务） | | Y | |
+| SkillRegistry（built-in skills） | | Y | |
+| SkillRegistry（外部加载/WASM） | | | Y |
 
----
+#### Gateway Layer — HTTP/WebSocket 服务
+
+Gateway 为移动端 PWA 提供静态文件和 API，为 Webhook 通道提供接入点。通过 Bus 解耦，不直接引用 Agent。
+
+| 端点 | 方法 | 说明 | Phase |
+|------|------|------|-------|
+| `/api/chat` | POST | 发送消息，返回 Agent 响应 | Phase 1 后期 |
+| `/api/daily/:date` | GET | 获取日记内容 | Phase 2 |
+| `/api/knowledge` | GET | 知识库搜索 | Phase 2 |
+| `/api/tasks` | GET | 任务列表 | Phase 2 |
+| `/ws/chat` | WS | WebSocket 实时对话 | Phase 2 |
+| `/webhook/telegram` | POST | Telegram Bot Webhook | Phase 1 后期 |
+| `/webhook/feishu` | POST | 飞书 Bot Webhook | Phase 2 |
+| `/` | GET | PWA 静态文件服务 | Phase 2 |
+
+**认证**：本地 WiFi 用 Bearer Token（OS Keychain 存储），Tailscale 穿透用双重保护，Webhook 用平台签名验证。
+
+#### Cron — 定时任务调度
+
+| 任务 | 默认频率 | 说明 | Phase |
+|------|---------|------|-------|
+| `daily_summary` | 每日 22:00 | 生成当日回顾，写入日记 | MVP |
+| `resource_process` | 每 5 分钟 | 处理 pending 资源（解析 + 结晶） | MVP |
+| `history_prune` | 每日 03:00 | 压缩旧对话历史，超 90 天转冷归档 | Phase 2 |
+| `knowledge_review` | 每周日 10:00 | 回顾知识库，发现新关联 | Phase 2 |
+| `index_rebuild` | 每日 04:00 | 增量重建 Markdown → SQLite 索引 | MVP |
+| `memory_surface` | 每日 09:00 | 检查未浮出记忆的浮出时机 | Phase 2 |
+| `heartbeat_check` | 每 30 秒 | 系统健康检测 | MVP |
+
+基于 `tokio-cron-scheduler` 精确调度，避免 loop+sleep 的时钟漂移。
+
+#### Heartbeat — 健康检测
+
+```rust
+pub struct SystemHealth {
+    pub status: HealthStatus,          // healthy | degraded | down
+    pub db_connected: bool,
+    pub api_key_valid: bool,
+    pub vault_accessible: bool,
+    pub gateway_running: bool,
+    pub channels: Vec<ChannelHealth>,
+    pub last_check: DateTime<Utc>,
+    pub uptime_seconds: u64,
+}
+```
+
+通道断线时自动重连，指数退避（2s → 4s → 8s → ... → 60s）。前端通过 IPC 命令 `system_health` 查询，Settings 页面展示。

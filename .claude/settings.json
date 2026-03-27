@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "bun run check && bun run check-types",
+						"command": "bun run check && bun run check-types && cargo fmt && cargo clippy -- -D warnings",
 						"timeout": 30
 					}
 				]

@@ -17,9 +17,7 @@
 			"!**/src-tauri",
 			"!**/.expo",
 			"!**/.wrangler",
-			"!apps/web/src/components/ui/*",
-			"!apps/web/src/components/data-grid/*",
-			"!apps/web/src/components/data-table/*"
+			"!**/src/components/ui/*"
 		]
 	},
 	"formatter": {

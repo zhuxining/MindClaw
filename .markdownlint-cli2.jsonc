@@ -14,8 +14,16 @@
 		// Allow same text in multiple headings (e.g., "Installation" in different sections)
 		"MD025": false,
 		// Allow using literal '#' in headings instead of setext style
+		"MD036": false,
+		"MD040": false,
 		"MD060": false
 	},
 	"globs": ["**/*.md"],
-	"ignores": ["node_modules", "src-tauri/target", "dist", ".agents"]
+	"ignores": [
+		"node_modules",
+		"src-tauri/target",
+		"dist",
+		".agents",
+		".claude/skills"
+	]
 }

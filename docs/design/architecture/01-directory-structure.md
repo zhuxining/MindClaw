@@ -1,12 +1,12 @@
 # MindClaw 技术架构设计
 
-> 拆分自 architecture.md，完整索引见 [README.md](./README.md)
+> 完整架构文档索引见 [README.md](./README.md)
 
 ## 二、目录结构
 
 ### 代码目录
 
-```
+```text
 src-tauri/
   src/
     main.rs                     # 入口，委托给 lib::run()
@@ -152,11 +152,11 @@ src/
   styles/
     global.css
     variables.css
-```
+```text
 
 ### 用户数据目录（运行时）
 
-```
+```text
 ~/MindClaw/
   vault/                        # Markdown 内容（Obsidian 兼容）
   │ ├── daily/                  # YYYY-MM-DD.md
@@ -176,7 +176,7 @@ src/
   │     └── 2026-01.jsonl       # 按月归档对话
   config/
     └── settings.json           # 非敏感设置
-```
+```text
 
 整个 `~/MindClaw/` 目录 zip 打包即完整备份。
 

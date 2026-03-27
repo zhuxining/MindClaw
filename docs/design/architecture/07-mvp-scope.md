@@ -1,6 +1,6 @@
-# MindClaw 技术架构设计
+# MindClaw 技术架构设计 — MVP 范围
 
-> 拆分自 architecture.md，完整索引见 [README.md](./README.md)
+> 完整架构文档索引见 [README.md](./README.md)
 
 ## 八、MVP 范围
 
@@ -17,7 +17,7 @@
 | Markdown 读写 | storage::markdown | 日记和知识笔记 |
 | Provider 层 | providers::claude | Claude API Haiku/Sonnet 调用 |
 | 基础工具 | tools::search, file_ops | 知识库搜索 + Markdown 文件操作 |
-| Cron 基础任务 | cron | index_rebuild, daily_summary |
+| Cron 基础任务 | cron | index_rebuild, daily_summary, resource_process |
 | Heartbeat | heartbeat | 系统健康检测（DB、Vault、API Key） |
 | 统一错误处理 | error.rs | AppError → 前端展示 |
 | 结构化日志 | tracing crate | 开发调试 |

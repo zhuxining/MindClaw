@@ -1,16 +1,16 @@
 # MindClaw 技术架构设计
 
-> 拆分自 architecture.md，完整索引见 [README.md](./README.md)
+> 完整架构文档索引见 [README.md](./README.md)
 
 ## 三、三层命令架构
 
 系统提供三种命令入口，覆盖不同使用场景，底层共享 Services 层：
 
-```
+```text
 React Frontend ── invoke() ──► Web Commands ──► Services ──► Storage
 对话中 /xxx ─────────────────► Agent Commands ─► Agent 生命周期控制
 终端 mindclaw ─────────────► CLI Commands ──► Services ──► Storage
-```
+```text
 
 ### 跨层命令矩阵
 
@@ -21,7 +21,16 @@ React Frontend ── invoke() ──► Web Commands ──► Services ──�
 | 数量 | ~25 个 | 4 个 | ~6 个 |
 | 调用链 | Command → Services | AgentLoop 拦截 → Agent 自身 | CliRuntime → Services |
 | 需要 Tauri | 是 | 是（运行在 AgentLoop 内） | 否（独立二进制） |
-| 需要 LLM | 否 | 否（纯控制） | 仅 chat 子命令 |
+| 需要 LLM | 否 | 否（纯控制，不调用 Provider） | 仅 chat 子命令 |
+
+**Agent Commands "不触发 LLM 调用"说明**：
+
+Agent Commands 在 `AgentLoop.process_message()` 中拦截，位于 Session 加载之后、Context 组装之前。虽然消息已经进入 AgentLoop，但拦截后会**直接返回确定性结果**，不会继续执行 Context 组装和 Provider 调用流程。因此"不触发 LLM 调用"指的是：
+
+- 不调用 `Provider.chat()` 或 `Provider.chat_stream()`
+- 不消耗 token
+- 不依赖 LLM 理解用户意图
+- 直接匹配命令名并执行预定义逻辑
 
 ### 3.1 Web Commands — Tauri IPC（前端调用）
 
@@ -47,9 +56,9 @@ React Frontend ── invoke() ──► Web Commands ──► Services ──�
 
 流式响应通过 Tauri Event 推送：
 
-```
+```text
 Event: "conversation_chunk" → { session_id, content, done }
-```
+```text
 
 前端通过 `listen("conversation_chunk", callback)` 接收。
 
@@ -113,7 +122,7 @@ Event: "conversation_chunk" → { session_id, content, done }
 // lib.rs
 .manage(DbState(Mutex::new(connection)))
 .manage(AppConfig::load()?)
-```
+```text
 
 命令通过 `State<'_, DbState>` 参数获取。
 
@@ -160,7 +169,7 @@ pub trait AgentCommand: Send + Sync {
     fn description(&self) -> &str;
     async fn execute(&self, ctx: AgentCommandContext) -> Result<AgentCommandResult, AppError>;
 }
-```
+```text
 
 ```rust
 // src-tauri/src/agent_commands/mod.rs
@@ -194,7 +203,7 @@ pub fn parse_agent_command(input: &str) -> Option<&str> {
         None
     }
 }
-```
+```text
 
 #### 拦截点
 
@@ -224,7 +233,7 @@ if let Some(cmd_name) = parse_agent_command(&message.content) {
 // 2. Context（正常对话流程继续）
 let context = self.context_builder.build(&message, &session).await?;
 // ...
-```
+```text
 
 #### 指令实现示例
 
@@ -252,7 +261,7 @@ impl AgentCommand for NewCommand {
         })
     }
 }
-```
+```text
 
 ### 3.3 CLI Commands — 终端命令行
 
@@ -310,7 +319,7 @@ pub enum TaskAction {
     List { #[arg(long)] status: Option<String> },
     Complete { id: String },
 }
-```
+```text
 
 #### 最小运行时
 
@@ -339,7 +348,7 @@ impl CliRuntime {
         Ok(self)
     }
 }
-```
+```text
 
 ```rust
 // src-tauri/src/bin/cli.rs
@@ -376,7 +385,7 @@ fn main() {
         Ok::<(), AppError>(())
     }).expect("CLI error");
 }
-```
+```text
 
 #### Cargo.toml 变更
 
@@ -387,7 +396,7 @@ path = "src/bin/cli.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-```
+```text
 
 #### 命令清单
 

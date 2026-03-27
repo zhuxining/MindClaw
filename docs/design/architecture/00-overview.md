@@ -1,6 +1,6 @@
-# MindClaw 技术架构设计
+# MindClaw 技术架构设计 — 系统总览
 
-> 拆分自 architecture.md，完整索引见 [README.md](./README.md)
+> 完整架构文档索引见 [README.md](./README.md)
 
 ## 一、系统总览
 
@@ -10,7 +10,7 @@
 |---|------|------|
 | 桌面框架 | Tauri | 2.x |
 | 前端框架 | React + TypeScript | 19.x / 6.x |
-| UI 组件 | shadcn/ui + Tailwind CSS + Lucide icons | 4.x / 4.x |
+| UI 组件 | shadcn/ui (基于 **Base UI**) + Tailwind CSS + Lucide icons | 4.x / 4.x |
 | 编辑器 | Milkdown (Crepe) | 7.x |
 | 状态管理 | Zustand | 5.x |
 | 路由 | TanStack Router | 1.x |
@@ -23,13 +23,13 @@
 
 ### 架构分层
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                React Frontend (UI)                      │
 │  Pages · Components · Hooks · Zustand Store             │
 ├──────────────┬───────────────┬──────────────────────────┤
 │ Web Commands │ Agent Cmds    │  CLI Binary              │
-│ invoke()     │ /new /stop    │  mindclaw <sub>       │
+│ invoke()     │ /new /stop    │  mindclaw <subcommand>   │
 │ → Services   │ /restart      │  clap → CliRuntime       │
 │ (~28 个 IPC) │ /status       │  → Services              │
 ├──────────────┴───────────────┴──────────────────────────┤
@@ -56,7 +56,7 @@
 ├──────────────────┴──────────────────────────────────────┤
 │           Infrastructure Layer (基础设施)               │
 │  Cron (定时任务) · Heartbeat (健康检测) · Logging       │
-├──────────────────┬──────────────┬───────────────────────┤
+└──────────────────┬──────────────┬───────────────────────┘
 │   SQLite         │  Markdown FS │  OS Keychain          │
 │  结构+索引+记忆   │  内容真相     │  API Key              │
 └──────────────────┴──────────────┴───────────────────────┘
@@ -67,7 +67,7 @@
                    → Memory → Storage
                    → Provider (LLM)
   记忆是 Agent 的 (Memory/SQLite)，知识是共同的 (Knowledge/Markdown)
-```
+```text
 
 ### 桌面端即服务器
 

@@ -36,11 +36,11 @@ MindClaw 是一个与人类共同成长的 AI 伙伴系统。它不是助手，�
 
 **知识内化的升华路径**（MindClaw 要做的正是后半段）：
 
-```
+```text
 经历 → 记忆 → 反思 → 抽象 → 知识 → 再应用 → 迭代
               ↑
         OpenClaw 止步于此
-```
+```text
 
 ### 知识的可结晶性差异
 
@@ -56,7 +56,7 @@ graph LR
     H[个人感受] --> F
     E --> I[Agent 可共同建构知识库]
     F --> J[主要是人类内化<br>Agent 作为见证者与镜子]
-```
+```text
 
 > [!important] 关键推论
 > MindClaw 的知识共建天然向职业与智识域倾斜——这不是设计选择，是知识本质决定的结果。家庭与情感是背景与底色，帮助 Agent 理解这个人是谁。
@@ -85,7 +85,7 @@ graph TD
     CS -->|沉淀| AK
     AK -->|反向指导| HN
     PZ -.->|人类选择性开放| CS
-```
+```text
 
 **三区的核心逻辑**：
 
@@ -112,7 +112,7 @@ flowchart TD
     CS -->|纠偏 · 反思 · 反向指导| CS
     CS -->|双方沉淀| KB[共有知识库]
     KB -->|调用参考| CS
-```
+```text
 
 **三个源头各有分工**：
 
@@ -153,7 +153,7 @@ graph TD
     Mobile <-->|Tailscale 远程穿透| Desktop
     Channel -->|Webhook 输入| Desktop
     Desktop -->|响应输出| Channel
-```
+```text
 
 **移动端同步策略：只同步链接与文本**
 
@@ -183,11 +183,11 @@ MVP 不需要开发独立移动 App——Telegram Bot 或 Feishu Bot 已支持�
 
 **核心原则：Markdown 是内容真相，SQLite 是查询索引**
 
-```
+```text
 Markdown（内容）──► SQLite（索引，可重建）
                 ──► sqlite-vss（语义索引，可重建）
                 ──► 本地文件系统（附件，按路径引用）
-```
+```text
 
 SQLite 和向量库都是 Markdown 的派生层，丢失可完整重建，Markdown 永远是权威。
 
@@ -210,7 +210,7 @@ graph TD
     MD -->|索引| S
     MD -->|嵌入| V
     MD -->|引用| F
-```
+```text
 
 #### SQLite 存什么
 
@@ -239,7 +239,7 @@ memories (id, key, content, category, importance, session_id, related_path, surf
 
 -- 资源（外部文件/URL，结晶为知识笔记）
 resources (id, uri, title, type, status, note_path, created, updated)
-```
+```text
 
 #### 对话历史：SQLite 热存 + JSONL 冷归档
 
@@ -256,7 +256,7 @@ resources (id, uri, title, type, status, note_path, created, updated)
 ```jsonl
 {"id":"msg_001","role":"user","content":"...","ts":"2026-01-15T10:23:00"}
 {"id":"msg_002","role":"assistant","content":"...","ts":"2026-01-15T10:23:05"}
-```
+```text
 
 > [!note] 树洞对话的特殊处理
 > 原始消息保留时间更短（用户可配置或手动清除），摘要只存 Agent 私有观察层，不生成可读摘要。
@@ -265,21 +265,21 @@ resources (id, uri, title, type, status, note_path, created, updated)
 
 #### 用户设置的三处存储
 
-```
+```text
 settings.json            系统 Keychain              SQLite
 ─────────────            ─────────────              ──────
 LLM 模型选择             API Key（加密）             角色模版
 主题 / 语言              （不存任何明文文件）         Agent 学习偏好
 同步配置                                             使用行为统计
 Vault 路径
-```
+```text
 
 > [!warning] API Key 安全
 > 必须存入 OS Keychain（macOS）或 Credential Manager（Windows），**绝对不能存在任何明文文件中**。
 
 #### 完整文件目录结构
 
-```
+```text
 ~/MindClaw/
 ├── vault/                    ← Markdown 内容（Obsidian 兼容）
 │   ├── daily/
@@ -291,7 +291,7 @@ Vault 路径
 │       └── 2026-01.jsonl     ← 冷归档对话（按月）
 ├── config/
 │   └── settings.json
-```
+```text
 
 整个目录 zip 打包即完整备份，数据完全可移植。
 
@@ -331,7 +331,7 @@ flowchart TD
     end
 
     L3 -->|反馈迭代| L1
-```
+```text
 
 | 层 | 本质 | 现有工具能做到吗 | MindClaw 的差异 |
 |---|------|---------------|-----------------|
@@ -382,7 +382,7 @@ sequenceDiagram
 
     H->>A: 确认有价值，想要沉淀
     A->>K: 升华为知识笔记（需人类确认）
-```
+```text
 
 ### 四个内容流
 
@@ -394,7 +394,7 @@ graph LR
     JF["📓 日记流<br>当日整合 · 反思"] -->|精华| KB4
     KB4["🗂 知识库<br>原则 · 框架 · 经验"] -->|指导| SF
     SF["📅 日程流<br>任务 · 提醒 · 习惯"] -->|新经验| JF
-```
+```text
 
 **日程流的核心设计原则：**
 
@@ -407,7 +407,7 @@ graph LR
 > [!important] 核心 UX 原则
 > 对话是万能入口。用户只需表达意图，Agent 理解并通过工具直接执行——创建任务、追加日记、生成知识笔记。无需独立的捕获管道。
 
-```
+```text
 用户在对话中表达任何意图
         ↓
   Agent 理解并直接执行
@@ -415,7 +415,7 @@ graph LR
   ├── "我觉得这个观点…" → 知识笔记
   ├── "今天感觉…"      → 日记
   └── "这个链接不错…"  → 资源解析
-```
+```text
 
 **信任阶梯：** 从"Agent 建议、人审核"逐步走向"Agent 执行、人只处理例外"——每一步跨越都需要 Agent 先展示出比用户自己做更可靠的证据。
 
@@ -433,7 +433,7 @@ graph TD
     P --> U["向上：父母赡养<br>健康管理 · 防骗防坑"]
     P --> S["自身：个人生存<br>搞钱 · 健康 · 生活质量"]
     P --> C["职业：工作成就<br>能力 · 收入 · 发展"]
-```
+```text
 
 30～50 岁的大多数人都活在这四个象限里。这种普遍性使模版成为有效的冷启动起点。
 
@@ -446,7 +446,7 @@ graph TD
 
 ### 冷启动流程
 
-```
+```text
 「你现在主要扮演哪些角色？」
   ☑ 职业人（工作 / 事业）
   ☑ 父母（子女教育）
@@ -455,7 +455,7 @@ graph TD
 
 「在这些角色里，你觉得自己最薄弱的是哪个？」
   → Agent 从薄弱角色开始，立刻提供有针对性的指导
-```
+```text
 
 > [!tip] 护城河逻辑
 > **用得越久，伙伴关系越深，纠偏越准。** 冷启动解决第一天的问题，知识积累解决第一年的问题。
@@ -495,7 +495,7 @@ graph TD
     SA -->|结果回流| CP
     AA -->|结果回流| CP
     WA -->|结果回流| CP
-```
+```text
 
 专项 Agent 是**工具的延伸**，不是伙伴的分裂。Core 始终是那个理解你全局的角色。
 
@@ -529,7 +529,7 @@ flowchart LR
 
     P0 -->|核心机制验证| P1
     P1 -->|价值主张验证| P2
-```
+```text
 
 ### Phase 0：Obsidian 实践验证（进行中）
 
@@ -565,11 +565,11 @@ flowchart LR
 
 **迁移策略**（渐进路径，不强制切换）：
 
-```
+```text
 阶段一：MindClaw 读写 Obsidian vault 文件（用户仍在 Obsidian）
 阶段二：桌面端界面 + Bot 通道并行，Markdown 双向兼容
 阶段三：MindClaw 成为主界面，Obsidian 变为可选备份层
-```
+```text
 
 ### Phase 2：完整产品
 
@@ -586,7 +586,7 @@ graph LR
     A["知道你不知道什么<br>发现盲区"] --> B["在对的时机不说<br>沉住气持有"]
     B --> C["在对的时机说<br>自然浮出"]
     C --> D["被接收<br>产生真实价值"]
-```
+```text
 
 不是简单的 RAG 检索，是有判断力的**主动关联**。这是 MindClaw 技术上最值得投入的核心能力。
 
@@ -599,7 +599,7 @@ graph TD
     MC[模型能力提升] --> MU["复利效应<br>Layer 3 判断力指数级提升"]
     AC["积累的知识库<br>越用越深"] --> MU
     PU["对这个人的理解<br>越久越准"] --> MU
-```
+```text
 
 今天建立的知识库结构与对话积累，是在为更强的模型**搭好舞台**。
 
@@ -671,7 +671,7 @@ graph LR
     end
 
     V --> E --> N
-```
+```text
 
 **MVP 核心架构已确定：**
 

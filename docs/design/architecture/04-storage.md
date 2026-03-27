@@ -1,6 +1,6 @@
-# MindClaw 技术架构设计
+# MindClaw 技术架构设计 — 存储架构
 
-> 拆分自 architecture.md，完整索引见 [README.md](./README.md)
+> 完整架构文档索引见 [README.md](./README.md)
 
 ## 五、存储架构
 
@@ -133,7 +133,7 @@ CREATE TABLE messages (
 );
 
 -- 用户角色信息已归入 memories 表（category='profile'），不需要独立表
-```
+```text
 
 ### Markdown 与 SQLite 同步
 
@@ -147,14 +147,17 @@ CREATE TABLE messages (
 **Task（任务）— SQLite 是真相源：**
 
 - **正向同步（SQLite → Markdown）**：任务创建/状态变更时，更新关联笔记中的 checkbox
-
-  ```markdown
-  - [ ] 买菜 <!--task:abc123-->       ← pending
-  - [x] 写周报 <!--task:def456-->     ← done
-  ```
+  - 用户通过 UI 或对话创建/完成任务 → SQLite 更新 → 异步同步到 Markdown
+  - Markdown 中渲染为：`- [ ] 买菜 <!--task:abc123-->`（pending）或 `- [x] 写周报 <!--task:def456-->`（done）
 
 - **反向识别（Markdown → SQLite）**：解析 daily 时发现无 ID 的 checkbox（`- [ ] 新任务`），自动创建 task 记录并回写 `<!--task:id-->` 标记
-- **冲突时**：SQLite 为权威。用户在 Obsidian 中勾选 checkbox 不会自动同步（避免文件监听复杂度），状态以 SQLite 为准，下次 daily 更新时覆盖
+  - 仅在新日记创建或主动触发"同步任务"时执行
+  - 识别后任务纳入 SQLite 管理
+
+- **冲突处理**：
+  - 用户在 Obsidian 中手动勾选 checkbox：**不会**自动同步到 SQLite（避免文件监听复杂度）
+  - 下次 App 启动或日记加载时，SQLite 中的任务状态会覆盖 Markdown 中的 checkbox 状态
+  - 设计原因：保持单一真相源，避免双向同步的竞态条件
 
 ### 知识笔记三级索引（L0 / L1 / L2）
 
@@ -192,7 +195,7 @@ updated: 2026-03-20
 ## 安全边际
 
 ……完整内容……
-```
+```text
 
 **`source` 字段**——标识知识笔记的创建方式：
 
@@ -202,7 +205,16 @@ updated: 2026-03-20
 | `resource` | 从资源结晶 | URL/PDF 解析产出，原始资源详见 `resources` 表 |
 | `session:ID` | 对话蒸馏 | SubAgent 从会话中提炼的洞见，非资源 |
 
-**资源结晶流程**：用户提交 URL/PDF → 写入 `resources` 表（status=pending）→ Agent 提取内容（status=parsing）→ Haiku 生成 tags（L0）+ overview（L1）→ Sonnet 提炼正文为结构化知识笔记（L2）→ 写入 frontmatter + vault → 更新 `resources.note_path` + `status=done`，等待人类审核确认。
+**资源结晶流程**：
+
+1. 用户提交 URL/PDF → 写入 `resources` 表（`status=pending`）
+2. Agent 提取内容 → 更新 `status=parsing`
+3. Haiku 生成 tags（L0）+ overview（L1）
+4. Sonnet 提炼正文为结构化知识笔记（L2）→ 写入 `vault/knowledge/` + frontmatter
+5. 更新 `resources.note_path` + `status=done` → 知识笔记进入"待确认"状态
+6. 人类审核确认 → 知识笔记正式发布（可选：确认后更新 `status=confirmed`）
+
+**注意**：`status=done` 表示 Agent 已完成结晶，但知识笔记需经人类确认后才正式发布。确认前笔记可标记为草稿状态（如 frontmatter 中 `draft: true`）。
 
 - `tags` = **L0**（~100 tokens，从 frontmatter 提取，存入 SQLite + FTS5）
   - tags 是 Agent 的第一视角——扫描 tags 就能判断这篇笔记"关于什么"
@@ -220,7 +232,10 @@ updated: 2026-03-20
 
 知识按主题组织为目录（如 `knowledge/投资/`、`knowledge/教育/`）。每个目录自动维护聚合索引：
 
-```
+- **目录记录创建时机**：索引重建时扫描 `vault/knowledge/` 文件系统目录结构，为每个存在的目录创建或更新 notes 表记录
+- **目录记录判断**：`path LIKE '%.md'` 为笔记，否则为目录
+
+```text
 vault/knowledge/投资/
   ├── 价值投资.md                  # 单篇笔记 (L2)
   ├── 风险管理.md
@@ -230,13 +245,13 @@ SQLite notes 表（目录也是一条记录，path 无 .md 后缀）：
   path: "knowledge/投资"
   tags: ["投资", "价值投资", "风险管理", "量化", "巴菲特", ...]  (聚合 L0)
   overview: "3 篇笔记：价值投资核心原则、风险管理框架、量化策略入门..."  (聚合 L1)
-```
+```text
 
 目录和笔记统一在 `notes` 表中，通过 path 后缀区分（`.md` 为笔记，否则为目录）。L0 搜索只查一张表，检索路径统一。目录 L0（tags）在子笔记 CRUD 时自动聚合——合并去重子笔记的所有 tags。目录 L1 由 Haiku 从子笔记 L1 聚合生成。
 
 #### RAG 检索流程（渐进式加载）
 
-```
+```text
 用户消息 "如何控制投资风险？"
   │
   ├── Step 1: L0 粗筛（tags 匹配，低成本，高召回）
@@ -260,7 +275,7 @@ SQLite notes 表（目录也是一条记录，path 无 .md 后缀）：
       tool_call("operations", {action: "call",
         name: "knowledge_get", args: {path: "knowledge/投资/风险管理.md"}})
       → 从文件系统读取完整 Markdown 返回
-```
+```text
 
 **与传统 RAG 的区别**：传统方案将全文切片后向量检索，返回碎片化的 snippet。MindClaw 的三级方案保持知识的完整性——L1 是结构化概要而非随机切片，Agent 始终能看到知识的完整轮廓，需要细节时再加载 L2。
 
@@ -272,7 +287,11 @@ SQLite notes 表（目录也是一条记录，path 无 .md 后缀）：
 | **人工编写** | 用户直接编辑 frontmatter overview | frontmatter（真相源） | 高价值笔记需精确概要 |
 | **截断兜底** | 取正文前 ~2k tokens | 仅缓存到 SQLite（不写 frontmatter） | Haiku 调用失败时的降级策略 |
 
-overview 的生命周期：笔记创建 → SubAgent 异步生成 overview → 写回 frontmatter → 同步到 SQLite 缓存。人类编辑 frontmatter 中的 overview 后，下次索引时以 frontmatter 为准覆盖 SQLite。
+overview 的生命周期：
+
+1. 笔记创建 → SubAgent 异步生成 overview → 写回 frontmatter → 同步到 SQLite 缓存
+2. 人类编辑 frontmatter 中的 overview 后，下次索引时以 frontmatter 为准覆盖 SQLite
+3. Haiku 调用失败时，使用截断兜底策略缓存到 SQLite，frontmatter 中的 overview 保持为空或保留旧值
 
 #### 索引更新触发
 
@@ -295,7 +314,7 @@ overview 的生命周期：笔记创建 → SubAgent 异步生成 overview → �
 
 ### 设置存储分工
 
-```
+```text
 settings.json              OS Keychain                 SQLite
 ─────────────              ─────────────               ──────
 LLM 模型选择               API Key（加密）              记忆（memories 表）
@@ -303,7 +322,7 @@ LLM 模型选择               API Key（加密）              记忆（memorie
 Vault 路径
 同步配置
 Token 预算（可选覆盖）
-```
+```text
 
 API Key 和 Gateway Bearer Token 必须存入 OS Keychain，绝不能存在任何明文文件中。
 

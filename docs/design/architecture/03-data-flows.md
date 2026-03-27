@@ -1,18 +1,18 @@
 # MindClaw 技术架构设计
 
-> 拆分自 architecture.md，完整索引见 [README.md](./README.md)
+> 完整架构文档索引见 [README.md](./README.md)
 
 ## 四、核心数据流
 
 ### 4.1 Agent 输入路由（Agent Input Routing）
 
-```
+```text
 用户在对话中表达意图 → Agent 理解并通过 operations 工具直接写入目标：
     ├── "帮我记个任务…"  → task_create   → tasks 表 + Daily checkbox
     ├── "我觉得这个观点…" → knowledge_create → vault/knowledge/ 笔记
     ├── "今天感觉…"      → daily_append  → vault/daily/当日.md
     └── "这个链接不错…"  → resource_submit → resources 表 → 异步结晶为知识笔记
-```
+```text
 
 无需独立捕获管道——Agent 的对话理解天然具备路由能力。
 
@@ -20,7 +20,7 @@
 
 消息经过 Channel 抽象层统一处理，无论来源是桌面 UI 还是 Telegram Bot：
 
-```
+```text
 用户发送消息（桌面 UI / Telegram / Feishu）
   → Channel 将平台消息转为 ChannelMessage { sender, content, source }
   → Bus.publish_inbound() → AgentLoop 消费
@@ -42,11 +42,11 @@
   → Bus.outbound → run_outbound_dispatcher() → Channel.send()
       Desktop: Tauri Event → 前端 useConversation 实时渲染
       Telegram: sendMessage API → 用户手机
-```
+```text
 
 ### 4.3 日记流（Daily Flow）
 
-```
+```text
 DailyPage 挂载，传入今日日期
   → invoke("daily_get", { date: "2026-03-26" })
   → Command → DailyService.get(): 读取 vault/daily/2026-03-26.md（不存在则模板创建）
@@ -55,6 +55,6 @@ DailyPage 挂载，传入今日日期
   → 前端: 渲染 Markdown + 嵌入 TaskCard 组件
   → 用户编辑 → invoke("daily_save") → Command → DailyService.save()
   → 用户切换任务状态 → invoke("task_update") → Command → TaskService.update()
-```
+```text
 
 ---

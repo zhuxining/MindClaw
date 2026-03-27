@@ -1,6 +1,6 @@
 # MindClaw 技术架构设计
 
-> 拆分自 architecture.md，完整索引见 [README.md](./README.md)
+> 完整架构文档索引见 [README.md](./README.md)
 
 ## 六、Agent 架构
 
@@ -8,7 +8,7 @@
 
 ### 6.1 整体结构
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                      Channel Layer                          │
 │  ┌──────────┐  ┌──────────────┐  ┌───────────────┐         │
@@ -59,7 +59,7 @@
 │  │  定时任务调度  │  │  健康检测/监控   │  │  tracing 日志  │  │
 │  └──────────────┘  └────────────────┘  └────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
-```
+```text
 
 **Core Agent 是唯一持有完整人模型的编排器**。Channel、Gateway、Provider、Tools 都是可替换的适配层，通过 trait 解耦。Cron 和 Heartbeat 提供后台运行能力。
 
@@ -103,7 +103,7 @@ pub trait Channel: Send + Sync {
     async fn start_typing(&self) -> Result<(), AppError> { Ok(()) }
     async fn stop_typing(&self) -> Result<(), AppError> { Ok(()) }
 }
-```
+```text
 
 #### Channel 实现一览
 
@@ -118,7 +118,7 @@ pub trait Channel: Send + Sync {
 
 MessageBus 解耦 Channel 与 Agent 的消息传递。Channel 推入站消息，Agent 推出站消息，双方互不直接引用。
 
-```
+```text
 Channel.listen()                          Channel.send()
       │                                        ▲
       ▼                                        │
@@ -129,7 +129,7 @@ Channel.listen()                          Channel.send()
 │  outbound: Queue<OutboundMessage>   ◄── Agent 推送│
 │                                                  │
 └──────────────────────────────────────────────────┘
-```
+```text
 
 **设计决策**：出站队列使 Channel 断线时消息不丢失，重连后可继续消费。使用 tokio mpsc channel 实现，Receiver 通过 `take` 语义确保单消费者。
 
@@ -156,7 +156,7 @@ pub enum OutboundPayload {
     Typing(bool),
     Error(String),
 }
-```
+```text
 
 ```rust
 // src-tauri/src/bus/mod.rs
@@ -169,7 +169,7 @@ pub struct MessageBus {
     inbound_count: AtomicUsize,
     outbound_count: AtomicUsize,
 }
-```
+```text
 
 | 方法 | 调用方 | 说明 |
 |------|--------|------|
@@ -184,7 +184,7 @@ pub struct MessageBus {
 
 ### 6.4 消息流水线（端到端）
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────┐
 │                      完整消息流                                 │
 ├────────────────────────────────────────────────────────────────┤
@@ -249,13 +249,13 @@ pub struct MessageBus {
 │  Channel.send(OutboundMessage) ──► 外部平台渲染                │
 │                                                                │
 └────────────────────────────────────────────────────────────────┘
-```
+```text
 
 ### 6.5 Agent 核心：Loop · Session · Identity
 
 Agent 模块内部由三个核心组件驱动，职责清晰分离：
 
-```
+```text
               Bus.inbound (入站队列)
                         │
                         ▼
@@ -289,7 +289,7 @@ Agent 模块内部由三个核心组件驱动，职责清晰分离：
                         │
                         ▼
                    SendMessage (出站，立即返回)
-```
+```text
 
 #### AgentLoop — 消息处理主循环
 
@@ -311,7 +311,7 @@ pub struct AgentLoop {
     identity_resolver: Arc<UserIdentityResolver>,
     cancel_token: CancellationToken,
 }
-```
+```text
 
 **`process_message()` 生命周期**：身份解析 → Session 获取 → Agent Command 拦截 → PreMessage Hook → ContextPipeline 组装 → Provider 流式调用 + 工具循环 → Session 追加 → PostMessage Hook → SubAgent 派发。详见 6.4 流水线图。
 
@@ -338,7 +338,7 @@ pub struct SessionManager {
     max_turns: usize,   // 内存中最大轮数（默认 50）
     keep_recent: usize,  // 裁剪时保护的近期轮数（默认 5）
 }
-```
+```text
 
 | 方法 | 说明 |
 |------|------|
@@ -364,7 +364,7 @@ pub enum IdentityMode {
     SingleUser,                                          // 所有 sender → "owner"（默认）
     Mapped(HashMap<(ChannelSource, String), String>),    // 按 (source, sender) 查表
 }
-```
+```text
 
 ### 6.6 Context Pipeline — 可插拔上下文组装
 
@@ -374,7 +374,7 @@ pub enum IdentityMode {
 
 System Prompt 由固定部分和动态检索部分组成。固定部分从配置文件加载，动态部分由 ContextSource 按需检索注入。
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │  固定层（启动时加载，每次对话不变）                            │
 ├─────────────────────────────────────────────────────────────┤
@@ -395,7 +395,7 @@ System Prompt 由固定部分和动态检索部分组成。固定部分从配置
 ├─────────────────────────────────────────────────────────────┤
 │ 用户消息                                                     │
 └─────────────────────────────────────────────────────────────┘
-```
+```text
 
 #### ContextSource Trait 与 Pipeline
 
@@ -432,7 +432,7 @@ pub struct ContextPipeline {
     total_budget: usize,
     budget_allocations: HashMap<String, usize>,
 }
-```
+```text
 
 构建逻辑：按 priority 顺序遍历所有 source，每个 source 在分配的 budget 内注入 fragment，累计消耗超过 total_budget 时后续 source 被压缩或跳过。
 
@@ -474,7 +474,7 @@ Skills 注册的自定义 ContextSource 按 priority 自动插入管线。例如
     "disabled_sources": []
   }
 }
-```
+```text
 
 ### 6.7 Provider 层 — LLM 抽象
 
@@ -499,7 +499,7 @@ pub trait Provider: Send + Sync {
     fn supports_streaming(&self) -> bool;
     fn max_tokens(&self, model: ModelTier) -> usize;
 }
-```
+```text
 
 #### 模型分层调用
 
@@ -514,7 +514,7 @@ pub trait Provider: Send + Sync {
 
 Agent 上下文**常驻仅 4 个 Tool Schema**，业务操作通过 `operations` 元工具按需发现和调用，避免上下文膨胀。
 
-```
+```text
 Tools（常驻上下文，4 个 Schema）
 ├── filesystem   → 文件系统操作
 ├── shell        → 受限命令执行
@@ -522,7 +522,7 @@ Tools（常驻上下文，4 个 Schema）
 └── operations   → 元工具（按需发现 Services + Memory 操作）
         ├── operations.list(category?) → 返回可用操作及参数 Schema
         └── operations.call(name, args) → 执行具体操作
-```
+```text
 
 #### Tool Trait
 
@@ -536,7 +536,7 @@ pub trait Tool: Send + Sync {
     fn json_schema(&self) -> serde_json::Value;
     async fn execute(&self, input: ToolInput) -> Result<ToolOutput, AppError>;
 }
-```
+```text
 
 #### 基础能力工具
 
@@ -556,7 +556,7 @@ Agent 作为 MCP Client，通过 MCP 协议调用外部工具服务（浏览器�
 pub struct McpClientTool {
     connections: HashMap<String, McpConnection>,
 }
-```
+```text
 
 | 方法 | 说明 |
 |------|------|
@@ -564,7 +564,7 @@ pub struct McpClientTool {
 | `list_tools()` | 列举所有已连接 Server 的可用工具 |
 | `call_tool(server, tool, args)` | 调用外部工具 |
 
-MCP Server 配置（`config/settings.json`）：
+MCP Server 配置（`~/MindClaw/config/settings.json`）：
 
 ```json
 {
@@ -573,7 +573,9 @@ MCP Server 配置（`config/settings.json`）：
     { "name": "calendar", "command": "npx", "args": ["@anthropic/mcp-calendar"] }
   ]
 }
-```
+```text
+
+**注意**：MCP Server 配置存储在用户数据目录 `~/MindClaw/config/settings.json`，而非代码目录。该文件不包含敏感信息（如 API Key），可以明文存储。
 
 #### Operations — 业务操作元工具
 
@@ -588,7 +590,7 @@ pub struct OperationDef {
     pub description: String,
     pub parameters: Value,  // JSON Schema
 }
-```
+```text
 
 常驻上下文的 Schema（极小）：
 
@@ -603,7 +605,7 @@ pub struct OperationDef {
   },
   "required": ["action"]
 }
-```
+```text
 
 #### 已注册操作
 
@@ -622,7 +624,7 @@ pub struct OperationDef {
 
 #### 三级渐进加载
 
-```
+```text
 场景：Agent 搜索用户的学习相关知识
 
   Round 1: knowledge_search 返回 L1 概要（~2k tokens/条）
@@ -633,29 +635,29 @@ pub struct OperationDef {
 
   或者: Agent 浏览知识全貌 → knowledge_list_tags
     → [{"tag": "学习", "count": 5}, ...]
-```
+```text
 
 **优势**：ContextPipeline 自动注入 L1（Agent 无需调工具即可感知知识全貌）；Agent 主动搜索也返回 L1（比 500 token snippet 信息量大 4 倍）；L2 仅在真正需要完整细节时加载，避免上下文膨胀。
 
 #### 工具调用循环
 
-```
+```text
 LLM 响应 → 解析工具调用 → ToolRegistry.execute_batch()
     → 将工具结果追加到上下文 → 再次调用 Provider
     → 重复直到 LLM 不再请求工具（最多 10 轮）
     → 循环检测：输出 hash 去重，防止无限循环
-```
+```text
 
 ### 6.9 Services 层 — 核心业务逻辑
 
 Services 是业务操作的核心层。**Web Commands、CLI Commands 和 Agent 共用同一套 Services**，保证业务逻辑单一来源。
 
-```
+```text
 Web Commands  ──► Services ──► Storage
 CLI Commands  ──► Services ──► Storage
 Agent         ──► operations (元工具) ──► Services ──► Storage
                                      ──► Memory   ──► Storage
-```
+```text
 
 ```rust
 // src-tauri/src/services/mod.rs
@@ -665,7 +667,7 @@ pub struct ServiceContainer {
     pub daily: DailyService,
     pub task: TaskService,
 }
-```
+```text
 
 #### KnowledgeService — 知识笔记管理
 
@@ -697,7 +699,7 @@ pub struct NoteL1 {
     pub tags: Vec<String>,
     pub overview: String,   // ~2k tokens
 }
-```
+```text
 
 #### DailyService — 日记管理
 
@@ -723,7 +725,7 @@ pub struct NoteL1 {
 
 Memory 管理 Agent 对用户的私有认知——观察、偏好、模式识别等。存在 SQLite 中，用户不直接操作。Knowledge（Markdown）是人机共有的，由 Services 管理。
 
-```
+```text
 Memory (Agent 私有, SQLite)          Knowledge (人机共有, Markdown)
 ├── 观察：第三次提到工作疲惫感        ├── vault/knowledge/工作节奏.md
 ├── 偏好：偏好简短直接的回复           ├── vault/knowledge/投资策略.md
@@ -732,7 +734,7 @@ Memory (Agent 私有, SQLite)          Knowledge (人机共有, Markdown)
                                       ↑
     记忆可以升华为知识 ────────────────┘
     （Agent 发现模式 → 沉淀为知识笔记，需人类确认）
-```
+```text
 
 #### 单表 `memories` 设计
 
@@ -765,7 +767,7 @@ pub enum MemoryCategory {
     Cases,        // 学到的案例（成功方案、调试经验）
     Patterns,     // 学到的模式（行为规律、偏好趋势）
 }
-```
+```text
 
 #### 记忆类别与示例
 
@@ -784,7 +786,7 @@ pub enum MemoryCategory {
 pub struct MemoryManager {
     db: Arc<DbState>,
 }
-```
+```text
 
 | 方法 | 说明 |
 |------|------|
@@ -812,16 +814,16 @@ pub struct MemoryManager {
 
 **设计决策**：记忆更新不覆盖旧值，而是通过 `superseded_by` 链追踪认知变化。`recall()` 只返回 `superseded_by IS NULL` 的最新认知，但旧记忆保留可追溯。
 
-```
+```text
 记忆 A: "用户对教育有兴趣" (importance: 0.6)
   ↓ 新对话后 Agent 理解更深
 记忆 B: "用户关注蒙特梭利教育方法，孩子 3 岁" (importance: 0.8)
   A.superseded_by = B.id
-```
+```text
 
 #### 记忆生命周期
 
-```
+```text
 写入 → 演进 → 衰减 → 升华/清理
 
 1. 写入：SubAgent 对话后分析 → remember() upsert by key
@@ -830,13 +832,13 @@ pub struct MemoryManager {
 4. 升华：高 importance 观察 → propose_crystallization()
          → 知识笔记草稿 → 人类确认 → vault/knowledge/
 5. 清理：被替代 + importance < 阈值的旧记忆 cleanup()
-```
+```text
 
 ### 6.11 SubAgent — 异步后台任务
 
 AgentLoop 负责主对话流，SubAgent 处理不应阻塞响应的后台任务。从硬编码 enum 演进为 trait + 注册表模式，Skills 可动态添加新任务类型。
 
-```
+```text
 AgentLoop (主对话)
     │
     ├── 对话响应 → 立即返回给用户
@@ -846,7 +848,7 @@ AgentLoop (主对话)
          ├── SessionSummarize:  会话摘要生成
          ├── ObservationAnalyze: Layer 3 模式识别
          └── DailySummary:      当日回顾生成
-```
+```text
 
 #### SubAgentTask Trait
 
@@ -881,7 +883,7 @@ pub struct Artifact {
     pub content: String,
     pub metadata: Value,
 }
-```
+```text
 
 #### SubAgentRegistry 与派发
 
@@ -894,7 +896,7 @@ pub struct SubAgentDispatch {
     pub task_name: String,
     pub input: Value,
 }
-```
+```text
 
 `SubAgentRegistry::with_builtins()` 注册 4 个内置任务。`SubAgentExecutor` 消费 `mpsc::Receiver<SubAgentDispatch>`，通过 `Semaphore` 限制最大 3 个并发 API 调用，防止速率爆炸。
 
@@ -915,7 +917,7 @@ pub struct SubAgentDispatch {
 
 AgentLoop 在关键位置引入事件驱动的扩展点，支持 Rust trait 实现和 Shell 命令两种 handler 类型。
 
-```
+```text
 process_message() 中的 Hook 触发点：
 
   1. Identity resolution
@@ -931,7 +933,7 @@ process_message() 中的 Hook 触发点：
   8. ► PostMessage ◄ ──────── 可触发副作用（通知、分析等）
   9. post_process (SubAgent dispatch)
   10. Session close ──────── ► OnSessionClose ◄
-```
+```text
 
 ```rust
 // src-tauri/src/agent/hooks.rs
@@ -965,7 +967,7 @@ pub trait HookHandler: Send + Sync {
     async fn on_post_tool_use(&self, _ctx: &HookContext<'_>, payload: PostToolUsePayload)
         -> Result<HookResult<PostToolUsePayload>, AppError> { Ok(HookResult::Continue) }
 }
-```
+```text
 
 **Shell 命令钩子**（Claude Code 风格）：通过 `settings.json` 配置，无需编译。
 
@@ -978,7 +980,7 @@ pub struct CommandHook {
     pub timeout_ms: u64,
     pub priority: i32,
 }
-```
+```text
 
 ```json
 {
@@ -993,7 +995,7 @@ pub struct CommandHook {
     ]
   }
 }
-```
+```text
 
 `HookRegistry` 按 `priority` 排序执行所有 handler，遇到 `Block` 立即返回阻止后续流程。
 
@@ -1037,7 +1039,7 @@ graph TB
     TR -.-> CWT
     HR -.-> CWT
     SR -.-> PP
-```
+```text
 
 ```rust
 // src-tauri/src/agent/skills.rs
@@ -1057,7 +1059,7 @@ pub struct SkillManifest {
     pub version: String,
     pub description: String,
 }
-```
+```text
 
 ```toml
 # config/skills/weekly-report/skill.toml
@@ -1072,7 +1074,7 @@ context_sources = ["weekly_context"]
 hooks = { PostMessage = "on_weekly_check" }
 sub_agent_tasks = ["weekly_report_generate"]
 operations = ["weekly_report_generate", "weekly_report_list"]
-```
+```text
 
 #### 扩展性分阶段实现
 
@@ -1102,7 +1104,14 @@ Gateway 为移动端 PWA 提供静态文件和 API，为 Webhook 通道提供接
 | `/webhook/feishu` | POST | 飞书 Bot Webhook | Phase 2 |
 | `/` | GET | PWA 静态文件服务 | Phase 2 |
 
-**认证**：本地 WiFi 用 Bearer Token（OS Keychain 存储），Tailscale 穿透用双重保护，Webhook 用平台签名验证。
+**认证**：
+
+| 场景 | 认证方式 | 说明 |
+|------|---------|------|
+| 本地 WiFi（PWA /api/*） | Bearer Token | Token 存储在 OS Keychain，客户端请求时携带 |
+| Tailscale 远程接入 | 双重保护 | Bearer Token + Tailscale 身份验证 |
+| Webhook（Telegram/Feishu） | 平台签名验证 | 验证平台发送的签名（如 Telegram 的 `X-Telegram-Date`），**不需要** Bearer Token |
+| WebSocket（/ws/chat） | Bearer Token | 连接时认证，之后保持会话 |
 
 #### Cron — 定时任务调度
 
@@ -1131,6 +1140,6 @@ pub struct SystemHealth {
     pub last_check: DateTime<Utc>,
     pub uptime_seconds: u64,
 }
-```
+```text
 
 通道断线时自动重连，指数退避（2s → 4s → 8s → ... → 60s）。前端通过 IPC 命令 `system_health` 查询，Settings 页面展示。

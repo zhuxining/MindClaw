@@ -1,6 +1,6 @@
 # MindClaw 技术架构设计
 
-> 拆分自 architecture.md，完整索引见 [README.md](./README.md)
+> 完整架构文档索引见 [README.md](./README.md)
 
 ## 七、安全架构
 
@@ -16,7 +16,7 @@
     }
   }
 }
-```
+```text
 
 仅允许本地内容和 Claude API 请求。
 
@@ -41,7 +41,7 @@
     "fs:write-files"
   ]
 }
-```
+```text
 
 文件系统权限限定在 vault 和 data 目录范围内。
 

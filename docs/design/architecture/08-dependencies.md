@@ -1,6 +1,6 @@
 # MindClaw 技术架构设计
 
-> 拆分自 architecture.md，完整索引见 [README.md](./README.md)
+> 完整架构文档索引见 [README.md](./README.md)
 
 ## 九、技术依赖
 
@@ -63,7 +63,7 @@ tauri-plugin-os = "2"
 tauri-plugin-persisted-scope = "2"
 tauri-plugin-process = "2"
 tauri-plugin-stronghold = "2"
-```
+```text
 
 #### Tauri Plugins（仅桌面端）
 
@@ -73,7 +73,7 @@ tauri-plugin-cli = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
-```
+```text
 
 #### 核心依赖
 
@@ -117,7 +117,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "ansi", "env-filter"]
 # Error handling
 thiserror = "2.0"
 anyhow = "1.0"
-```
+```text
 
 ### 前端依赖（package.json）
 
@@ -159,9 +159,9 @@ anyhow = "1.0"
 
 #### Tauri Plugin 前端包
 
-```
+```text
 @tauri-apps/api, plugin-autostart, plugin-cli, plugin-clipboard-manager,
 plugin-dialog, plugin-fs, plugin-global-shortcut, plugin-notification,
 plugin-opener, plugin-os, plugin-process, plugin-stronghold,
 plugin-updater, plugin-window-state
-```
+```text

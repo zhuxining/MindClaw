@@ -8,7 +8,7 @@
 
 | 能力 | 模块 | 说明 |
 |------|------|------|
-| 快速捕获 + Agent 路由 | capture, agent::router | Haiku 分类，人类审核确认 |
+| Agent 对话 + 自然路由 | agent, tools::operations | 对话中理解意图，通过 operations 工具直接执行 |
 | 日记视图 + 嵌入式任务 | daily, tasks | Daily Note 为锚点，任务一等公民 |
 | 基础对话 | conversation, agent::core | 陪伴 + 知识两种模式 |
 | 知识库浏览与搜索 | knowledge | 关键词搜索（FTS5） |
@@ -21,6 +21,9 @@
 | Heartbeat | heartbeat | 系统健康检测（DB、Vault、API Key） |
 | 统一错误处理 | error.rs | AppError → 前端展示 |
 | 结构化日志 | tracing crate | 开发调试 |
+| 可插拔上下文管线 | agent::context_pipeline | ContextSource trait + 内置 5 源 |
+| Agent Hooks（Rust） | agent::hooks | HookHandler trait + HookRegistry |
+| SubAgent 任务注册表 | agent::sub_agent | SubAgentTask trait + Registry |
 
 ### Phase 1 后期
 
@@ -29,6 +32,9 @@
 | Telegram Bot 通道 | channels::telegram | 移动端对话通道（最低开发成本） |
 | Gateway 基础 | gateway::api | Webhook 接收（Telegram）+ 简单 chat API |
 | Gateway 认证 | gateway::auth | Bearer Token + Telegram 签名验证 |
+| Command Hooks | agent::hooks | settings.json 命令钩子配置 |
+| 自定义 ContextSource | agent::context_pipeline | Skills 注册的上下文源 |
+| Skills 系统（built-in） | agent::skills | SkillRegistry + skill.toml 清单 |
 
 ### Phase 2（延期）
 
@@ -49,5 +55,6 @@
 | 知识图谱可视化 | — |
 | 本地 Embedding 模型 | 用 API embedding 或延期向量搜索 |
 | 多 Provider 支持 | OpenAI, Ollama 等 |
+| Skills 外部加载/WASM | 动态加载外部技能包 |
 
 ---

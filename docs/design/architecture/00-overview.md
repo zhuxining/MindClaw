@@ -36,7 +36,8 @@
 │   inbound: Channel → Agent  │  outbound: Agent → Channel│
 ├─────────────────────────────┴───────────────────────────┤
 │             Core Agent Service (编排器)                  │
-│  AgentLoop · Context · Session · SubAgent               │
+│  AgentLoop · ContextPipeline · Session · SubAgent       │
+│  Hooks · Skills (可插拔扩展)                             │
 ├──────────────────┬──────────────────────────────────────┤
 │  Provider Layer  │          Tool Layer                  │
 │  Claude API      │  基础能力: fs · shell · mcp_client   │
@@ -44,7 +45,7 @@
 ├──────────────────┼──────────────────────────────────────┤
 │  Memory Layer    │        Services Layer                │
 │  Agent 私有记忆   │  核心业务逻辑 (前端/Agent 共用)       │
-│  观察·偏好·模式   │  Knowledge · Daily · Task · Capture │
+│  观察·偏好·模式   │  Knowledge · Daily · Task · Resource │
 │  (SQLite)        │  (操作 Markdown + SQLite)            │
 ├──────────────────┴──────────────────────────────────────┤
 │           Infrastructure Layer (基础设施)               │

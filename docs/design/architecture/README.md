@@ -9,7 +9,7 @@
 | [00-overview.md](./00-overview.md) | 系统总览 | 技术栈、架构分层图、桌面端即服务器理念 |
 | [01-directory-structure.md](./01-directory-structure.md) | 目录结构 | 代码目录（src-tauri/ + src/）与用户数据目录 |
 | [02-command-architecture.md](./02-command-architecture.md) | 三层命令架构 | Web Commands / Agent Commands / CLI Commands |
-| [03-data-flows.md](./03-data-flows.md) | 核心数据流 | 捕获流、对话流、日记流 |
+| [03-data-flows.md](./03-data-flows.md) | 核心数据流 | Agent 输入路由、对话流、日记流 |
 | [04-storage.md](./04-storage.md) | 存储架构 | SQLite 表结构、Markdown 同步、三级索引、RAG 检索 |
 | [05-agent.md](./05-agent.md) | Agent 架构 | Channel / Bus / AgentLoop / Provider / Tools / Memory / Gateway / Cron |
 | [06-security.md](./06-security.md) | 安全架构 | CSP、私密区隔离、Capabilities、树洞模式 |

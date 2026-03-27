@@ -18,10 +18,10 @@ React Frontend ── invoke() ──► Web Commands ──► Services ──�
 |------|-------------|----------------|-------------|
 | 入口 | React `invoke()` | 对话消息 `/xxx` | 终端 `mindclaw` |
 | 职责 | 业务 CRUD（完整） | Agent 生命周期控制 | 自动化/脚本操作 |
-| 数量 | ~28 个 | 4 个 | ~7 个 |
+| 数量 | ~25 个 | 4 个 | ~6 个 |
 | 调用链 | Command → Services | AgentLoop 拦截 → Agent 自身 | CliRuntime → Services |
 | 需要 Tauri | 是 | 是（运行在 AgentLoop 内） | 否（独立二进制） |
-| 需要 LLM | 否（除 capture_route） | 否（纯控制） | 仅 chat 子命令 |
+| 需要 LLM | 否 | 否（纯控制） | 仅 chat 子命令 |
 
 ### 3.1 Web Commands — Tauri IPC（前端调用）
 
@@ -278,9 +278,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum CliCommand {
-    /// 快速捕获一个想法
-    Capture { text: String },
-
     /// 查看/创建今日日记
     Daily { date: Option<String> },
 
@@ -355,10 +352,6 @@ fn main() {
         let runtime = CliRuntime::init(vault)?;
 
         match cli.command {
-            CliCommand::Capture { text } => {
-                let item = runtime.services.capture.submit(&text, "cli").await?;
-                println!("已捕获: {} (id: {})", item.raw, item.id);
-            }
             CliCommand::Daily { date } => {
                 let d = date.unwrap_or_else(today_string);
                 let note = runtime.services.daily.get(&d).await?;
@@ -400,7 +393,6 @@ clap = { version = "4", features = ["derive"] }
 
 | 子命令 | 调用 Service | 说明 |
 |--------|-------------|------|
-| `mindclaw capture "text"` | CaptureService.submit() | source="cli" |
 | `mindclaw daily [date]` | DailyService.get() | 输出 Markdown 到 stdout |
 | `mindclaw search "query"` | KnowledgeService.search() | 列表输出 |
 | `mindclaw task create "content"` | TaskService.create() | 创建任务 |

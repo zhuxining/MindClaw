@@ -34,9 +34,9 @@ No test or lint commands are configured yet.
 
 | Tier | 入口 | 位置 | 数量 |
 |------|------|------|------|
-| Web Commands | React `invoke()` | `src-tauri/src/commands/` | ~28 |
+| Web Commands | React `invoke()` | `src-tauri/src/commands/` | ~25 |
 | Agent Commands | 对话中 `/xxx` | `src-tauri/src/agent_commands/` | 4 |
-| CLI Commands | 终端 `mindclaw` | `src-tauri/src/cli/` | ~7 |
+| CLI Commands | 终端 `mindclaw` | `src-tauri/src/cli/` | ~6 |
 
 调用链：`Command → Services → Storage`（Web/CLI 共用），Agent Commands 由 AgentLoop 拦截处理。
 
@@ -67,7 +67,7 @@ fn greet(name: &str) -> String { ... }
 | `src-tauri/src/main.rs` | Rust binary entry (delegates to lib) |
 | `src-tauri/src/error.rs` | Unified `AppError` type (Serialize for IPC) |
 | `src-tauri/src/commands/` | Web Commands (Tauri IPC handlers) |
-| `src-tauri/src/agent/` | AgentLoop, ContextBuilder, SessionManager |
+| `src-tauri/src/agent/` | AgentLoop, ContextPipeline, SessionManager, HookRegistry, SkillRegistry |
 | `src-tauri/src/services/` | Core business logic (Knowledge, Daily, Task, Resource) |
 | `src-tauri/src/storage/` | SQLite, Markdown read/write, Keychain |
 | `src-tauri/src/providers/` | LLM abstraction (Claude API, Haiku/Sonnet) |
@@ -78,10 +78,10 @@ fn greet(name: &str) -> String { ... }
 | `src-tauri/src/models/` | Data models (Note, Task, Message, Session, Settings) |
 | `src-tauri/tauri.conf.json` | App config (identifier, window size, bundle) |
 | `src-tauri/capabilities/default.json` | Tauri permission grants |
-| `src/pages/` | React pages (Daily, Inbox, Knowledge, Conversation, Settings) |
+| `src/pages/` | React pages (Daily, Knowledge, Conversation, Settings) |
 | `src/components/` | UI components organized by feature |
-| `src/hooks/` | Custom hooks (useIpc, useCapture, useConversation, etc.) |
-| `src/store/` | Zustand stores (app, capture, conversation) |
+| `src/hooks/` | Custom hooks (useIpc, useConversation, useDaily, useTasks, etc.) |
+| `src/store/` | Zustand stores (app, conversation) |
 
 ### Storage Principles
 
@@ -102,9 +102,12 @@ fn greet(name: &str) -> String { ... }
 
 - **Channel abstraction**: All message sources (Desktop/Telegram/Feishu) implement `Channel` trait → unified `ChannelMessage`.
 - **MessageBus**: Decouples Channel ↔ Agent via async inbound/outbound queues. Outbound queue survives Channel disconnects.
-- **AgentLoop**: Main loop consumes Bus.inbound → SessionManager → ContextBuilder → Provider.chat() → ToolRegistry → Bus.outbound.
+- **AgentLoop**: Main loop consumes Bus.inbound → Hooks(PreMessage) → ContextPipeline → Provider.chat() → Hooks(PreToolUse/PostToolUse) → ToolRegistry → Hooks(PostMessage) → Bus.outbound.
+- **Hooks**: Event-driven extension points (PreMessage, PostMessage, PreToolUse, PostToolUse, OnSessionCreate/Close). Supports Rust trait handlers and settings.json command hooks.
+- **ContextPipeline**: Pluggable context assembly. Each `ContextSource` has priority and token budget. Built-in 5 sources + Skills can register additional sources.
 - **Agent Commands** (`/new`, `/stop`, `/restart`, `/status`): Intercepted in AgentLoop before context assembly, no LLM call.
-- **SubAgent**: Async background tasks (knowledge distill, memory analyze, resource parse, etc.) dispatched from AgentLoop.
+- **SubAgent**: Trait-based task registry. Built-in tasks (knowledge distill, session summarize, etc.) + Skills can register custom tasks via `SubAgentRegistry`.
+- **Skills**: Primary extension mechanism. A Skill package provides any combination of Tools, ContextSources, HookHandlers, SubAgentTasks, and Operations.
 - **Provider**: Haiku for lightweight tasks (routing, classification, L1 generation), Sonnet for deep conversation.
 - **Tools**: 4 always-in-context tools (filesystem, shell, mcp_client, operations). `operations` is a meta-tool for dynamic Service/Memory access.
 

@@ -4,16 +4,17 @@
 
 ## 四、核心数据流
 
-### 4.1 捕获流（Capture Flow）
+### 4.1 Agent 输入路由（Agent Input Routing）
 
 ```
-用户输入（文字/URL/文件）
-  → Agent / routing skill 判断类型并直接写入目标：
-      ├── task     → TaskService.create() → tasks 表 + Daily checkbox
-      ├── thought  → KnowledgeService.create() → vault/knowledge/ 草稿
-      ├── feeling  → DailyService.append() → vault/daily/当日.md
-      └── resource → ResourceService.create() → resources 表 → 异步结晶为知识笔记
+用户在对话中表达意图 → Agent 理解并通过 operations 工具直接写入目标：
+    ├── "帮我记个任务…"  → task_create   → tasks 表 + Daily checkbox
+    ├── "我觉得这个观点…" → knowledge_create → vault/knowledge/ 笔记
+    ├── "今天感觉…"      → daily_append  → vault/daily/当日.md
+    └── "这个链接不错…"  → resource_submit → resources 表 → 异步结晶为知识笔记
 ```
+
+无需独立捕获管道——Agent 的对话理解天然具备路由能力。
 
 ### 4.2 对话流（Conversation Flow）
 
@@ -25,7 +26,7 @@
   → Bus.publish_inbound() → AgentLoop 消费
       ├─ UserIdentityResolver: 跨通道身份统一（→ "owner"）
       ├─ SessionManager: 按统一身份加载/创建 Session
-      ├─ ContextBuilder: 组装 prompt
+      ├─ ContextPipeline: 组装 prompt
       │    [1] 基础人格指令
       │    [2] 用户画像上下文（memories 表 category='profile'）
       │    [3] KnowledgeService.search_with_rerank(): L0 粗筛 → L1 注入

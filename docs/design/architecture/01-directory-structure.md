@@ -23,7 +23,6 @@ src-tauri/
       events.rs                 # InboundMessage, OutboundMessage 定义
     commands/                    # Tier 1: Web Commands（Tauri IPC，前端 invoke() 调用）
       mod.rs                    # 导出所有命令模块
-      capture.rs                # 捕获：→ CaptureService
       conversation.rs           # 对话：→ AgentLoop (发消息) + SessionManager (查历史)
       daily.rs                  # 日记：→ DailyService
       tasks.rs                  # 任务：→ TaskService
@@ -40,7 +39,6 @@ src-tauri/
     cli/                         # Tier 3: CLI 命令行（终端使用，独立二进制）
       mod.rs                    # clap App 定义 + run()
       runtime.rs                # CliRuntime：最小运行时（DB + Services，无 UI）
-      capture.rs                # mindclaw capture "text"
       daily.rs                  # mindclaw daily [date]
       search.rs                 # mindclaw search "query"
       task.rs                   # mindclaw task create/list/complete
@@ -58,10 +56,12 @@ src-tauri/
       keychain.rs               # OS Keychain 存取（keyring crate）
     agent/
       mod.rs                    # AgentService 构造与初始化、接线
-      agent_loop.rs             # AgentLoop：消息处理主循环，Channel → Context → Provider → Tool 循环 → 响应
-      context.rs                # ContextBuilder：System Prompt 组装、从 Memory 拉取记忆、token 预算
+      agent_loop.rs             # AgentLoop：消息处理主循环，Channel → Hooks → Context → Provider → Tool 循环 → 响应
+      context_pipeline.rs       # ContextPipeline：可插拔上下文管线（ContextSource trait + 优先级 + token 预算）
+      hooks.rs                  # HookRegistry：事件钩子（PreMessage/PostMessage/PreToolUse/PostToolUse）
+      skills.rs                 # SkillRegistry：技能系统（分发 Tools/ContextSources/Hooks/SubAgentTasks/Operations）
       session.rs                # SessionManager：按 sender 隔离会话、历史追加、裁剪、持久化
-      sub_agent.rs              # SubAgent：异步子任务执行器（写入 Memory、知识沉淀等）
+      sub_agent.rs              # SubAgentRegistry：trait-based 任务注册表 + SubAgentExecutor
     memory/
       mod.rs                    # MemoryManager：统一记忆层入口（单表 memories，upsert by key）
       types.rs                  # Memory, MemoryCategory 结构定义
@@ -71,7 +71,6 @@ src-tauri/
       knowledge.rs              # KnowledgeService：知识笔记 CRUD、wikilink 提取、索引同步
       daily.rs                  # DailyService：日记读写、模板创建、条目追加
       task.rs                   # TaskService：任务 CRUD、状态管理
-      capture.rs                # CaptureService：捕获队列管理、路由结果写入
     providers/
       mod.rs                    # Provider trait 定义 + create_provider() 工厂
       traits.rs                 # Provider trait、ModelTier、ChatMessage、ProviderResponse
@@ -102,7 +101,6 @@ src-tauri/
       note.rs                   # Note, DailyNote, KnowledgeEntry
       task.rs                   # Task（状态、截止日期、上下文）
       conversation.rs           # Message, Session, ConversationMode
-      capture.rs                # CaptureItem, CaptureRoute
       settings.rs               # AppSettings, UserRole, AgentPreference
   Cargo.toml
   tauri.conf.json
@@ -114,18 +112,13 @@ src/
   App.tsx                       # 根组件：路由、全局 Provider
   pages/
     DailyPage.tsx               # 日记视图（默认首页，PRD 中的"锚点"）
-    InboxPage.tsx               # 捕获收件箱，Agent 路由审核
     KnowledgePage.tsx           # 知识库浏览与搜索
     ConversationPage.tsx        # 对话界面，模式选择
     SettingsPage.tsx            # 设置、API Key、角色模版
   components/
     layout/
-      Sidebar.tsx               # 导航：Daily / Inbox / Knowledge / Chat / Settings
-      TopBar.tsx                # 全局快捷捕获栏 + 模式指示器
-    capture/
-      QuickCapture.tsx          # 3 秒捕获输入（文本、链接粘贴）
-      CaptureCard.tsx           # 收件箱单项卡片
-      RouteReview.tsx           # 审核 Agent 路由决策
+      Sidebar.tsx               # 导航：Daily / Knowledge / Chat / Settings
+      TopBar.tsx                # 全局状态栏 + 模式指示器
     daily/
       DailyEditor.tsx           # Markdown 编辑器
       TaskCard.tsx              # 嵌入式任务卡片（状态切换）
@@ -144,7 +137,6 @@ src/
       ModelSelector.tsx         # Haiku/Sonnet 偏好
   hooks/
     useIpc.ts                   # 通用 invoke() 封装（泛型、错误处理、loading）
-    useCapture.ts               # 捕获提交与收件箱状态
     useConversation.ts          # 对话状态、消息发送、模式切换
     useDaily.ts                 # 日记 CRUD
     useKnowledge.ts             # 知识搜索与浏览
@@ -152,7 +144,6 @@ src/
     useSettings.ts              # 设置读写
   store/
     appStore.ts                 # 全局状态：当前页、用户信息、初始化状态
-    captureStore.ts             # 收件箱项、待路由队列
     conversationStore.ts        # 活跃会话、消息列表、当前模式、流式状态
   lib/
     ipc.ts                      # IPC 命令类型定义（与 Rust 命令签名对齐）
@@ -181,7 +172,6 @@ src/
   │ └── _assets/                # 附件（图片、PDF）
   data/
   │ ├── main.db                 # SQLite 主库（L0/L1 索引 + FTS5）
-  │ ├── queue.db                # 离线捕获队列（轻量独立）
   │ └── archive/                # 冷归档
   │     └── 2026-01.jsonl       # 按月归档对话
   config/

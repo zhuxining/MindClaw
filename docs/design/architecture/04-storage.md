@@ -109,7 +109,7 @@ CREATE INDEX idx_memories_category ON memories(category, importance DESC);
 CREATE INDEX idx_memories_unsurfaced ON memories(surfaced, importance DESC)
   WHERE surfaced = 0 AND superseded_by IS NULL;
 
--- 捕获路由不需要中间表：用户输入由 Agent / routing skill 判断后直接写入目标表
+-- 输入路由不需要中间表：Agent 对话中理解意图后直接写入目标表
 -- （tasks / resources / daily notes / knowledge notes）
 
 -- 对话会话

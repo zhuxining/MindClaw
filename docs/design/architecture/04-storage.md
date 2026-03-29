@@ -23,7 +23,7 @@ CREATE TABLE notes (
                              --   笔记: 从 frontmatter 提取
                              --   目录: 聚合子笔记 tags（去重合并）
   overview   TEXT,           -- ~2k tokens 概要（L1）
-                             --   笔记: 从 frontmatter 提取（Haiku 生成或人工编写）
+                             --   笔记: 从 frontmatter 提取（自动生成或人工编写）
                              --   目录: 聚合子笔记概要
   source     TEXT,           -- 创建方式（从 frontmatter 提取，仅笔记有）
                              --   NULL         — 用户手动创建
@@ -209,8 +209,8 @@ updated: 2026-03-20
 
 1. 用户提交 URL/PDF → 写入 `resources` 表（`status=pending`）
 2. Agent 提取内容 → 更新 `status=parsing`
-3. Haiku 生成 tags（L0）+ overview（L1）
-4. Sonnet 提炼正文为结构化知识笔记（L2）→ 写入 `vault/knowledge/` + frontmatter
+3. LLM 生成 tags（L0）+ overview（L1）
+4. 提炼正文为结构化知识笔记（L2）→ 写入 `vault/knowledge/` + frontmatter
 5. 更新 `resources.note_path` + `status=done` → 知识笔记进入"待确认"状态
 6. 人类审核确认 → 知识笔记正式发布（可选：确认后更新 `status=confirmed`）
 
@@ -221,7 +221,7 @@ updated: 2026-03-20
   - tags 设计原则：覆盖核心概念 + 关联领域 + 关键人名/术语，总量控制在 ~100 tokens
 - `overview` = **L1**（~2k tokens，从 frontmatter 提取，缓存到 SQLite `notes.overview`）
   - overview 是知识的结构化概要，Agent 读它即可理解核心内容，无需加载全文
-  - 首次创建时由 SubAgent Haiku 从正文生成，写回 frontmatter 持久化
+  - 首次创建时由 SubAgent 从正文生成，写回 frontmatter 持久化
   - 人类可手动编辑 overview 提高精度（frontmatter 是真相源，SQLite 是缓存）
   - 笔记正文更新时，SubAgent 异步重新生成 overview 并写回 frontmatter
 - 完整 Markdown 正文 = **L2**（仅在 Agent 明确需要时从文件系统读取）
@@ -247,7 +247,7 @@ SQLite notes 表（目录也是一条记录，path 无 .md 后缀）：
   overview: "3 篇笔记：价值投资核心原则、风险管理框架、量化策略入门..."  (聚合 L1)
 ```
 
-目录和笔记统一在 `notes` 表中，通过 path 后缀区分（`.md` 为笔记，否则为目录）。L0 搜索只查一张表，检索路径统一。目录 L0（tags）在子笔记 CRUD 时自动聚合——合并去重子笔记的所有 tags。目录 L1 由 Haiku 从子笔记 L1 聚合生成。
+目录和笔记统一在 `notes` 表中，通过 path 后缀区分（`.md` 为笔记，否则为目录）。L0 搜索只查一张表，检索路径统一。目录 L0（tags）在子笔记 CRUD 时自动聚合——合并去重子笔记的所有 tags。目录 L1 由 SubAgent 从子笔记 L1 聚合生成。
 
 #### RAG 检索流程（渐进式加载）
 
@@ -283,23 +283,23 @@ SQLite notes 表（目录也是一条记录，path 无 .md 后缀）：
 
 | 策略 | 方式 | 写入位置 | 适用场景 |
 |------|------|---------|---------|
-| **Haiku 生成** | SubAgent 从正文生成结构化概要 | 写入 frontmatter `overview` 字段 | 默认策略，笔记创建/更新时异步触发 |
+| **LLM 生成** | SubAgent 从正文生成结构化概要 | 写入 frontmatter `overview` 字段 | 默认策略，笔记创建/更新时异步触发 |
 | **人工编写** | 用户直接编辑 frontmatter overview | frontmatter（真相源） | 高价值笔记需精确概要 |
-| **截断兜底** | 取正文前 ~2k tokens | 仅缓存到 SQLite（不写 frontmatter） | Haiku 调用失败时的降级策略 |
+| **截断兜底** | 取正文前 ~2k tokens | 仅缓存到 SQLite（不写 frontmatter） | LLM 调用失败时的降级策略 |
 
 overview 的生命周期：
 
 1. 笔记创建 → SubAgent 异步生成 overview → 写回 frontmatter → 同步到 SQLite 缓存
 2. 人类编辑 frontmatter 中的 overview 后，下次索引时以 frontmatter 为准覆盖 SQLite
-3. Haiku 调用失败时，使用截断兜底策略缓存到 SQLite，frontmatter 中的 overview 保持为空或保留旧值
+3. LLM 调用失败时，使用截断兜底策略缓存到 SQLite，frontmatter 中的 overview 保持为空或保留旧值
 
 #### 索引更新触发
 
 | 触发事件 | 更新内容 |
 |---------|---------|
-| 笔记创建/更新 | 提取 frontmatter tags → L0；提取 frontmatter overview → L1（无则 Haiku 生成写回）；更新 FTS5；聚合 parent_dir 目录的 L0/L1 |
+| 笔记创建/更新 | 提取 frontmatter tags → L0；提取 frontmatter overview → L1（无则 LLM 生成写回）；更新 FTS5；聚合 parent_dir 目录的 L0/L1 |
 | 笔记删除 | 移除 notes/notes_fts 记录；重新聚合所属目录 |
-| 新目录出现 | 自动插入目录记录（path 无 .md 后缀），聚合子笔记 tags → L0，Haiku 生成 L1 |
+| 新目录出现 | 自动插入目录记录（path 无 .md 后缀），聚合子笔记 tags → L0，SubAgent 生成 L1 |
 | 定时任务 index_rebuild | 增量对比 mtime，修复不一致，补全缺失的目录记录 |
 
 ### 对话历史分层
@@ -317,7 +317,7 @@ overview 的生命周期：
 ```
 settings.json              OS Keychain                 SQLite
 ─────────────              ─────────────               ──────
-LLM 模型选择               API Key（加密）              记忆（memories 表）
+默认模型配置               API Key（加密）              记忆（memories 表）
 主题 / 语言                Gateway Bearer Token        使用统计
 Vault 路径
 同步配置

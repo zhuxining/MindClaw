@@ -47,7 +47,7 @@
 ├──────────────────┬──────────────────────────────────────┤
 │  Provider Layer  │          Tool Layer                  │
 │  Claude API      │  基础能力: fs · shell · mcp_client   │
-│  Haiku / Sonnet  │  元工具: operations (按需调用)        │
+│                  │  元工具: operations (按需调用)        │
 ├──────────────────┼──────────────────────────────────────┤
 │  Memory Layer    │        Services Layer                │
 │  Agent 私有记忆   │  核心业务逻辑 (前端/Agent 共用)       │

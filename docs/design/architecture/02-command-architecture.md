@@ -395,7 +395,7 @@ fn main() {
             CliCommand::Chat { message } => {
                 let runtime = runtime.with_provider()?;
                 let provider = runtime.provider.as_ref().unwrap();
-                let response = provider.chat(ModelTier::Sonnet, &[
+                let response = provider.chat(&[
                     ChatMessage::user(&message),
                 ]).await?;
                 println!("{}", response.text());

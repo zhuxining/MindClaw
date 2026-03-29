@@ -74,7 +74,7 @@ src-tauri/
       task.rs                   # TaskService：任务 CRUD、状态管理
     providers/
       mod.rs                    # 模块导出 + re-export
-      traits.rs                 # Provider trait、ModelTier、ChatMessage、ProviderResponse
+      traits.rs                 # Provider trait、ChatMessage、ProviderResponse
       config.rs                 # ProviderConfig / ModelConfig 数据结构 + builtin_configs()
       registry.rs               # ProviderRegistry：配置注册 + 工厂方法（配置驱动，非代码驱动）
       openai_compat.rs          # OpenAICompatProvider：通用 OpenAI 兼容实现（OpenAI/DeepSeek/Moonshot 等）
@@ -137,7 +137,7 @@ src/
     settings/
       ApiKeyInput.tsx           # API Key 安全输入
       RoleTemplates.tsx         # 冷启动角色选择
-      ModelSelector.tsx         # Haiku/Sonnet 偏好
+      ModelSelector.tsx         # 模型偏好设置
   hooks/
     useIpc.ts                   # 通用 invoke() 封装（泛型、错误处理、loading）
     useConversation.ts          # 对话状态、消息发送、模式切换

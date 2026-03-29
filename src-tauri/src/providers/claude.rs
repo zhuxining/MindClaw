@@ -1,6 +1,8 @@
 use super::config::ProviderConfig;
-use super::traits::{ChatMessage, ModelTier, Provider, ProviderResponse};
+use super::traits::{ChatRequest, ModelTier, Provider, ProviderResponse};
 use crate::error::AppResult;
+use futures_util::stream::Stream;
+use std::pin::Pin;
 
 #[allow(dead_code)]
 pub struct ClaudeProvider {
@@ -40,22 +42,15 @@ impl Provider for ClaudeProvider {
         self.tier.clone()
     }
 
-    async fn chat(
-        &self,
-        _messages: Vec<ChatMessage>,
-        _system: Option<&str>,
-        _max_tokens: u32,
-    ) -> AppResult<ProviderResponse> {
+    async fn chat(&self, _request: ChatRequest<'_>) -> AppResult<ProviderResponse> {
         todo!("实现 Claude API 调用")
     }
 
     async fn chat_stream(
         &self,
-        _messages: Vec<ChatMessage>,
-        _system: Option<&str>,
-        _max_tokens: u32,
-        _on_token: Box<dyn Fn(String) + Send + Sync>,
-    ) -> AppResult<ProviderResponse> {
+        _request: ChatRequest<'_>,
+    ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<crate::agent::events::ProviderEvent>> + Send>>>
+    {
         todo!("实现 Claude 流式 API 调用")
     }
 }

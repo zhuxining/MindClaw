@@ -9,4 +9,7 @@ mod tests;
 
 pub use config::{ModelConfig, ProviderConfig};
 pub use registry::ProviderRegistry;
-pub use traits::{ChatMessage, ModelTier, Provider, ProviderResponse};
+pub use traits::{
+    ChatMessage, ChatRequest, MessageContent, MessageRole, ModelTier, Provider, ProviderResponse,
+    ToolChoice, ToolSchema,
+};

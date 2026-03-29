@@ -65,7 +65,9 @@ tokio = { version = "1", default-features = false, features = [
     "fs",
     "signal",
 ] }
-tokio-stream = { version = "0.1.18", default-features = false }
+tokio-stream = { version = "0.1.18", default-features = false, features = [
+    "sync",
+] }
 
 # Database
 rusqlite = { version = "0.39.0", features = ["bundled"] }
@@ -102,6 +104,8 @@ async-trait = "0.1"
 futures-util = { version = "0.3", default-features = false, features = [
     "sink",
 ] }
+dashmap = "6.0"
+tokio-util = "0.7"
 
 # Logging
 tracing = "0.1"

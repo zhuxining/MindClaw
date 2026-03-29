@@ -5,7 +5,9 @@
 use crate::providers::config::builtin_configs;
 use crate::providers::openai_compat::OpenAICompatProvider;
 use crate::providers::tests::require_env;
-use crate::providers::traits::{ChatMessage, Provider};
+use crate::providers::traits::{ChatMessage, ChatRequest, Provider, ToolChoice};
+use futures_util::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 #[ignore = "requires external DeepSeek API access and credentials"]
@@ -24,23 +26,34 @@ async fn test_deepseek_chat() {
     let provider = OpenAICompatProvider::new(deepseek_config, api_key, Some("deepseek-chat"))
         .expect("Failed to create provider");
 
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: "Hello! Please respond with a short greeting.".to_string(),
-        tool_call_id: None,
-    }];
+    let messages = vec![ChatMessage::user(
+        "Hello! Please respond with a short greeting.",
+    )];
 
-    let response = provider.chat(messages, None, 50).await;
+    let response = provider
+        .chat(ChatRequest {
+            model: provider.model_id(),
+            messages: &messages,
+            system: None,
+            tools: &[],
+            tool_choice: ToolChoice::None,
+            max_tokens: Some(50),
+            cancel: CancellationToken::new(),
+        })
+        .await;
     assert!(response.is_ok(), "Chat failed: {:?}", response.err());
 
     let resp = response.unwrap();
-    assert!(!resp.content.is_empty(), "Response content is empty");
-    assert!(resp.input_tokens > 0, "Input tokens should be > 0");
-    assert!(resp.output_tokens > 0, "Output tokens should be > 0");
+    assert!(
+        !resp.message.text_content().is_empty(),
+        "Response content is empty"
+    );
+    assert!(resp.usage.input_tokens > 0, "Input tokens should be > 0");
+    assert!(resp.usage.output_tokens > 0, "Output tokens should be > 0");
 
     println!("✓ DeepSeek chat test passed");
-    println!("  Input tokens: {}", resp.input_tokens);
-    println!("  Output tokens: {}", resp.output_tokens);
+    println!("  Input tokens: {}", resp.usage.input_tokens);
+    println!("  Output tokens: {}", resp.usage.output_tokens);
 }
 
 #[tokio::test]
@@ -62,33 +75,41 @@ async fn test_deepseek_stream() {
     let provider = OpenAICompatProvider::new(deepseek_config, api_key, Some("deepseek-chat"))
         .expect("Failed to create provider");
 
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: "Count from 1 to 3.".to_string(),
-        tool_call_id: None,
-    }];
+    let messages = vec![ChatMessage::user("Count from 1 to 3.")];
 
     let token_count = Arc::new(Mutex::new(0usize));
     let token_count_clone = Arc::clone(&token_count);
 
-    let response = provider
-        .chat_stream(
-            messages,
-            None,
-            50,
-            Box::new(move |_token: String| {
-                let mut count = token_count_clone.lock().unwrap();
-                *count += 1;
-            }),
-        )
+    let stream = provider
+        .chat_stream(ChatRequest {
+            model: provider.model_id(),
+            messages: &messages,
+            system: None,
+            tools: &[],
+            tool_choice: ToolChoice::None,
+            max_tokens: Some(50),
+            cancel: CancellationToken::new(),
+        })
         .await;
 
-    assert!(response.is_ok(), "Stream chat failed: {:?}", response.err());
+    assert!(stream.is_ok(), "Stream chat failed: {:?}", stream.err());
 
-    let resp = response.unwrap();
+    let mut text = String::new();
+    let mut stream = stream.unwrap();
+    while let Some(event) = stream.next().await {
+        match event.expect("stream event should be ok") {
+            crate::agent::events::ProviderEvent::TextDelta { text: chunk } => {
+                let mut count = token_count_clone.lock().unwrap();
+                *count += 1;
+                text.push_str(&chunk);
+            }
+            crate::agent::events::ProviderEvent::Finished { .. } => break,
+            crate::agent::events::ProviderEvent::ToolCall { .. } => {}
+        }
+    }
+
     let tokens_received = *token_count.lock().unwrap();
-
-    assert!(!resp.content.is_empty(), "Response content is empty");
+    assert!(!text.is_empty(), "Response content is empty");
     assert!(tokens_received > 0, "Should have received tokens");
 
     println!("✓ DeepSeek stream test passed");
@@ -112,13 +133,19 @@ async fn test_deepseek_reasoner() {
     let provider = OpenAICompatProvider::new(deepseek_config, api_key, Some("deepseek-reasoner"))
         .expect("Failed to create provider");
 
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: "What is 2+2?".to_string(),
-        tool_call_id: None,
-    }];
+    let messages = vec![ChatMessage::user("What is 2+2?")];
 
-    let response = provider.chat(messages, None, 100).await;
+    let response = provider
+        .chat(ChatRequest {
+            model: provider.model_id(),
+            messages: &messages,
+            system: None,
+            tools: &[],
+            tool_choice: ToolChoice::None,
+            max_tokens: Some(100),
+            cancel: CancellationToken::new(),
+        })
+        .await;
     assert!(
         response.is_ok(),
         "Reasoner chat failed: {:?}",
@@ -129,7 +156,7 @@ async fn test_deepseek_reasoner() {
     // Note: DeepSeek R1 may return reasoning in separate field,
     // just verify we got a response (content may be empty)
     assert!(
-        !resp.content.is_empty() || resp.output_tokens > 0,
+        !resp.message.text_content().is_empty() || resp.usage.output_tokens > 0,
         "Response should have content or tokens"
     );
 

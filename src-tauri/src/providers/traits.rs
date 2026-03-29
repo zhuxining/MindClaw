@@ -1,5 +1,10 @@
+use crate::agent::events::{ProviderEvent, UsageStats};
 use crate::error::AppResult;
+use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::pin::Pin;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -10,47 +15,122 @@ pub enum ModelTier {
     Smart,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageRole {
+    System,
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessageContent {
+    Text(String),
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-    /// Tool call ID for tool result messages (role="tool")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
+    pub role: MessageRole,
+    pub content: Vec<MessageContent>,
 }
 
 impl ChatMessage {
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::System,
+            content: vec![MessageContent::Text(content.into())],
+        }
+    }
+
     pub fn user(content: impl Into<String>) -> Self {
         Self {
-            role: "user".to_string(),
-            content: content.into(),
-            tool_call_id: None,
+            role: MessageRole::User,
+            content: vec![MessageContent::Text(content.into())],
         }
     }
 
-    pub fn assistant(content: impl Into<String>) -> Self {
+    pub fn assistant_text(content: impl Into<String>) -> Self {
         Self {
-            role: "assistant".to_string(),
-            content: content.into(),
-            tool_call_id: None,
+            role: MessageRole::Assistant,
+            content: vec![MessageContent::Text(content.into())],
         }
     }
 
-    pub fn tool_result(content: impl Into<String>, tool_call_id: impl Into<String>) -> Self {
+    pub fn assistant_parts(content: Vec<MessageContent>) -> Self {
         Self {
-            role: "tool".to_string(),
-            content: content.into(),
-            tool_call_id: Some(tool_call_id.into()),
+            role: MessageRole::Assistant,
+            content,
         }
+    }
+
+    pub fn tool_result(
+        content: impl Into<String>,
+        tool_call_id: impl Into<String>,
+        is_error: bool,
+    ) -> Self {
+        Self {
+            role: MessageRole::User,
+            content: vec![MessageContent::ToolResult {
+                tool_use_id: tool_call_id.into(),
+                content: content.into(),
+                is_error,
+            }],
+        }
+    }
+
+    pub fn text_content(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|part| match part {
+                MessageContent::Text(text) => Some(text.as_str()),
+                MessageContent::ToolUse { .. } | MessageContent::ToolResult { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderResponse {
-    pub content: String,
-    pub input_tokens: u32,
-    pub output_tokens: u32,
+    pub message: ChatMessage,
+    pub usage: UsageStats,
     pub stop_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolChoice {
+    Auto,
+    None,
+    Specific(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSchema {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+pub struct ChatRequest<'a> {
+    pub model: &'a str,
+    pub messages: &'a [ChatMessage],
+    pub system: Option<&'a str>,
+    pub tools: &'a [ToolSchema],
+    pub tool_choice: ToolChoice,
+    pub max_tokens: Option<u32>,
+    pub cancel: CancellationToken,
 }
 
 /// AI Provider trait：所有 LLM 接入实现此接口
@@ -62,18 +142,14 @@ pub trait Provider: Send + Sync {
     fn model_id(&self) -> &str;
     fn tier(&self) -> ModelTier;
 
-    async fn chat(
-        &self,
-        messages: Vec<ChatMessage>,
-        system: Option<&str>,
-        max_tokens: u32,
-    ) -> AppResult<ProviderResponse>;
+    async fn chat(&self, request: ChatRequest<'_>) -> AppResult<ProviderResponse>;
 
     async fn chat_stream(
         &self,
-        messages: Vec<ChatMessage>,
-        system: Option<&str>,
-        max_tokens: u32,
-        on_token: Box<dyn Fn(String) + Send + Sync>,
-    ) -> AppResult<ProviderResponse>;
+        request: ChatRequest<'_>,
+    ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ProviderEvent>> + Send>>>;
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
 }

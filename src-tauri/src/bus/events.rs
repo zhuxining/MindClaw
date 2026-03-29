@@ -1,11 +1,19 @@
+use crate::agent::events::UserVisiblePhase;
+use crate::models::conversation::ConversationMode;
 use serde::{Deserialize, Serialize};
 
 /// 进入 MessageBus 的入站消息（Channel → Agent）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboundMessage {
     pub id: String,
+    /// 请求 ID（用于追踪）
+    pub request_id: String,
+    /// 会话 ID（可选，新会话时为 None）
+    pub session_id: Option<String>,
     pub sender: String,
     pub channel: String,
+    /// 对话模式
+    pub mode: ConversationMode,
     pub content: String,
     pub timestamp: i64,
 }
@@ -14,30 +22,36 @@ pub struct InboundMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundMessage {
     pub id: String,
+    /// 请求 ID（关联入站消息）
+    pub request_id: String,
+    /// 会话 ID
+    pub session_id: String,
     pub target_sender: String,
     pub target_channel: String,
-    pub content: String,
-    pub is_streaming: bool,
-    pub timestamp: i64,
+    /// 出站 payload
+    pub payload: OutboundPayload,
 }
 
-/// MessageBus：双向异步消息队列（Channel ↔ Agent 解耦）
-pub struct MessageBus {
-    pub inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
-    pub inbound_rx: tokio::sync::mpsc::Receiver<InboundMessage>,
-    pub outbound_tx: tokio::sync::mpsc::Sender<OutboundMessage>,
-    pub outbound_rx: tokio::sync::mpsc::Receiver<OutboundMessage>,
+/// 出站消息负载
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum OutboundPayload {
+    /// 文本增量（流式）
+    Chunk { content: String },
+    /// 完成
+    Done,
+    /// 错误
+    Error { message: String, retryable: bool },
+    /// 状态更新
+    Status { phase: UserVisiblePhase },
 }
 
-impl MessageBus {
-    pub fn new(capacity: usize) -> Self {
-        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel(capacity);
-        let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(capacity);
-        Self {
-            inbound_tx,
-            inbound_rx,
-            outbound_tx,
-            outbound_rx,
-        }
-    }
+/// 消息来源
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelSource {
+    Desktop,
+    Telegram,
+    Feishu,
+    Webhook,
 }

@@ -1,5 +1,8 @@
 use super::config::ProviderConfig;
-use super::traits::{ChatMessage, ModelTier, Provider, ProviderResponse};
+use super::traits::{
+    ChatMessage, ChatRequest, MessageContent, MessageRole, ModelTier, Provider, ProviderResponse,
+};
+use crate::agent::events::{ProviderEvent, UsageStats};
 use crate::error::{AppError, AppResult};
 use async_openai::config::OpenAIConfig;
 use async_openai::types::chat::{
@@ -8,6 +11,10 @@ use async_openai::types::chat::{
     ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs,
 };
 use async_openai::Client;
+use futures_util::StreamExt;
+use std::pin::Pin;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 /// 通用 OpenAI 兼容 Provider，支持所有 OpenAI 兼容 API（OpenAI、DeepSeek、Moonshot 等）
 pub struct OpenAICompatProvider {
@@ -58,51 +65,118 @@ impl OpenAICompatProvider {
         Self::new(config, api_key, model_id)
     }
 
-    /// 将内部 ChatMessage 转换为 async-openai 请求消息
     fn convert_messages(
         &self,
-        messages: Vec<ChatMessage>,
+        messages: &[ChatMessage],
         system: Option<&str>,
     ) -> AppResult<Vec<ChatCompletionRequestMessage>> {
-        let mut request_messages: Vec<ChatCompletionRequestMessage> = Vec::new();
+        let mut request_messages = Vec::new();
 
         if let Some(sys) = system {
             request_messages.push(
                 ChatCompletionRequestSystemMessageArgs::default()
                     .content(sys)
                     .build()
-                    .map_err(|e| AppError::Provider(format!("system message build: {}", e)))?
+                    .map_err(|e| AppError::Provider(format!("system message build: {e}")))?
                     .into(),
             );
         }
 
         for msg in messages {
-            let req_msg = match msg.role.as_str() {
-                "user" => ChatCompletionRequestUserMessageArgs::default()
-                    .content(msg.content)
-                    .build()
-                    .map_err(|e| AppError::Provider(format!("user message build: {}", e)))?
-                    .into(),
-                "assistant" => ChatCompletionRequestAssistantMessageArgs::default()
-                    .content(msg.content)
-                    .build()
-                    .map_err(|e| AppError::Provider(format!("assistant message build: {}", e)))?
-                    .into(),
-                "tool" => {
-                    let tool_call_id = msg.tool_call_id.unwrap_or_default();
-                    ChatCompletionRequestToolMessageArgs::default()
-                        .content(msg.content)
-                        .tool_call_id(tool_call_id)
-                        .build()
-                        .map_err(|e| AppError::Provider(format!("tool message build: {}", e)))?
-                        .into()
+            match msg.role {
+                MessageRole::System => {
+                    for part in &msg.content {
+                        match part {
+                            MessageContent::Text(text) => request_messages.push(
+                                ChatCompletionRequestSystemMessageArgs::default()
+                                    .content(text.clone())
+                                    .build()
+                                    .map_err(|e| {
+                                        AppError::Provider(format!(
+                                            "system message build from content: {e}"
+                                        ))
+                                    })?
+                                    .into(),
+                            ),
+                            MessageContent::ToolUse { .. } | MessageContent::ToolResult { .. } => {
+                                return Err(AppError::Provider(
+                                    "system messages only support text content".to_string(),
+                                ));
+                            }
+                        }
+                    }
                 }
-                role => return Err(AppError::Provider(format!("unknown role: {}", role))),
-            };
-            request_messages.push(req_msg);
+                MessageRole::User => {
+                    for part in &msg.content {
+                        match part {
+                            MessageContent::Text(text) => request_messages.push(
+                                ChatCompletionRequestUserMessageArgs::default()
+                                    .content(text.clone())
+                                    .build()
+                                    .map_err(|e| {
+                                        AppError::Provider(format!("user message build: {e}"))
+                                    })?
+                                    .into(),
+                            ),
+                            MessageContent::ToolResult {
+                                tool_use_id,
+                                content,
+                                ..
+                            } => request_messages.push(
+                                ChatCompletionRequestToolMessageArgs::default()
+                                    .tool_call_id(tool_use_id)
+                                    .content(content.clone())
+                                    .build()
+                                    .map_err(|e| {
+                                        AppError::Provider(format!("tool message build: {e}"))
+                                    })?
+                                    .into(),
+                            ),
+                            MessageContent::ToolUse { .. } => {
+                                return Err(AppError::Provider(
+                                    "user messages cannot contain tool use blocks".to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                MessageRole::Assistant => {
+                    let text = msg.text_content();
+                    if text.is_empty() {
+                        return Err(AppError::Provider(
+                            "assistant messages without text are not supported yet".to_string(),
+                        ));
+                    }
+
+                    request_messages.push(
+                        ChatCompletionRequestAssistantMessageArgs::default()
+                            .content(text)
+                            .build()
+                            .map_err(|e| {
+                                AppError::Provider(format!("assistant message build: {e}"))
+                            })?
+                            .into(),
+                    );
+                }
+            }
         }
 
         Ok(request_messages)
+    }
+
+    fn build_request(
+        &self,
+        request: &ChatRequest<'_>,
+    ) -> AppResult<CreateChatCompletionRequestArgs> {
+        let request_messages = self.convert_messages(request.messages, request.system)?;
+        let max_tokens = request.max_tokens.unwrap_or(4_000);
+
+        let mut builder = CreateChatCompletionRequestArgs::default();
+        builder
+            .model(request.model)
+            .messages(request_messages)
+            .max_tokens(max_tokens);
+        Ok(builder)
     }
 }
 
@@ -120,27 +194,18 @@ impl Provider for OpenAICompatProvider {
         self.tier.clone()
     }
 
-    async fn chat(
-        &self,
-        messages: Vec<ChatMessage>,
-        system: Option<&str>,
-        max_tokens: u32,
-    ) -> AppResult<ProviderResponse> {
-        let request_messages = self.convert_messages(messages, system)?;
-
-        let request = CreateChatCompletionRequestArgs::default()
-            .model(&*self.model_id)
-            .messages(request_messages)
-            .max_tokens(max_tokens)
+    async fn chat(&self, request: ChatRequest<'_>) -> AppResult<ProviderResponse> {
+        let request = self
+            .build_request(&request)?
             .build()
-            .map_err(|e| AppError::Provider(format!("request build: {}", e)))?;
+            .map_err(|e| AppError::Provider(format!("request build: {e}")))?;
 
         let response = self
             .client
             .chat()
             .create(request)
             .await
-            .map_err(|e| AppError::Provider(format!("API error: {}", e)))?;
+            .map_err(|e| AppError::Provider(format!("API error: {e}")))?;
 
         let choice = response
             .choices
@@ -148,80 +213,99 @@ impl Provider for OpenAICompatProvider {
             .ok_or_else(|| AppError::Provider("no response choices".to_string()))?;
 
         let usage = response.usage.as_ref();
-        let input_tokens = usage.map(|u| u.prompt_tokens).unwrap_or(0);
-        let output_tokens = usage.map(|u| u.completion_tokens).unwrap_or(0);
 
         Ok(ProviderResponse {
-            content: choice.message.content.clone().unwrap_or_default(),
-            input_tokens,
-            output_tokens,
+            message: ChatMessage::assistant_text(
+                choice.message.content.clone().unwrap_or_default(),
+            ),
+            usage: UsageStats {
+                input_tokens: usage.map(|u| u.prompt_tokens).unwrap_or(0),
+                output_tokens: usage.map(|u| u.completion_tokens).unwrap_or(0),
+            },
             stop_reason: choice
                 .finish_reason
-                .map(|r| format!("{:?}", r))
+                .map(|reason| format!("{reason:?}"))
                 .unwrap_or_else(|| "complete".to_string()),
         })
     }
 
     async fn chat_stream(
         &self,
-        messages: Vec<ChatMessage>,
-        system: Option<&str>,
-        max_tokens: u32,
-        on_token: Box<dyn Fn(String) + Send + Sync>,
-    ) -> AppResult<ProviderResponse> {
-        use futures_util::StreamExt;
-
-        let request_messages = self.convert_messages(messages, system)?;
-
-        let request = CreateChatCompletionRequestArgs::default()
-            .model(&*self.model_id)
-            .messages(request_messages)
-            .max_tokens(max_tokens)
+        request: ChatRequest<'_>,
+    ) -> AppResult<Pin<Box<dyn futures_util::stream::Stream<Item = AppResult<ProviderEvent>> + Send>>>
+    {
+        let cancel = request.cancel.clone();
+        let request = self
+            .build_request(&request)?
             .stream(true)
             .build()
-            .map_err(|e| AppError::Provider(format!("request build: {}", e)))?;
+            .map_err(|e| AppError::Provider(format!("request build: {e}")))?;
 
-        let mut stream = self
+        let mut upstream = self
             .client
             .chat()
             .create_stream(request)
             .await
-            .map_err(|e| AppError::Provider(format!("stream creation: {}", e)))?;
+            .map_err(|e| AppError::Provider(format!("stream creation: {e}")))?;
 
-        let mut text_accumulator = String::new();
-        let mut input_tokens = 0u32;
-        let mut output_tokens = 0u32;
-        let mut finish_reason: Option<String> = None;
+        let (tx, rx) = mpsc::channel(32);
 
-        while let Some(chunk_result) = stream.next().await {
-            let chunk =
-                chunk_result.map_err(|e| AppError::Provider(format!("stream error: {}", e)))?;
+        tokio::spawn(async move {
+            let mut usage = UsageStats {
+                input_tokens: 0,
+                output_tokens: 0,
+            };
+            let mut finish_reason: Option<String> = None;
 
-            if let Some(usage) = chunk.usage {
-                input_tokens = usage.prompt_tokens;
-                output_tokens = usage.completion_tokens;
-            }
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        break;
+                    }
+                    maybe_chunk = upstream.next() => {
+                        match maybe_chunk {
+                            Some(Ok(chunk)) => {
+                                if let Some(chunk_usage) = chunk.usage {
+                                    usage.input_tokens = chunk_usage.prompt_tokens;
+                                    usage.output_tokens = chunk_usage.completion_tokens;
+                                }
 
-            for choice in &chunk.choices {
-                if let Some(reason) = &choice.finish_reason {
-                    finish_reason = Some(format!("{:?}", reason));
-                }
+                                for choice in chunk.choices {
+                                    if let Some(reason) = choice.finish_reason {
+                                        finish_reason = Some(format!("{reason:?}"));
+                                    }
 
-                let delta = &choice.delta;
-                if let Some(content) = &delta.content {
-                    if !content.is_empty() {
-                        on_token(content.clone());
-                        text_accumulator.push_str(content);
+                                    if let Some(content) = choice.delta.content {
+                                        if !content.is_empty()
+                                            && tx.send(Ok(ProviderEvent::TextDelta { text: content })).await.is_err()
+                                        {
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                            Some(Err(error)) => {
+                                let _ = tx
+                                    .send(Err(AppError::Provider(format!("stream error: {error}"))))
+                                    .await;
+                                return;
+                            }
+                            None => {
+                                let _ = tx
+                                    .send(Ok(ProviderEvent::Finished {
+                                        stop_reason: finish_reason
+                                            .unwrap_or_else(|| "complete".to_string()),
+                                        usage,
+                                    }))
+                                    .await;
+                                return;
+                            }
+                        }
                     }
                 }
             }
-        }
+        });
 
-        Ok(ProviderResponse {
-            content: text_accumulator,
-            input_tokens,
-            output_tokens,
-            stop_reason: finish_reason.unwrap_or_else(|| "complete".to_string()),
-        })
+        Ok(Box::pin(ReceiverStream::new(rx)))
     }
 }

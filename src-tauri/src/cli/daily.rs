@@ -1,0 +1,1 @@
+// mindclaw daily [date]

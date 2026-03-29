@@ -1,8 +1,19 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+pub mod agent;
+pub mod agent_commands;
+pub mod bus;
+pub mod channels;
+pub mod cli;
+pub mod commands;
+pub mod cron;
+pub mod error;
+pub mod gateway;
+pub mod heartbeat;
+pub mod memory;
+pub mod models;
+pub mod providers;
+pub mod services;
+pub mod storage;
+pub mod tools;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -19,7 +30,21 @@ pub fn run() {
         .plugin(tauri_plugin_persisted_scope::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            commands::conversation::send_message,
+            commands::conversation::get_session_history,
+            commands::daily::get_daily,
+            commands::daily::save_daily,
+            commands::tasks::list_tasks,
+            commands::tasks::create_task,
+            commands::tasks::update_task_status,
+            commands::knowledge::search_knowledge,
+            commands::knowledge::get_knowledge,
+            commands::settings::get_settings,
+            commands::settings::save_settings,
+            commands::settings::set_api_key,
+            commands::system::get_system_status,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

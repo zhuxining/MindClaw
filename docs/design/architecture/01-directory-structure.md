@@ -72,10 +72,12 @@ src-tauri/
       daily.rs                  # DailyService：日记读写、模板创建、条目追加
       task.rs                   # TaskService：任务 CRUD、状态管理
     providers/
-      mod.rs                    # Provider trait 定义 + create_provider() 工厂
+      mod.rs                    # 模块导出 + re-export
       traits.rs                 # Provider trait、ModelTier、ChatMessage、ProviderResponse
-      claude.rs                 # ClaudeProvider：Claude API 实现（Haiku/Sonnet 分层）
-      config.rs                 # 模型配置、API endpoint、token 限制
+      config.rs                 # ProviderConfig / ModelConfig 数据结构 + builtin_configs()
+      registry.rs               # ProviderRegistry：配置注册 + 工厂方法（配置驱动，非代码驱动）
+      openai_compat.rs          # OpenAICompatProvider：通用 OpenAI 兼容实现（OpenAI/DeepSeek/Moonshot 等）
+      claude.rs                 # ClaudeProvider：Claude API 实现（独立协议，stub）
     tools/
       mod.rs                    # ToolRegistry + Tool trait（注册/查找/执行）
       traits.rs                 # Tool trait、ToolInput、ToolOutput

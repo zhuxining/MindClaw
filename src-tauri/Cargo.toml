@@ -116,4 +116,4 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # OpenAI API client
-async-openai = "0.34.0"
+async-openai = { version = "0.34.0", features = ["chat-completion"] }

@@ -15,7 +15,7 @@
 | 设置 + API Key | settings, keychain | BYOK Claude API |
 | SQLite 存储 | storage::database | Schema 迁移、基础 CRUD |
 | Markdown 读写 | storage::markdown | 日记和知识笔记 |
-| Provider 层 | providers::claude | Claude API Haiku/Sonnet 调用 |
+| Provider 层 | providers::registry + openai_compat | 多提供商支持（OpenAI/DeepSeek 等，配置驱动） |
 | 基础工具 | tools::search, file_ops | 知识库搜索 + Markdown 文件操作 |
 | Cron 基础任务 | cron | index_rebuild, daily_summary, resource_process |
 | Heartbeat | heartbeat | 系统健康检测（DB、Vault、API Key） |
@@ -54,7 +54,7 @@
 | Agent 主动推送 | 异步日志与浮出机制 |
 | 知识图谱可视化 | — |
 | 本地 Embedding 模型 | 用 API embedding 或延期向量搜索 |
-| 多 Provider 支持 | OpenAI, Ollama 等 |
+| Ollama 本地模型 | ProviderRegistry.register() 自定义配置 |
 | Skills 外部加载/WASM | 动态加载外部技能包 |
 
 ---

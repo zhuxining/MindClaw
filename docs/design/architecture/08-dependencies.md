@@ -110,6 +110,9 @@ regex = "1.10"
 async-trait = "0.1"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
+# AI Provider（OpenAI 兼容 API 统一接入：OpenAI / DeepSeek / Moonshot / Groq 等）
+async-openai = { version = "0.34.0", default-features = false, features = ["chat-completion"] }
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "ansi", "env-filter"] }

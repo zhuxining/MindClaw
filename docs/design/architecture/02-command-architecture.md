@@ -6,11 +6,11 @@
 
 系统提供三种命令入口，覆盖不同使用场景，底层共享 Services 层：
 
-```text
+```
 React Frontend ── invoke() ──► Web Commands ──► Services ──► Storage
 对话中 /xxx ─────────────────► Agent Commands ─► Agent 生命周期控制
 终端 mindclaw ─────────────► CLI Commands ──► Services ──► Storage
-```text
+```
 
 ### 跨层命令矩阵
 
@@ -25,7 +25,7 @@ React Frontend ── invoke() ──► Web Commands ──► Services ──�
 
 **Agent Commands "不触发 LLM 调用"说明**：
 
-Agent Commands 在 `AgentLoop.process_message()` 中拦截，位于 Session 加载之后、Context 组装之前。虽然消息已经进入 AgentLoop，但拦截后会**直接返回确定性结果**，不会继续执行 Context 组装和 Provider 调用流程。因此"不触发 LLM 调用"指的是：
+Agent Commands 在 `AgentLoop.run_once()` 中拦截，位于 Session 加载之后、Context 组装之前。虽然消息已经进入 AgentLoop，但拦截后会**直接返回确定性结果**，不会继续执行 Context 组装和 Provider 调用流程。因此"不触发 LLM 调用"指的是：
 
 - 不调用 `Provider.chat()` 或 `Provider.chat_stream()`
 - 不消耗 token
@@ -50,17 +50,24 @@ Agent Commands 在 `AgentLoop.process_message()` 中拦截，位于 Session 加�
 
 | 命令 | 参数 | 返回 | 说明 |
 |------|------|------|------|
-| `conversation_send` | `{ message: String }` | `String`（session_id） | 发起对话，响应通过 Event 流式推送 |
+| `conversation_send` | `{ message: String, session_id?: String, mode?: ConversationMode }` | `SendMessageAck { session_id, request_id }` | 发起对话并入队，最终响应通过 Event 流式推送 |
 | `conversation_history` | `{ session_id: String, limit: u32 }` | `Vec<Message>` | 获取会话历史 |
 | `conversation_sessions` | `{ limit: u32 }` | `Vec<Session>` | 会话列表 |
 
-流式响应通过 Tauri Event 推送：
+流式响应通过 Tauri Event 推送。Desktop 端将 `OutboundPayload` 直接映射为统一事件：
 
-```text
-Event: "conversation_chunk" → { session_id, content, done }
-```text
+```
+Event: "conversation_event" →
+  { session_id, request_id, payload }
 
-前端通过 `listen("conversation_chunk", callback)` 接收。
+payload =
+  { type: "chunk", content }
+  | { type: "done" }
+  | { type: "error", message, retryable }
+  | { type: "status", phase }
+```
+
+前端通过 `listen("conversation_event", callback)` 接收，并按 `payload.type` 更新界面。
 
 #### Daily（日记）
 
@@ -122,7 +129,7 @@ Event: "conversation_chunk" → { session_id, content, done }
 // lib.rs
 .manage(DbState(Mutex::new(connection)))
 .manage(AppConfig::load()?)
-```text
+```
 
 命令通过 `State<'_, DbState>` 参数获取。
 
@@ -169,7 +176,7 @@ pub trait AgentCommand: Send + Sync {
     fn description(&self) -> &str;
     async fn execute(&self, ctx: AgentCommandContext) -> Result<AgentCommandResult, AppError>;
 }
-```text
+```
 
 ```rust
 // src-tauri/src/agent_commands/mod.rs
@@ -203,14 +210,14 @@ pub fn parse_agent_command(input: &str) -> Option<&str> {
         None
     }
 }
-```text
+```
 
 #### 拦截点
 
-Agent Commands 在 `AgentLoop.process_message()` 中拦截，位于 Session 加载之后、Context 组装之前。所有 Channel（Desktop/Telegram/Feishu）自动获得指令支持：
+Agent Commands 在 `AgentLoop.run_once()` 中拦截，位于 Session 加载之后、Context 组装之前。所有 Channel（Desktop/Telegram/Feishu）自动获得指令支持：
 
 ```rust
-// 在 agent_loop.rs process_message() 中
+// 在 agent_loop.rs run_once() 中
 
 // 1. Session
 let session = self.session_mgr.get_or_create(&message.sender, &message.mode).await?;
@@ -221,19 +228,32 @@ if let Some(cmd_name) = parse_agent_command(&message.content) {
         let ctx = AgentCommandContext {
             session: session.clone(),
             session_mgr: self.session_mgr.clone(),
-            sub_agent_tx: self.sub_agent_tx.clone(),
+            cancel_token: self.run_cancel_token(&session.id),
         };
         let result = cmd.execute(ctx).await?;
-        channel.send(SendMessage::text(&result.response)).await?;
+        self.bus.publish_outbound(OutboundMessage {
+            id: Uuid::new_v4().to_string(),
+            request_id: message.request_id.clone(),
+            session_id: session.id.clone(),
+            target: message.source.clone(),
+            payload: OutboundPayload::Chunk { content: result.response.clone() },
+        }).await?;
+        self.bus.publish_outbound(OutboundMessage {
+            id: Uuid::new_v4().to_string(),
+            request_id: message.request_id.clone(),
+            session_id: session.id.clone(),
+            target: message.source.clone(),
+            payload: OutboundPayload::Done,
+        }).await?;
         self.handle_action(result.action).await?;
-        return Ok(AgentResponse::from_text(result.response));
+        return Ok(());
     }
 }
 
 // 2. Context（正常对话流程继续）
 let context = self.context_builder.build(&message, &session).await?;
 // ...
-```text
+```
 
 #### 指令实现示例
 
@@ -261,7 +281,7 @@ impl AgentCommand for NewCommand {
         })
     }
 }
-```text
+```
 
 ### 3.3 CLI Commands — 终端命令行
 
@@ -319,7 +339,7 @@ pub enum TaskAction {
     List { #[arg(long)] status: Option<String> },
     Complete { id: String },
 }
-```text
+```
 
 #### 最小运行时
 
@@ -348,7 +368,7 @@ impl CliRuntime {
         Ok(self)
     }
 }
-```text
+```
 
 ```rust
 // src-tauri/src/bin/cli.rs
@@ -385,7 +405,7 @@ fn main() {
         Ok::<(), AppError>(())
     }).expect("CLI error");
 }
-```text
+```
 
 #### Cargo.toml 变更
 
@@ -396,7 +416,7 @@ path = "src/bin/cli.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-```text
+```
 
 #### 命令清单
 

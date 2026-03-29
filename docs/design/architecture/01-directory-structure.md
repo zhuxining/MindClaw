@@ -6,7 +6,7 @@
 
 ### 代码目录
 
-```text
+```
 src-tauri/
   src/
     main.rs                     # 入口，委托给 lib::run()
@@ -20,10 +20,10 @@ src-tauri/
       feishu.rs                 # 飞书 Bot Channel（Phase 2）
     bus/
       mod.rs                    # MessageBus：双向异步消息队列（Channel ↔ Agent 解耦）
-      events.rs                 # InboundMessage, OutboundMessage 定义
+      events.rs                 # InboundMessage, OutboundMessage, OutboundPayload 显式事件定义
     commands/                    # Tier 1: Web Commands（Tauri IPC，前端 invoke() 调用）
       mod.rs                    # 导出所有命令模块
-      conversation.rs           # 对话：→ AgentLoop (发消息) + SessionManager (查历史)
+      conversation.rs           # 对话：→ AgentLoop (入队) + SessionManager (查历史)
       daily.rs                  # 日记：→ DailyService
       tasks.rs                  # 任务：→ TaskService
       knowledge.rs              # 知识库：→ KnowledgeService
@@ -56,11 +56,12 @@ src-tauri/
       keychain.rs               # OS Keychain 存取（keyring crate）
     agent/
       mod.rs                    # AgentService 构造与初始化、接线
-      agent_loop.rs             # AgentLoop：消息处理主循环，Channel → Hooks → Context → Provider → Tool 循环 → 响应
+      agent_loop.rs             # AgentLoop：事件驱动编排器，Bus → Session Queue → RunOnce → ProviderEvent → Tool Loop → OutboundEvent
+      events.rs                 # ProviderEvent / AgentEvent / RunPhase 等运行时事件类型
       context_pipeline.rs       # ContextPipeline：可插拔上下文管线（ContextSource trait + 优先级 + token 预算）
       hooks.rs                  # HookRegistry：事件钩子（PreMessage/PostMessage/PreToolUse/PostToolUse）
       skills.rs                 # SkillRegistry：技能系统（分发 Tools/ContextSources/Hooks/SubAgentTasks/Operations）
-      session.rs                # SessionManager：按 sender 隔离会话、历史追加、裁剪、持久化
+      session.rs                # SessionManager：按 sender 隔离会话、turn 追加、裁剪、持久化
       sub_agent.rs              # SubAgentRegistry：trait-based 任务注册表 + SubAgentExecutor
     memory/
       mod.rs                    # MemoryManager：统一记忆层入口（单表 memories，upsert by key）
@@ -154,11 +155,11 @@ src/
   styles/
     global.css
     variables.css
-```text
+```
 
 ### 用户数据目录（运行时）
 
-```text
+```
 ~/MindClaw/
   vault/                        # Markdown 内容（Obsidian 兼容）
   │ ├── daily/                  # YYYY-MM-DD.md
@@ -178,7 +179,7 @@ src/
   │     └── 2026-01.jsonl       # 按月归档对话
   config/
     └── settings.json           # 非敏感设置
-```text
+```
 
 整个 `~/MindClaw/` 目录 zip 打包即完整备份。
 

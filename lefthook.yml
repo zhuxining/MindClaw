@@ -15,8 +15,10 @@ pre-commit:
 
     - name: rust-fmt
       glob: "*.rs"
+      root: "src-tauri/"
       run: cargo fmt --check
 
     - name: rust-clippy
       glob: "*.rs"
+      root: "src-tauri/"
       run: cargo clippy -- -D warnings

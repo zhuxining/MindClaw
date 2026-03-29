@@ -15,6 +15,7 @@
 | [06-security.md](./06-security.md) | 安全架构 | CSP、私密区隔离、Capabilities、树洞模式 |
 | [07-mvp-scope.md](./07-mvp-scope.md) | MVP 范围 | Phase 1 / Phase 1 后期 / Phase 2 功能划分 |
 | [08-dependencies.md](./08-dependencies.md) | 技术依赖 | Rust Cargo.toml 与前端 package.json 依赖清单 |
+| [09-troubleshooting.md](./09-troubleshooting.md) | 常见问题 | Plugin 初始化陷阱、配置缺失导致 panic 等已知问题 |
 
 ## 阅读建议
 

@@ -414,7 +414,13 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
     // ── 2. CheckingAgentCommand ──
     if let Some(cmd_name) = parse_agent_command(&message.content) {
         if let Some(cmd) = self.agent_commands.get(cmd_name) {
-            let result = cmd.execute(/* ... */).await?;
+            let ctx = AgentCommandContext {
+                session: session.clone(),
+                session_mgr: self.session_mgr.clone(),
+                // cancel_token: ... (从活跃 run 获取)
+            };
+            let result = cmd.execute(ctx).await?;
+            // 直接返回响应，不继续 Provider 调用
             self.emit_text_and_done(&message, &session, &result.response).await;
             self.handle_action(result.action).await?;
             return Ok(());
@@ -423,17 +429,16 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
 
     // ── 3. BuildingContext ──
     self.emit_status(&message, UserVisiblePhase::Thinking).await;
-    let mut context = self.context_pipeline.build(&ContextBuildContext {
+    let built_context = self.context_pipeline.build(&ContextBuildContext {
         inbound: message.clone(),
         session: Arc::new(session.clone()),
-        memory: self.memory.clone(),
-        services: self.services.clone(),
-        db: self.db.clone(),
+        // TODO: 添加 memory, services, db 字段
     }).await?;
 
     // ── 4. 有限工具循环（最多 MAX_TOOL_ROUNDS 轮 LLM 调用）──
     let mut all_tool_traces = Vec::new();
     let mut final_text = String::new();
+    let mut messages = built_context.messages;
 
     for round in 0..MAX_TOOL_ROUNDS {
         cancel.check()?; // 每轮开始时检查取消
@@ -443,10 +448,10 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
         let mut tool_calls: Vec<ToolCall> = Vec::new();
 
         let stream = self.provider.chat_stream(ChatRequest {
-            model: context.model_tier,
-            messages: &context.messages,
-            system: Some(&context.system_prompt),
-            tools: &self.tools.schemas(),
+            model: context.model_tier,  // TODO: 从 built_context 获取或默认值
+            messages: &messages,
+            system: Some(&built_context.system_prompt),
+            tools: &self.tools.schemas(),  // 常驻工具 Schema
             tool_choice: ToolChoice::Auto,
             max_tokens: None,
             cancel: cancel.clone(),
@@ -494,8 +499,8 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
             });
         }
 
-        // 4e. 追加 assistant message（含 tool_calls）+ tool results 到 context
-        context.messages.push(ChatMessage {
+        // 4e. 追加 assistant message（含 tool_calls）+ tool results 到 messages
+        messages.push(ChatMessage {
             role: MessageRole::Assistant,
             content: vec![MessageContent::Text(text_buffer)]
                 .into_iter()
@@ -505,7 +510,7 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
                 .collect(),
         });
         for result in &results {
-            context.messages.push(ChatMessage {
+            messages.push(ChatMessage {
                 role: MessageRole::User,
                 content: vec![MessageContent::ToolResult {
                     tool_use_id: result.tool_call_id.clone(),
@@ -518,7 +523,7 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
         self.emit_status(&message, UserVisiblePhase::Thinking).await;
 
         // 4f. 若是最后一轮仍有工具调用，发送 Error
-        if round == MAX_TOOL_ROUNDS - 1 {
+        if round == MAX_TOOL_ROUNDS - 1 && !tool_calls.is_empty() {
             self.emit_error(&message, &session, "工具循环超过最大轮数限制", false).await;
             return Ok(());
         }

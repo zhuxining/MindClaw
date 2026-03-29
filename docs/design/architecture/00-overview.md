@@ -23,7 +23,7 @@
 
 ### 架构分层
 
-```text
+```
 ┌─────────────────────────────────────────────────────────┐
 │                React Frontend (UI)                      │
 │  Pages · Components · Hooks · Zustand Store             │
@@ -67,7 +67,7 @@
                    → Memory → Storage
                    → Provider (LLM)
   记忆是 Agent 的 (Memory/SQLite)，知识是共同的 (Knowledge/Markdown)
-```text
+```
 
 ### 桌面端即服务器
 

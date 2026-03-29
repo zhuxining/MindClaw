@@ -133,7 +133,7 @@ CREATE TABLE messages (
 );
 
 -- 用户角色信息已归入 memories 表（category='profile'），不需要独立表
-```text
+```
 
 ### Markdown 与 SQLite 同步
 
@@ -195,7 +195,7 @@ updated: 2026-03-20
 ## 安全边际
 
 ……完整内容……
-```text
+```
 
 **`source` 字段**——标识知识笔记的创建方式：
 
@@ -235,7 +235,7 @@ updated: 2026-03-20
 - **目录记录创建时机**：索引重建时扫描 `vault/knowledge/` 文件系统目录结构，为每个存在的目录创建或更新 notes 表记录
 - **目录记录判断**：`path LIKE '%.md'` 为笔记，否则为目录
 
-```text
+```
 vault/knowledge/投资/
   ├── 价值投资.md                  # 单篇笔记 (L2)
   ├── 风险管理.md
@@ -245,13 +245,13 @@ SQLite notes 表（目录也是一条记录，path 无 .md 后缀）：
   path: "knowledge/投资"
   tags: ["投资", "价值投资", "风险管理", "量化", "巴菲特", ...]  (聚合 L0)
   overview: "3 篇笔记：价值投资核心原则、风险管理框架、量化策略入门..."  (聚合 L1)
-```text
+```
 
 目录和笔记统一在 `notes` 表中，通过 path 后缀区分（`.md` 为笔记，否则为目录）。L0 搜索只查一张表，检索路径统一。目录 L0（tags）在子笔记 CRUD 时自动聚合——合并去重子笔记的所有 tags。目录 L1 由 Haiku 从子笔记 L1 聚合生成。
 
 #### RAG 检索流程（渐进式加载）
 
-```text
+```
 用户消息 "如何控制投资风险？"
   │
   ├── Step 1: L0 粗筛（tags 匹配，低成本，高召回）
@@ -275,7 +275,7 @@ SQLite notes 表（目录也是一条记录，path 无 .md 后缀）：
       tool_call("operations", {action: "call",
         name: "knowledge_get", args: {path: "knowledge/投资/风险管理.md"}})
       → 从文件系统读取完整 Markdown 返回
-```text
+```
 
 **与传统 RAG 的区别**：传统方案将全文切片后向量检索，返回碎片化的 snippet。MindClaw 的三级方案保持知识的完整性——L1 是结构化概要而非随机切片，Agent 始终能看到知识的完整轮廓，需要细节时再加载 L2。
 
@@ -314,7 +314,7 @@ overview 的生命周期：
 
 ### 设置存储分工
 
-```text
+```
 settings.json              OS Keychain                 SQLite
 ─────────────              ─────────────               ──────
 LLM 模型选择               API Key（加密）              记忆（memories 表）
@@ -322,7 +322,7 @@ LLM 模型选择               API Key（加密）              记忆（memorie
 Vault 路径
 同步配置
 Token 预算（可选覆盖）
-```text
+```
 
 API Key 和 Gateway Bearer Token 必须存入 OS Keychain，绝不能存在任何明文文件中。
 

@@ -16,7 +16,7 @@
     }
   }
 }
-```text
+```
 
 仅允许本地内容和 Claude API 请求。
 
@@ -41,7 +41,7 @@
     "fs:write-files"
   ]
 }
-```text
+```
 
 文件系统权限限定在 vault 和 data 目录范围内。
 

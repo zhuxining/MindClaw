@@ -8,6 +8,7 @@
 
 use crate::error::AppError;
 use async_trait::async_trait;
+use std::sync::Arc;
 
 /// 钩子触发点
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +54,7 @@ pub trait Hook: Send + Sync {
 
 /// 钩子注册表
 pub struct HookRegistry {
-    hooks: Vec<Box<dyn Hook>>,
+    hooks: Vec<Arc<dyn Hook>>,
 }
 
 impl HookRegistry {
@@ -63,7 +64,7 @@ impl HookRegistry {
     }
 
     /// 注册钩子
-    pub fn register(&mut self, hook: Box<dyn Hook>) {
+    pub fn register(&mut self, hook: Arc<dyn Hook>) {
         tracing::info!(hook_name = %hook.name(), hook_point = ?hook.hook_point(), "hook_registered");
         self.hooks.push(hook);
     }

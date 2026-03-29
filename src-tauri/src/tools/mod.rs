@@ -66,13 +66,7 @@ impl ToolRegistry {
     }
 
     /// 注册工具
-    pub fn register(&mut self, tool: Box<dyn Tool + Send + Sync>) {
-        tracing::info!(tool_name = %tool.name(), "tool_registered");
-        self.tools.insert(tool.name().to_string(), Arc::from(tool));
-    }
-
-    /// 注册工具（Arc 版，供 SkillRegistry 注入使用）
-    pub fn register_arc(&mut self, tool: Arc<dyn Tool + Send + Sync>) {
+    pub fn register(&mut self, tool: Arc<dyn Tool + Send + Sync>) {
         tracing::info!(tool_name = %tool.name(), "tool_registered");
         self.tools.insert(tool.name().to_string(), tool);
     }

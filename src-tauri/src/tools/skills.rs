@@ -118,7 +118,7 @@ impl SkillRegistry {
                     tool_name = %tool.name(),
                     "skill_tool_injected"
                 );
-                tool_registry.register_arc(tool);
+                tool_registry.register(tool);
             }
         }
     }

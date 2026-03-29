@@ -2,6 +2,7 @@ pub mod filesystem;
 pub mod mcp_client;
 pub mod operations;
 pub mod shell;
+pub mod skills;
 pub mod traits;
 
 use crate::error::{AppError, AppResult};
@@ -68,6 +69,12 @@ impl ToolRegistry {
     pub fn register(&mut self, tool: Box<dyn Tool + Send + Sync>) {
         tracing::info!(tool_name = %tool.name(), "tool_registered");
         self.tools.insert(tool.name().to_string(), Arc::from(tool));
+    }
+
+    /// 注册工具（Arc 版，供 SkillRegistry 注入使用）
+    pub fn register_arc(&mut self, tool: Arc<dyn Tool + Send + Sync>) {
+        tracing::info!(tool_name = %tool.name(), "tool_registered");
+        self.tools.insert(tool.name().to_string(), tool);
     }
 
     /// 获取工具

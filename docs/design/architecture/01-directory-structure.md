@@ -58,9 +58,8 @@ src-tauri/
       mod.rs                    # AgentService 构造与初始化、接线
       agent_loop.rs             # AgentLoop：事件驱动编排器，Bus → Session Queue → RunOnce → ProviderEvent → Tool Loop → OutboundEvent
       events.rs                 # ProviderEvent / AgentEvent / RunPhase 等运行时事件类型
-      context_pipeline.rs       # ContextPipeline：可插拔上下文管线（ContextSource trait + 优先级 + token 预算）
+      context.rs                # ContextPipeline：可插拔上下文管线（ContextSource trait + 优先级 + token 预算）
       hooks.rs                  # HookRegistry：事件钩子（PreMessage/PostMessage/PreToolUse/PostToolUse）
-      skills.rs                 # SkillRegistry：技能系统（分发 Tools/ContextSources/Hooks/SubAgentTasks/Operations）
       session.rs                # SessionManager：按 sender 隔离会话、turn 追加、裁剪、持久化
       sub_agent.rs              # SubAgentRegistry：trait-based 任务注册表 + SubAgentExecutor
     memory/
@@ -82,11 +81,12 @@ src-tauri/
     tools/
       mod.rs                    # ToolRegistry + Tool trait（注册/查找/执行）
       traits.rs                 # Tool trait、ToolInput、ToolOutput
-      # --- 基础能力工具（常驻上下文，4 个 Schema）---
+      # --- 基础能力工具（常驻上下文，3 个 Schema）---
       filesystem.rs             # vault 内文件操作（安全边界约束）
       shell.rs                  # 白名单受限 Shell（沙箱执行）
       mcp_client.rs             # MCP Client：接入外部工具服务
       operations.rs             # 元工具：list/call 动态发现并调用 Services + Memory
+      skills.rs                 # SkillRegistry：技能系统（分发 ContextSources/Hooks/SubAgentTasks/Operations）
     gateway/
       mod.rs                    # Gateway 启动与路由配置
       server.rs                 # HTTP Server（actix-web / axum）：PWA 静态文件 + API

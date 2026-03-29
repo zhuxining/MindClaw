@@ -4,7 +4,7 @@
 //!
 //! Agent 核心围绕"事件驱动外层 + 单次 run 状态机 + 有限工具循环"构建
 
-use crate::agent::context_pipeline::{ContextBuildContext, ContextPipeline};
+use crate::agent::context::{ContextBuildContext, ContextPipeline};
 use crate::agent::events::{AgentEvent, ProviderEvent, UsageStats, UserVisiblePhase};
 use crate::agent::observer::AgentObserver;
 use crate::agent::session::{SessionManager, ToolTrace};

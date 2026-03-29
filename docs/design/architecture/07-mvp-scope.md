@@ -21,7 +21,7 @@
 | Heartbeat | heartbeat | 系统健康检测（DB、Vault、API Key） |
 | 统一错误处理 | error.rs | AppError → 前端展示 |
 | 结构化日志 | tracing crate | 开发调试 |
-| 可插拔上下文管线 | agent::context_pipeline | ContextSource trait + 内置 5 源 |
+| 可插拔上下文管线 | agent::context | ContextSource trait + 内置 5 源 |
 | Agent Hooks（Rust） | agent::hooks | HookHandler trait + HookRegistry |
 | SubAgent 任务注册表 | agent::sub_agent | SubAgentTask trait + Registry |
 
@@ -33,8 +33,8 @@
 | Gateway 基础 | gateway::api | Webhook 接收（Telegram）+ 简单 chat API |
 | Gateway 认证 | gateway::auth | Bearer Token + Telegram 签名验证 |
 | Command Hooks | agent::hooks | settings.json 命令钩子配置 |
-| 自定义 ContextSource | agent::context_pipeline | Skills 注册的上下文源 |
-| Skills 系统（built-in） | agent::skills | SkillRegistry + skill.toml 清单 |
+| 自定义 ContextSource | agent::context | Skills 注册的上下文源 |
+| Skills 系统（built-in） | tools::skills | SkillRegistry + 标准技能 |
 
 ### Phase 2（延期）
 

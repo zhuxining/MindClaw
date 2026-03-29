@@ -1,15 +1,14 @@
 pub mod agent_loop;
-pub mod context_pipeline;
+pub mod context;
 pub mod events;
 pub mod hooks;
 pub mod observer;
 pub mod session;
-pub mod skills;
 pub mod sub_agent;
 
 // 重新导出主要类型
 pub use agent_loop::AgentLoop;
-pub use context_pipeline::{
+pub use context::{
     BuiltContext, ContextBuildContext, ContextFragment, ContextPipeline, ContextSource,
     ConversationHistorySource, MessageRole, SystemPromptSource, UserMessageSource,
 };

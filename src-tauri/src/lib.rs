@@ -1,5 +1,4 @@
 pub mod agent;
-pub mod agent_commands;
 pub mod bus;
 pub mod channels;
 pub mod cli;
@@ -13,7 +12,6 @@ pub mod models;
 pub mod providers;
 pub mod services;
 pub mod storage;
-pub mod tools;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

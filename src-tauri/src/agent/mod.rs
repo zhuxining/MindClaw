@@ -1,10 +1,12 @@
 pub mod agent_loop;
+pub mod commands;
 pub mod context;
 pub mod events;
 pub mod hooks;
 pub mod observer;
 pub mod session;
 pub mod sub_agent;
+pub mod tools;
 
 // 重新导出主要类型
 pub use agent_loop::AgentLoop;

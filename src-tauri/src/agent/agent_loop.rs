@@ -4,17 +4,17 @@
 //!
 //! Agent 核心围绕"事件驱动外层 + 单次 run 状态机 + 有限工具循环"构建
 
+use crate::agent::commands::traits::{AgentAction, AgentCommandContext};
+use crate::agent::commands::AgentCommandRegistry;
 use crate::agent::context::{ContextBuildContext, ContextPipeline};
 use crate::agent::events::{AgentEvent, ProviderEvent, UsageStats, UserVisiblePhase};
 use crate::agent::observer::AgentObserver;
 use crate::agent::session::{SessionManager, ToolTrace};
-use crate::agent_commands::traits::{AgentAction, AgentCommandContext};
-use crate::agent_commands::AgentCommandRegistry;
+use crate::agent::tools::{ToolCall, ToolRegistry};
 use crate::bus::events::{InboundMessage, OutboundPayload};
 use crate::bus::MessageBus;
 use crate::error::AppError;
 use crate::providers::{ChatMessage, ChatRequest, MessageContent, Provider, ToolChoice};
-use crate::tools::{ToolCall, ToolRegistry};
 use dashmap::DashMap;
 use futures_util::StreamExt;
 use std::collections::VecDeque;

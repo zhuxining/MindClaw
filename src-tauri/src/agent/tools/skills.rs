@@ -7,8 +7,8 @@
 
 use crate::agent::context::{ContextBuildContext, ContextFragment, ContextSource, MessageRole};
 use crate::agent::hooks::Hook;
+use crate::agent::tools::{traits::Tool, ToolRegistry};
 use crate::error::AppError;
-use crate::tools::{traits::Tool, ToolRegistry};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -192,9 +192,9 @@ impl Skill for BaseSkill {
 // 标准技能包：从内嵌 markdown 文档加载
 // ============================================================================
 
-const NOTES_SKILL_MD: &str = include_str!("../../skills/notes.md");
-const TASKS_SKILL_MD: &str = include_str!("../../skills/tasks.md");
-const DAILY_SKILL_MD: &str = include_str!("../../skills/daily.md");
+const NOTES_SKILL_MD: &str = include_str!("../../../skills/notes.md");
+const TASKS_SKILL_MD: &str = include_str!("../../../skills/tasks.md");
+const DAILY_SKILL_MD: &str = include_str!("../../../skills/daily.md");
 
 /// 标准技能包：加载内嵌的 markdown 技能文档
 ///

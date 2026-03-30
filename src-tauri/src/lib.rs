@@ -10,8 +10,13 @@ pub mod heartbeat;
 pub mod memory;
 pub mod models;
 pub mod providers;
+pub mod runtime;
 pub mod services;
 pub mod storage;
+
+use runtime::AppRuntime;
+use std::sync::Arc;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -28,6 +33,26 @@ pub fn run() {
         .plugin(tauri_plugin_persisted_scope::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match AppRuntime::builder().build().await {
+                    Ok(rt) => {
+                        let rt = Arc::new(rt);
+                        if let Err(e) = rt.start().await {
+                            tracing::error!(error = %e, "failed_to_start_runtime");
+                            return;
+                        }
+                        handle.manage(rt);
+                        tracing::info!("app_runtime_injected");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed_to_build_runtime");
+                    }
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::conversation::send_message,
             commands::conversation::get_session_history,

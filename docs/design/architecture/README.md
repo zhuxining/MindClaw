@@ -22,10 +22,11 @@
 | **07** | **[07-heartbeat.md](./07-heartbeat.md)** | **Heartbeat 健康检测** | **外围基础设施** |
 | 08 | [08-storage.md](./08-storage.md) | 存储架构 | 存储 |
 | 09 | [09-command-architecture.md](./09-command-architecture.md) | 命令架构 | 其他 |
-| 10 | [10-security.md](./10-security.md) | 安全架构 | 其他 |
-| 11 | [11-mvp-scope.md](./11-mvp-scope.md) | MVP 范围 | 其他 |
-| 12 | [12-dependencies.md](./12-dependencies.md) | 技术依赖 | 其他 |
-| 13 | [13-troubleshooting.md](./13-troubleshooting.md) | 常见问题 | 其他 |
+| **10** | **[10-runtime.md](./10-runtime.md)** | **Runtime 模块** | **基础设施** |
+| 11 | [11-security.md](./11-security.md) | 安全架构 | 其他 |
+| 12 | [12-mvp-scope.md](./12-mvp-scope.md) | MVP 范围 | 其他 |
+| 13 | [13-dependencies.md](./13-dependencies.md) | 技术依赖 | 其他 |
+| 14 | [14-troubleshooting.md](./14-troubleshooting.md) | 常见问题 | 其他 |
 
 ## 阅读建议
 
@@ -55,6 +56,7 @@
 
 ### 其他
 
-- **安全**：[10-security.md](./10-security.md)
-- **依赖**：[12-dependencies.md](./12-dependencies.md)
-- **故障排除**：[13-troubleshooting.md](./13-troubleshooting.md)
+- **Runtime**: [10-runtime.md](./10-runtime.md) — 统一运行时设计，三入口共享初始化
+- **安全**：[11-security.md](./11-security.md)
+- **依赖**：[13-dependencies.md](./13-dependencies.md)
+- **故障排除**：[14-troubleshooting.md](./14-troubleshooting.md)

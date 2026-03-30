@@ -295,6 +295,7 @@ flowchart TB
 /// Session 级串行化状态：队列 + 活跃 run 合并在同一 Mutex 内，避免 check-then-act 竞态。
 struct SessionSlot {
     queue: VecDeque<InboundMessage>,
+    steering_queue: VecDeque<String>,  // 运行中注入的补充指令（steering）
     active_run: Option<RunHandle>,
 }
 
@@ -318,6 +319,14 @@ pub struct AgentLoop {
 4. 将运行态映射为 `OutboundPayload` 和内部观测事件。
 5. 管理取消令牌（per-run `CancellationToken`）与活跃 run 生命周期。
 6. run 完成后自旋检查队列，消费同 session 的下一条消息。
+
+```rust
+impl AgentLoop {
+    /// 向指定 session 的活跃 run 注入 steering 补充指令。
+    /// 若无活跃 run，消息直接入普通 queue（下一次 run_once 时作为前置 user 消息）。
+    pub async fn steer(&self, session_id: &str, message: String) -> Result<(), AppError>;
+}
+```
 
 **外层不使用全局 `while (true)` 轮询架构**。唯一允许的 loop 是单次 run 内部的有限工具回合循环。
 
@@ -398,6 +407,11 @@ stateDiagram-v2
 - `/stop` 取消当前 session 的活跃 run（通过 `RunHandle.cancel.cancel()`），不取消其他 session。
 - 工具回合上限固定为 8 轮 LLM 调用（每轮 = 一次 `chat_stream` 调用，非单个 tool call），超限时发送 `Error` 并终止本次 run。
 - cancelled / failed run 不持久化半成品 assistant 文本。
+
+**Steering vs Cancel 语义区分**：
+
+- `steer(msg)` — 软打断。消息注入 `steering_queue`，在每轮工具执行结束后合并为 user 消息，Agent 基于更新的上下文继续当前 run。适用于"等等，方向调整一下"的场景，已完成的工具轮次不会被丢弃。
+- `cancel_session()` + 重新 `publish_inbound()` — 硬中止。通过 `CancellationToken` 终止当前 run，新消息作为独立 run 重新入队。适用于用户明确放弃当前任务的场景。
 
 #### `run_once()` 核心实现
 
@@ -522,6 +536,17 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
 
         self.emit_status(&message, UserVisiblePhase::Thinking).await;
 
+        // 4e.5 检查 steering 注入（软打断）
+        // 在下一轮 LLM 调用前，将 steering_queue 中的补充指令合并为 user 消息
+        if let Some(steering_msgs) = self.drain_steering(&session.id).await {
+            for msg in &steering_msgs {
+                messages.push(ChatMessage::user(msg));
+            }
+            self.observer.on_event(&AgentEvent::SteeringInjected {
+                count: steering_msgs.len()
+            }).await;
+        }
+
         // 4f. 若是最后一轮仍有工具调用，发送 Error
         if round == MAX_TOOL_ROUNDS - 1 && !tool_calls.is_empty() {
             self.emit_error(&message, &session, "工具循环超过最大轮数限制", false).await;
@@ -557,6 +582,7 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
 | 工具结果回传 | 追加到 messages，发起新 `chat_stream` | OpenAI/Claude API 都是无状态请求，无法在同一 stream 内 resume |
 | 工具并行 | `join_all` + `Semaphore(4)` | 多个独立 tool calls 可并行，但限制并发防资源爆炸 |
 | 取消检查 | 每轮开始 + Provider 内部 `select!` | 粗粒度检查 + 细粒度 HTTP abort |
+| 运行中注入 | Steering 软打断（`steering_queue` + per-round 检查）| Steering 保留已完成的工具轮次，Agent 结合新上下文继续执行；硬取消（`CancellationToken`）用于用户明确中止的场景 |
 
 #### 事件模型
 
@@ -584,6 +610,7 @@ pub enum AgentEvent {
     ProviderToolCall { name: String },
     ToolStarted { name: String },
     ToolFinished { name: String, success: bool },
+    SteeringInjected { count: usize },
     RunCompleted,
     RunCancelled,
     RunFailed { message: String },
@@ -715,4 +742,4 @@ MindClaw 是单用户桌面应用，MVP 阶段所有 Channel 的 sender 统一�
 | [05.01-context-provider.md](./05.01-context-provider.md) | 6.6 Context Pipeline · 6.7 Provider 层 |
 | [05.02-tools-services.md](./05.02-tools-services.md) | 6.8 Tool 层 · 6.9 Services 层 |
 | [05.03-memory.md](./05.03-memory.md) | 6.10 Memory 层 |
-| [05.04-extensions.md](./05.04-extensions.md) | 6.11 SubAgent · 6.12 Hooks / Skills / Gateway / Cron / Heartbeat |
+| [05.04-extensions.md](./05.04-extensions.md) | 6.11 MCP · 6.12 SubAgent · 6.13 Hooks · 6.14 Skills · 6.15+ 基础设施 |

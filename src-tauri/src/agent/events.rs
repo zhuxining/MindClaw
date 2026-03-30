@@ -49,6 +49,8 @@ pub enum AgentEvent {
     ToolStarted { name: String },
     /// 工具执行完成
     ToolFinished { name: String, success: bool },
+    /// Steering 补充指令已注入当前工具轮次（软打断）
+    SteeringInjected { count: usize },
     /// Run 正常完成
     RunCompleted,
     /// Run 被取消

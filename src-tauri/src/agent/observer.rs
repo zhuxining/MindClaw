@@ -68,6 +68,9 @@ impl AgentObserver for TracingObserver {
             AgentEvent::RunCancelled => {
                 tracing::info!("agent_run_cancelled");
             }
+            AgentEvent::SteeringInjected { count } => {
+                tracing::info!(count = %count, "agent_steering_injected");
+            }
             AgentEvent::RunFailed { message } => {
                 tracing::error!(error = %message, "agent_run_failed");
             }

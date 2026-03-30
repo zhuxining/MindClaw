@@ -2,9 +2,9 @@
 
 > 完整架构文档索引见 [README.md](./README.md)
 
-## 四、核心数据流
+## 核心数据流
 
-### 4.1 Agent 输入路由（Agent Input Routing）
+### Agent 输入路由（Agent Input Routing）
 
 ```
 用户在对话中表达意图 → Agent 理解并通过 operations 工具直接写入目标：
@@ -16,9 +16,9 @@
 
 无需独立捕获管道——Agent 的对话理解天然具备路由能力。
 
-### 4.2 对话流（Conversation Flow）
+### 对话流（Conversation Flow）
 
-> 完整时序图和 `run_once()` 实现见 [05-agent.md](./05-agent.md) §6.4-6.5。
+> 完整时序图和 `run_once()` 实现见 [03-agent-loop.md](./03-agent-loop.md) §3.3-3.4。
 
 对话流关键规则：
 
@@ -28,7 +28,7 @@
 - `Chunk`、`Done`、`Error`、`Status(Thinking/UsingTools/Streaming)` 是统一的用户可见出站事件。
 - 工具调用发生在单次 run 内部的有限回合 loop 中，最多 8 轮 LLM 调用。
 
-### 4.3 日记流（Daily Flow）
+### 日记流（Daily Flow）
 
 ```
 DailyPage 挂载，传入今日日期

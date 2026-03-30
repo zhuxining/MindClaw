@@ -2,9 +2,7 @@
 
 > 完整架构文档索引见 [README.md](./README.md)
 
-## 十、常见问题与陷阱
-
-### Tauri Plugin 需要 `tauri.conf.json` 配置才能初始化
+## Tauri Plugin 需要 `tauri.conf.json` 配置才能初始化
 
 **现象**
 

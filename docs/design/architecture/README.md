@@ -4,26 +4,57 @@
 
 ## 文档索引
 
-| 文件 | 内容 | 说明 |
-|------|------|------|
-| [00-overview.md](./00-overview.md) | 系统总览 | 技术栈、架构分层图、桌面端即服务器理念 |
-| [01-directory-structure.md](./01-directory-structure.md) | 目录结构 | 代码目录（src-tauri/ + src/）与用户数据目录 |
-| [02-command-architecture.md](./02-command-architecture.md) | 三层命令架构 | Web Commands / Agent Commands / CLI Commands |
-| [03-data-flows.md](./03-data-flows.md) | 核心数据流 | Agent 输入路由、对话流、日记流 |
-| [04-storage.md](./04-storage.md) | 存储架构 | SQLite 表结构、Markdown 同步、三级索引、RAG 检索 |
-| [05-agent.md](./05-agent.md) | Agent 核心 | Channel / Bus / 消息流水线 / AgentLoop（run_once + 工具循环 + Session） |
-| [05.01-context-provider.md](./05.01-context-provider.md) | Context & Provider | ContextPipeline / ChatMessage / ChatRequest / Provider trait |
-| [05.02-tools-services.md](./05.02-tools-services.md) | Tools & Services | ToolRegistry / Operations 元工具 / KnowledgeService / DailyService / TaskService |
-| [05.03-memory.md](./05.03-memory.md) | Memory 层 | Agent 私有记忆 / 认知演进链 / 衰减 / 升华 |
-| [05.04-extensions.md](./05.04-extensions.md) | 扩展与基础设施 | SubAgent / Hooks / Skills / Gateway / Cron / Heartbeat |
-| [06-security.md](./06-security.md) | 安全架构 | CSP、私密区隔离、Capabilities、树洞模式 |
-| [07-mvp-scope.md](./07-mvp-scope.md) | MVP 范围 | Phase 1 / Phase 1 后期 / Phase 2 功能划分 |
-| [08-dependencies.md](./08-dependencies.md) | 技术依赖 | Rust Cargo.toml 与前端 package.json 依赖清单 |
-| [09-troubleshooting.md](./09-troubleshooting.md) | 常见问题 | Plugin 初始化陷阱、配置缺失导致 panic 等已知问题 |
+| 编号 | 文件 | 内容 | 层级 |
+|------|------|------|------|
+| 00 | [00-overview.md](./00-overview.md) | 系统总览 | 基础 |
+| 01 | [01-directory-structure.md](./01-directory-structure.md) | 代码结构 | 基础 |
+| 02 | [02-data-flows.md](./02-data-flows.md) | 数据流程 | 基础 |
+| **03** | **[03-agent-loop.md](./03-agent-loop.md)** | **AgentLoop 核心** | **Agent 核心** |
+| **03.01** | **[03.01-context.md](./03.01-context.md)** | **Context Pipeline** | **Agent 核心** |
+| **03.02** | **[03.02-provider.md](./03.02-provider.md)** | **Provider 层** | **Agent 核心** |
+| **03.03** | **[03.03-tools.md](./03.03-tools.md)** | **Tools 层** | **Agent 核心** |
+| **03.04** | **[03.04-memory.md](./03.04-memory.md)** | **Memory 层** | **Agent 核心** |
+| **03.05** | **[03.05-services.md](./03.05-services.md)** | **Services 层** | **Agent 核心** |
+| **03.06** | **[03.06-subagent.md](./03.06-subagent.md)** | **SubAgent** | **Agent 核心** |
+| **04** | **[04-channel.md](./04-channel.md)** | **Channel 层** | **外围基础设施** |
+| **05** | **[05-gateway.md](./05-gateway.md)** | **Gateway 层** | **外围基础设施** |
+| **06** | **[06-cron.md](./06-cron.md)** | **Cron 定时任务** | **外围基础设施** |
+| **07** | **[07-heartbeat.md](./07-heartbeat.md)** | **Heartbeat 健康检测** | **外围基础设施** |
+| 08 | [08-storage.md](./08-storage.md) | 存储架构 | 存储 |
+| 09 | [09-command-architecture.md](./09-command-architecture.md) | 命令架构 | 其他 |
+| 10 | [10-security.md](./10-security.md) | 安全架构 | 其他 |
+| 11 | [11-mvp-scope.md](./11-mvp-scope.md) | MVP 范围 | 其他 |
+| 12 | [12-dependencies.md](./12-dependencies.md) | 技术依赖 | 其他 |
+| 13 | [13-troubleshooting.md](./13-troubleshooting.md) | 常见问题 | 其他 |
 
 ## 阅读建议
 
-- **快速了解全貌**：先读 [00-overview.md](./00-overview.md) 的架构分层图
-- **开发新功能**：查看 [02-command-architecture.md](./02-command-architecture.md) 了解命令注册模式，参考 [01-directory-structure.md](./01-directory-structure.md) 确定文件位置
-- **存储相关**：[04-storage.md](./04-storage.md) 包含所有表结构和 Markdown 同步规则
-- **Agent 开发**：[05-agent.md](./05-agent.md) 包含核心 AgentLoop 设计，子章节 05.01-05.04 覆盖 Context/Provider/Tools/Memory/Extensions
+### 快速了解全貌
+
+1. 先读 [00-overview.md](./00-overview.md) 的架构分层图
+2. 再看 [02-data-flows.md](./02-data-flows.md) 理解数据流动
+3. 接着读 [03-agent-loop.md](./03-agent-loop.md) 了解 Agent 核心
+
+### Agent 开发
+
+- **核心流程**：[03-agent-loop.md](./03-agent-loop.md) → [03.01-context.md](./03.01-context.md) → [03.02-provider.md](./03.02-provider.md)
+- **工具扩展**：[03.03-tools.md](./03.03-tools.md)（含 MCP、Hooks、Skills）
+- **业务逻辑**：[03.05-services.md](./03.05-services.md)
+- **多 Agent 编排**：[03.06-subagent.md](./03.06-subagent.md)
+
+### 外围设施
+
+- **通道集成**：[04-channel.md](./04-channel.md)（Desktop/Telegram/Feishu）
+- **API 服务**：[05-gateway.md](./05-gateway.md)（HTTP/WebSocket）
+- **后台任务**：[06-cron.md](./06-cron.md)
+- **健康监控**：[07-heartbeat.md](./07-heartbeat.md)
+
+### 存储相关
+
+- [08-storage.md](./08-storage.md) 包含所有表结构和 Markdown 同步规则
+
+### 其他
+
+- **安全**：[10-security.md](./10-security.md)
+- **依赖**：[12-dependencies.md](./12-dependencies.md)
+- **故障排除**：[13-troubleshooting.md](./13-troubleshooting.md)

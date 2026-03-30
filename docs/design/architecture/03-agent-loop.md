@@ -1,12 +1,8 @@
-# MindClaw 技术架构设计
+# MindClaw 技术架构设计 — Agent Loop
 
 > 完整架构文档索引见 [README.md](./README.md)
 
-## 六、Agent 架构
-
-> 参考 [zeroclaw](https://github.com/zeroclaw-labs/zeroclaw) 的 Channel + Agent 分层模式。
-
-### 6.1 整体结构
+## 整体结构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -70,51 +66,7 @@
 
 **Core Agent 是唯一持有完整人模型的编排器**。Channel、Gateway、Provider、Tools 都是可替换的适配层，通过 trait 解耦。Cron 和 Heartbeat 提供后台运行能力。
 
-### 6.2 Channel 层 — 统一消息通道
-
-Channel 是所有通信平台的抽象接口。无论消息来自桌面 UI、Telegram 还是 Feishu，Channel 直接产出 `InboundMessage` 推入 MessageBus（Desktop Channel 由 `send_message` command 代为生成 `InboundMessage`，其余 Channel 在 `listen()` 中生成）。
-
-> **设计决策**：不再定义独立的 `ChannelMessage` 结构。Channel 直接使用 `InboundMessage`（定义在 `bus/events.rs`），`request_id` 由 Channel/Command 层生成，`session_id` 可选（新会话时为 None）。
-
-```rust
-// src-tauri/src/channels/traits.rs
-
-pub struct SendMessage {
-    pub content: String,
-    pub recipient: String,
-    pub metadata: Option<serde_json::Value>,
-}
-
-pub enum ChannelSource {
-    Desktop,
-    Telegram,
-    Feishu,
-    Webhook,
-}
-
-#[async_trait]
-pub trait Channel: Send + Sync {
-    fn name(&self) -> &str;
-    fn source(&self) -> ChannelSource;
-    async fn send(&self, message: OutboundMessage) -> Result<(), AppError>;
-    async fn listen(&self, bus: Arc<MessageBus>) -> Result<(), AppError>;
-    fn supports_streaming(&self) -> bool { false }
-    async fn send_chunk(&self, _chunk: &str, _session_id: &str) -> Result<(), AppError> { Ok(()) }
-    async fn start_typing(&self) -> Result<(), AppError> { Ok(()) }
-    async fn stop_typing(&self) -> Result<(), AppError> { Ok(()) }
-}
-```
-
-#### Channel 实现一览
-
-| Channel | 传输方式 | 流式支持 | 入站机制 | Phase |
-|---------|---------|---------|---------|-------|
-| **Desktop** | Tauri IPC invoke + Event emit | Yes | Tauri command 桥接推入 Bus（listen 为空实现） | MVP |
-| **Telegram** | HTTP API / Long polling | No | getUpdates 或 Webhook → Bus | Phase 1 后期 |
-| **Feishu** | HTTP API / Webhook | No | Webhook → Bus | Phase 2 |
-| **Webhook** | HTTP POST → Bus | No | Gateway 接收 → Bus | Phase 1 后期 |
-
-### 6.3 MessageBus — 双向异步消息队列
+## MessageBus — 双向异步消息队列
 
 MessageBus 解耦 Channel 与 Agent。它只负责事件搬运，不承担业务决策；是否执行、如何排队、何时取消，全部由 AgentLoop 决定。
 
@@ -188,7 +140,7 @@ pub struct MessageBus {
 
 出站消费循环 `run_outbound_dispatcher()` 根据 `OutboundMessage.target` 路由到对应 Channel；Desktop Channel 将 `OutboundPayload` 映射为 Tauri Event 发给前端。
 
-### 6.4 消息流水线（端到端）
+## 消息流水线（端到端）
 
 首期对话链路按 Desktop 优先设计，但消息模型保持多 Channel 兼容。外层是事件驱动队列，内层是单次 run 的有限回合工具循环。
 
@@ -240,9 +192,9 @@ sequenceDiagram
 - 工具回合是单次 run 内部的有限 loop，最多 8 轮；它不是系统级轮询架构。
 - `Done`、`Error`、`Status` 与文本 `Chunk` 分离，避免正文承载状态协议。
 
-### 6.5 Agent 核心：Loop · Session · Identity
+## Agent 核心：Loop · Session · Identity
 
-Agent 核心围绕“事件驱动外层 + 单次 run 状态机 + 有限工具循环”构建。消息是否执行、如何排队、何时取消，都在这一层被决定。
+Agent 核心围绕"事件驱动外层 + 单次 run 状态机 + 有限工具循环"构建。消息是否执行、如何排队、何时取消，都在这一层被决定。
 
 ```mermaid
 flowchart TB
@@ -287,7 +239,7 @@ flowchart TB
     DISP --> CH
 ```
 
-#### AgentLoop — 事件驱动编排器
+### AgentLoop — 事件驱动编排器
 
 ```rust
 // src-tauri/src/agent/agent_loop.rs
@@ -330,7 +282,7 @@ impl AgentLoop {
 
 **外层不使用全局 `while (true)` 轮询架构**。唯一允许的 loop 是单次 run 内部的有限工具回合循环。
 
-#### 消息入队与 Session 串行化
+### 消息入队与 Session 串行化
 
 ```rust
 // 入站消息处理（在消费 inbound 的 tokio task 中）
@@ -378,7 +330,7 @@ async fn run_session_loop(&self, session_id: String, first: InboundMessage, canc
 }
 ```
 
-#### 单次 run 状态机
+### 单次 run 状态机
 
 ```mermaid
 stateDiagram-v2
@@ -413,7 +365,7 @@ stateDiagram-v2
 - `steer(msg)` — 软打断。消息注入 `steering_queue`，在每轮工具执行结束后合并为 user 消息，Agent 基于更新的上下文继续当前 run。适用于"等等，方向调整一下"的场景，已完成的工具轮次不会被丢弃。
 - `cancel_session()` + 重新 `publish_inbound()` — 硬中止。通过 `CancellationToken` 终止当前 run，新消息作为独立 run 重新入队。适用于用户明确放弃当前任务的场景。
 
-#### `run_once()` 核心实现
+### `run_once()` 核心实现
 
 ```rust
 const MAX_TOOL_ROUNDS: usize = 8;
@@ -431,7 +383,6 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
             let ctx = AgentCommandContext {
                 session: session.clone(),
                 session_mgr: self.session_mgr.clone(),
-                // cancel_token: ... (从活跃 run 获取)
             };
             let result = cmd.execute(ctx).await?;
             // 直接返回响应，不继续 Provider 调用
@@ -446,7 +397,9 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
     let built_context = self.context_pipeline.build(&ContextBuildContext {
         inbound: message.clone(),
         session: Arc::new(session.clone()),
-        // TODO: 添加 memory, services, db 字段
+        memory: self.memory.clone(),
+        services: self.services.clone(),
+        db: self.db.clone(),
     }).await?;
 
     // ── 4. 有限工具循环（最多 MAX_TOOL_ROUNDS 轮 LLM 调用）──
@@ -462,18 +415,16 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
         let mut tool_calls: Vec<ToolCall> = Vec::new();
 
         let stream = self.provider.chat_stream(ChatRequest {
-            model: context.model_tier,  // TODO: 从 built_context 获取或默认值
+            model: context.model_tier,
             messages: &messages,
             system: Some(&built_context.system_prompt),
-            tools: &self.tools.schemas(),  // 常驻工具 Schema
+            tools: &self.tools.schemas(),
             tool_choice: ToolChoice::Auto,
             max_tokens: None,
             cancel: cancel.clone(),
         }).await?;
 
         // 4b. 消费 Provider 事件流
-        // Provider 实现负责在内部缓冲 tool call arguments delta，
-        // 仅在参数 JSON 完整后才发出 ProviderEvent::ToolCall。
         while let Some(event) = stream.next().await {
             match event? {
                 ProviderEvent::TextDelta { text } => {
@@ -537,7 +488,6 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
         self.emit_status(&message, UserVisiblePhase::Thinking).await;
 
         // 4e.5 检查 steering 注入（软打断）
-        // 在下一轮 LLM 调用前，将 steering_queue 中的补充指令合并为 user 消息
         if let Some(steering_msgs) = self.drain_steering(&session.id).await {
             for msg in &steering_msgs {
                 messages.push(ChatMessage::user(msg));
@@ -582,9 +532,9 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
 | 工具结果回传 | 追加到 messages，发起新 `chat_stream` | OpenAI/Claude API 都是无状态请求，无法在同一 stream 内 resume |
 | 工具并行 | `join_all` + `Semaphore(4)` | 多个独立 tool calls 可并行，但限制并发防资源爆炸 |
 | 取消检查 | 每轮开始 + Provider 内部 `select!` | 粗粒度检查 + 细粒度 HTTP abort |
-| 运行中注入 | Steering 软打断（`steering_queue` + per-round 检查）| Steering 保留已完成的工具轮次，Agent 结合新上下文继续执行；硬取消（`CancellationToken`）用于用户明确中止的场景 |
+| 运行中注入 | Steering 软打断 | 保留已完成的工具轮次，Agent 结合新上下文继续执行 |
 
-#### 事件模型
+### 事件模型
 
 `ProviderEvent` 是 Provider 对 AgentLoop 的输入；`AgentEvent` 是 AgentLoop 内部运行语义；`OutboundPayload` 是对前端和 Channel 暴露的用户可见事件。
 
@@ -592,8 +542,6 @@ async fn run_once(&self, message: InboundMessage, cancel: CancellationToken) -> 
 // src-tauri/src/agent/events.rs
 
 /// Provider → AgentLoop 的事件流。
-/// Provider 实现必须在内部缓冲 tool call arguments delta，
-/// 仅在参数 JSON 完整后才发出 ToolCall 事件。
 pub enum ProviderEvent {
     TextDelta { text: String },
     ToolCall { id: String, name: String, arguments_json: Value },
@@ -616,7 +564,7 @@ pub enum AgentEvent {
     RunFailed { message: String },
 }
 
-/// 内部 run 阶段（仅供 AgentEvent/Observer 使用，不暴露给前端）
+/// 内部 run 阶段（仅供 AgentEvent/Observer 使用）
 pub enum RunPhase {
     Queued,
     ResolvingSession,
@@ -630,15 +578,15 @@ pub enum RunPhase {
     Failed,
 }
 
-/// 前端/Channel 可见的简化状态（由 OutboundPayload::Status 携带）
+/// 前端/Channel 可见的简化状态
 pub enum UserVisiblePhase {
     Thinking,     // 组装上下文 + 等待 LLM 首 token
     UsingTools,   // 执行工具中
-    Streaming,    // 正在输出文本（前端收到首个 Chunk 时自动进入）
+    Streaming,    // 正在输出文本
 }
 ```
 
-#### AgentObserver — 内部观测接口
+### AgentObserver — 内部观测接口
 
 ```rust
 // src-tauri/src/agent/observer.rs
@@ -659,7 +607,7 @@ impl AgentObserver for TracingObserver {
 }
 ```
 
-#### ToolTrace — 工具执行记录
+### ToolTrace — 工具执行记录
 
 ```rust
 // src-tauri/src/agent/session.rs
@@ -680,9 +628,9 @@ pub struct ToolTrace {
 - 内部观测：`AgentEvent` → `AgentObserver`，供日志、审计、指标使用。
 - 用户可见输出：`OutboundPayload`（`Chunk` / `Done` / `Error` / `Status(UserVisiblePhase)`），只承载 UI 和 Channel 需要的事件。
 
-#### SessionManager — 会话生命周期管理
+### SessionManager — 会话生命周期管理
 
-会话管理器不再只保存“消息列表”，而是保存一个完整 turn 的执行结果，以支持恢复、调试和历史压缩。
+会话管理器不再只保存"消息列表"，而是保存一个完整 turn 的执行结果，以支持恢复、调试和历史压缩。
 
 ```rust
 // src-tauri/src/agent/session.rs
@@ -721,16 +669,9 @@ pub struct SessionManager {
 
 `Session.compressed_history()` 返回压缩后的 provider messages；工具输出在历史中仅保留必要 trace，不完整回灌超长原始结果。
 
-#### 身份解析 — MVP 简化
+### 身份解析 — MVP 简化
 
 MindClaw 是单用户桌面应用，MVP 阶段所有 Channel 的 sender 统一为常量 `"local_user"`，不引入独立的 `UserIdentityResolver` 组件。Phase 1 后期引入 Telegram/Feishu Channel 时再按需添加跨通道身份映射。
-
-#### 设计取舍（参考 nanobot / zeroclaw）
-
-- 采纳 `nanobot` 的外层消息分发 + 内层有限工具回合结构。
-- 拒绝 `nanobot` 的全局串行锁，改为“按 session 串行”。
-- 采纳 `zeroclaw` 的取消、观测、工具去重和输出安全边界分层。
-- 拒绝 `zeroclaw` 当前过重的 runtime 复杂度，不在首期引入预算审批、多格式 tool-call 兼容解析等增强模块。
 
 ---
 
@@ -738,8 +679,10 @@ MindClaw 是单用户桌面应用，MVP 阶段所有 Channel 的 sender 统一�
 
 | 文件 | 内容 |
 |------|------|
-| **本文件** | 6.1 整体结构 · 6.2 Channel · 6.3 MessageBus · 6.4 消息流水线 · 6.5 AgentLoop 核心 |
-| [05.01-context-provider.md](./05.01-context-provider.md) | 6.6 Context Pipeline · 6.7 Provider 层 |
-| [05.02-tools-services.md](./05.02-tools-services.md) | 6.8 Tool 层 · 6.9 Services 层 |
-| [05.03-memory.md](./05.03-memory.md) | 6.10 Memory 层 |
-| [05.04-extensions.md](./05.04-extensions.md) | 6.11 MCP · 6.12 SubAgent · 6.13 Hooks · 6.14 Skills · 6.15+ 基础设施 |
+| **本文件** | 3.1 整体结构 · 3.2 MessageBus · 3.3 消息流水线 · 3.4 AgentLoop 核心 |
+| [03.01-context.md](./03.01-context.md) | Context Pipeline |
+| [03.02-provider.md](./03.02-provider.md) | Provider 层 |
+| [03.03-tools.md](./03.03-tools.md) | Tool 层（含 MCP、Hooks、Skills） |
+| [03.04-memory.md](./03.04-memory.md) | Memory 层 |
+| [03.05-services.md](./03.05-services.md) | Services 层 |
+| [03.06-subagent.md](./03.06-subagent.md) | SubAgent |

@@ -2,9 +2,7 @@
 
 > 完整架构文档索引见 [README.md](./README.md)
 
-## 九、技术依赖
-
-### 层职责与 Tauri Plugin 使用原则
+## 层职责与 Tauri Plugin 使用原则
 
 三层架构：**Web 层（遥控器）→ Tauri 层（连接线）→ Rust 层（主机）**
 
@@ -14,7 +12,7 @@
 | Tauri (IPC + Plugins) | 窗口管理、系统能力桥接、权限管控 | 胶水层，不写业务逻辑 |
 | Rust (Services) | 全部业务逻辑、数据持久化、LLM 通信 | 核心层，可脱离 Tauri 独立运行 |
 
-#### Web 端使用边界
+### Web 端使用边界
 
 - ✅ 渲染 UI、收集用户输入、调 `invoke()` 拿数据
 - ✅ Zustand 仅管 UI 状态（sidebar 展开、当前页面等）

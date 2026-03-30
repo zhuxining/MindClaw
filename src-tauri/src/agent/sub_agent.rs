@@ -1,58 +1,72 @@
-//! SubAgentRegistry：子代理注册表
+//! SubAgent：多 Agent 编排
 //!
-//! 子代理是异步后台任务，用于执行：
-//! - 知识库索引更新
-//! - 历史数据归档
-//! - 长时间运行的分析任务
+//! 统一 Markdown 定义，两种执行模式：
+//! - Background：后台异步，Run 完成后派发
+//! - Parallel：并行执行，Run 内启动
 
-use crate::error::AppError;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-/// 子代理任务定义
+// ============================================================================
+// 核心类型
+// ============================================================================
+
+/// SubAgent 执行模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubAgentMode {
+    /// 后台异步，Run 完成后派发，持久化队列
+    Background,
+    /// 并行执行，Run 内启动，与其他工具调用并发
+    Parallel,
+}
+
+/// 从 Markdown frontmatter + body 解析的 SubAgent 定义
+#[derive(Debug, Clone)]
+pub struct SubAgentDef {
+    /// 唯一名称
+    pub name: String,
+    /// 描述（供 LLM 和 operations list 使用）
+    pub description: String,
+    /// Markdown body = system prompt
+    pub system_prompt: String,
+    /// 默认执行模式
+    pub mode: SubAgentMode,
+    /// 首选模型（None 则继承主代理）
+    pub model: Option<String>,
+    /// 安全边界
+    pub capabilities: CapabilityProfile,
+    /// 来源路径（None = builtin via include_str!）
+    pub source_path: Option<PathBuf>,
+}
+
+/// 安全边界
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubAgentTask {
-    /// 任务 ID
-    pub id: String,
-    /// 任务类型
-    pub task_type: String,
-    /// 任务参数
+pub struct CapabilityProfile {
+    pub allowed_tools: Vec<String>,
+    pub max_tool_calls: u32,
+    pub timeout_ms: u64,
+}
+
+/// SubAgent 运行时上下文（执行时传入，与定义解耦）
+pub struct SubAgentContext {
+    pub task_id: String,
+    pub session_id: String,
     pub parameters: serde_json::Value,
-    /// 优先级（数值越小优先级越高）
-    pub priority: i32,
+    pub cancel: tokio_util::sync::CancellationToken,
 }
 
-impl SubAgentTask {
-    /// 创建新的子代理任务
-    pub fn new(task_type: impl Into<String>, parameters: serde_json::Value) -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            task_type: task_type.into(),
-            parameters,
-            priority: 0,
-        }
-    }
-
-    /// 设置优先级
-    pub fn with_priority(mut self, priority: i32) -> Self {
-        self.priority = priority;
-        self
-    }
-}
-
-/// 子代理执行结果
+/// SubAgent 执行结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubAgentResult {
-    /// 是否成功
     pub success: bool,
-    /// 输出数据
     pub output: serde_json::Value,
-    /// 执行日志
     pub logs: Vec<String>,
 }
 
 impl SubAgentResult {
-    /// 创建成功的结果
     pub fn success(output: serde_json::Value) -> Self {
         Self {
             success: true,
@@ -61,7 +75,6 @@ impl SubAgentResult {
         }
     }
 
-    /// 创建失败的结果
     pub fn failure(message: impl Into<String>) -> Self {
         Self {
             success: false,
@@ -69,138 +82,75 @@ impl SubAgentResult {
             logs: Vec::new(),
         }
     }
-
-    /// 添加日志
-    pub fn log(&mut self, message: impl Into<String>) {
-        self.logs.push(message.into());
-    }
 }
 
-/// 子代理执行器 trait
-#[async_trait]
-pub trait SubAgentExecutor: Send + Sync {
-    /// 任务类型
-    fn task_type(&self) -> &str;
-    /// 执行任务
-    async fn execute(&self, task: &SubAgentTask) -> Result<SubAgentResult, AppError>;
+/// SubAgent 摘要信息（供 operations list 返回）
+#[derive(Debug, Clone, Serialize)]
+pub struct SubAgentInfo {
+    pub name: String,
+    pub description: String,
+    pub mode: SubAgentMode,
+    pub model: Option<String>,
+    pub builtin: bool,
 }
 
-/// 子代理注册表
+// ============================================================================
+// SubAgentRegistry
+// ============================================================================
+
+/// 统一注册表，管理所有 Markdown 定义的 SubAgent
 pub struct SubAgentRegistry {
-    executors: Vec<Box<dyn SubAgentExecutor>>,
+    agents: HashMap<String, Arc<SubAgentDef>>,
 }
 
 impl SubAgentRegistry {
-    /// 创建新的子代理注册表
     pub fn new() -> Self {
         Self {
-            executors: Vec::new(),
+            agents: HashMap::new(),
         }
     }
 
-    /// 注册执行器
-    pub fn register(&mut self, executor: Box<dyn SubAgentExecutor>) {
+    /// 注册 SubAgent 定义
+    pub fn register(&mut self, def: Arc<SubAgentDef>) {
         tracing::info!(
-            task_type = %executor.task_type(),
-            "sub_agent_executor_registered"
+            name = %def.name,
+            mode = ?def.mode,
+            builtin = def.source_path.is_none(),
+            "sub_agent_registered"
         );
-        self.executors.push(executor);
+        self.agents.insert(def.name.clone(), def);
     }
 
-    /// 派发任务（异步，不阻塞调用者）
-    pub async fn dispatch(&self, task: SubAgentTask) -> Result<SubAgentResult, AppError> {
-        for executor in &self.executors {
-            if executor.task_type() == task.task_type {
-                tracing::info!(
-                    task_id = %task.id,
-                    task_type = %task.task_type,
-                    "sub_agent_task_dispatched"
-                );
-                return executor.execute(&task).await;
-            }
-        }
-
-        tracing::warn!(
-            task_id = %task.id,
-            task_type = %task.task_type,
-            "no_sub_agent_executor_found"
-        );
-        Ok(SubAgentResult::failure(format!(
-            "No executor found for task type: {}",
-            task.task_type
-        )))
+    /// 按名称查找
+    pub fn get(&self, name: &str) -> Option<&Arc<SubAgentDef>> {
+        self.agents.get(name)
     }
 
-    /// 获取已注册的执行器数量
-    pub fn len(&self) -> usize {
-        self.executors.len()
-    }
-
-    /// 是否没有注册任何执行器
-    pub fn is_empty(&self) -> bool {
-        self.executors.is_empty()
-    }
-
-    /// 获取所有支持的任务类型
-    pub fn supported_types(&self) -> Vec<String> {
-        self.executors
-            .iter()
-            .map(|e| e.task_type().to_string())
+    /// 列出所有可用 SubAgent
+    pub fn list(&self) -> Vec<SubAgentInfo> {
+        self.agents
+            .values()
+            .map(|a| SubAgentInfo {
+                name: a.name.clone(),
+                description: a.description.clone(),
+                mode: a.mode,
+                model: a.model.clone(),
+                builtin: a.source_path.is_none(),
+            })
             .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.agents.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty()
     }
 }
 
 impl Default for SubAgentRegistry {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// ============================================================================
-// 内置执行器示例
-// ============================================================================
-
-/// 知识库索引更新任务
-pub struct KnowledgeIndexExecutor;
-
-#[async_trait]
-impl SubAgentExecutor for KnowledgeIndexExecutor {
-    fn task_type(&self) -> &str {
-        "knowledge_index"
-    }
-
-    async fn execute(&self, task: &SubAgentTask) -> Result<SubAgentResult, AppError> {
-        tracing::info!(task_id = %task.id, "knowledge_index_task_started");
-
-        // TODO: 实现知识库索引更新逻辑
-        let mut result = SubAgentResult::success(serde_json::json!({
-            "indexed_count": 0,
-            "duration_ms": 0,
-        }));
-        result.log("Knowledge index task completed");
-
-        Ok(result)
-    }
-}
-
-/// 历史数据归档任务
-pub struct ArchiveExecutor;
-
-#[async_trait]
-impl SubAgentExecutor for ArchiveExecutor {
-    fn task_type(&self) -> &str {
-        "archive"
-    }
-
-    async fn execute(&self, task: &SubAgentTask) -> Result<SubAgentResult, AppError> {
-        tracing::info!(task_id = %task.id, "archive_task_started");
-
-        // TODO: 实现归档逻辑
-        let mut result = SubAgentResult::success(serde_json::json!({
-            "archived_count": 0,
-        }));
-        result.log("Archive task completed");
-
-        Ok(result)
     }
 }

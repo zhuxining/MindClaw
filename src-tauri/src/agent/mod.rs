@@ -15,3 +15,6 @@ pub use context::{
 pub use events::{AgentEvent, ProviderEvent, RunPhase, UsageStats, UserVisiblePhase};
 pub use observer::{AgentObserver, CompositeObserver, TracingObserver};
 pub use session::{AgentSession, RunStatus, SessionManager, ToolTrace, TurnRecord};
+pub use sub_agent::{
+    SubAgentContext, SubAgentDef, SubAgentInfo, SubAgentMode, SubAgentRegistry, SubAgentResult,
+};

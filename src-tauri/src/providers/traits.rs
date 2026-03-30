@@ -26,7 +26,9 @@ pub enum MessageRole {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageContent {
-    Text(String),
+    Text {
+        text: String,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -49,21 +51,27 @@ impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::System,
-            content: vec![MessageContent::Text(content.into())],
+            content: vec![MessageContent::Text {
+                text: content.into(),
+            }],
         }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::User,
-            content: vec![MessageContent::Text(content.into())],
+            content: vec![MessageContent::Text {
+                text: content.into(),
+            }],
         }
     }
 
     pub fn assistant_text(content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::Assistant,
-            content: vec![MessageContent::Text(content.into())],
+            content: vec![MessageContent::Text {
+                text: content.into(),
+            }],
         }
     }
 
@@ -93,7 +101,7 @@ impl ChatMessage {
         self.content
             .iter()
             .filter_map(|part| match part {
-                MessageContent::Text(text) => Some(text.as_str()),
+                MessageContent::Text { text } => Some(text.as_str()),
                 MessageContent::ToolUse { .. } | MessageContent::ToolResult { .. } => None,
             })
             .collect::<Vec<_>>()

@@ -1,6 +1,6 @@
 //! SessionManager：会话生命周期管理
 //!
-//! 会话管理器保存一个完整 turn 的执行结果，支持恢复、调试和历史压缩
+//! 内存缓存 + SQLite 持久化。写操作先更新缓存再异步写 DB。
 
 use crate::error::AppError;
 use crate::models::conversation::ConversationMode;
@@ -8,6 +8,7 @@ use crate::providers::ChatMessage;
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -17,14 +18,12 @@ pub struct AgentSession {
     pub id: String,
     pub sender: String,
     pub mode: ConversationMode,
-    /// 对话回合记录
     pub turns: Vec<TurnRecord>,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
 }
 
 impl AgentSession {
-    /// 创建新会话
     pub fn new(sender: String, mode: ConversationMode) -> Self {
         let now = Utc::now();
         Self {
@@ -37,7 +36,6 @@ impl AgentSession {
         }
     }
 
-    /// 从已有 ID 创建（恢复会话）
     pub fn with_id(id: String, sender: String, mode: ConversationMode) -> Self {
         let now = Utc::now();
         Self {
@@ -50,7 +48,6 @@ impl AgentSession {
         }
     }
 
-    /// 追加回合
     pub fn append_turn(&mut self, turn: TurnRecord) {
         self.turns.push(turn);
         self.updated = Utc::now();
@@ -60,23 +57,20 @@ impl AgentSession {
     pub fn compressed_history(&self, keep_recent: usize) -> Vec<ChatMessage> {
         let total = self.turns.len();
         if total <= keep_recent {
-            // 全部保留
-            self.turns_to_messages(&self.turns)
+            Self::turns_to_messages(&self.turns)
         } else {
-            // 早期摘要 + 近期完整
             let early = &self.turns[..total - keep_recent];
             let recent = &self.turns[total - keep_recent..];
-
             let mut messages = vec![ChatMessage::system(format!(
                 "Earlier conversation ({} turns summarized)...",
                 early.len()
             ))];
-            messages.extend(self.turns_to_messages(recent));
+            messages.extend(Self::turns_to_messages(recent));
             messages
         }
     }
 
-    fn turns_to_messages(&self, turns: &[TurnRecord]) -> Vec<ChatMessage> {
+    fn turns_to_messages(turns: &[TurnRecord]) -> Vec<ChatMessage> {
         let mut messages = Vec::new();
         for turn in turns {
             messages.push(turn.user_message.clone());
@@ -86,18 +80,23 @@ impl AgentSession {
         }
         messages
     }
+
+    /// 压缩回合记录（保留近期完整，早期丢弃）
+    fn compressed_turns(&self, keep_recent: usize) -> Vec<TurnRecord> {
+        let total = self.turns.len();
+        if total <= keep_recent {
+            return self.turns.clone();
+        }
+        self.turns[total - keep_recent..].to_vec()
+    }
 }
 
 /// 单次对话回合记录
 #[derive(Debug, Clone)]
 pub struct TurnRecord {
-    /// 用户消息
     pub user_message: ChatMessage,
-    /// Assistant 回复（可能失败/取消则无）
     pub assistant_message: Option<ChatMessage>,
-    /// 工具执行记录
     pub tool_trace: Vec<ToolTrace>,
-    /// 本次 run 状态
     pub run_status: RunStatus,
     pub created: DateTime<Utc>,
 }
@@ -106,13 +105,10 @@ pub struct TurnRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolTrace {
     pub tool_name: String,
-    /// 截断/脱敏后的输入（≤500 chars）
     pub input_summary: String,
-    /// 截断后的输出（≤1000 chars）
     pub output_summary: String,
     pub duration_ms: u64,
     pub success: bool,
-    /// 第几轮工具循环（0-indexed）
     pub round: u32,
 }
 
@@ -127,25 +123,19 @@ pub enum RunStatus {
 
 /// 会话管理器
 pub struct SessionManager {
-    /// 数据库连接（TODO: 实现持久化后移除 allow）
-    #[allow(dead_code)]
     db: Arc<Mutex<Connection>>,
-    /// 最大保留回合数
     max_turns: usize,
-    /// 近期完整保留数
     keep_recent: usize,
-    /// 内存中的活跃会话缓存
-    sessions: Mutex<std::collections::HashMap<String, AgentSession>>,
+    sessions: Mutex<HashMap<String, AgentSession>>,
 }
 
 impl SessionManager {
-    /// 创建新的 SessionManager
     pub fn new(db: Arc<Mutex<Connection>>) -> Self {
         Self {
             db,
             max_turns: 100,
             keep_recent: 5,
-            sessions: Mutex::new(std::collections::HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -163,7 +153,12 @@ impl SessionManager {
             if let Some(session) = cache.get(id) {
                 return Ok(session.clone());
             }
-            // 尝试从数据库加载（TODO: 实现持久化）
+
+            // 尝试从数据库加载
+            if let Some(session) = self.load_from_db(id).await? {
+                cache.insert(session.id.clone(), session.clone());
+                return Ok(session);
+            }
         }
 
         // 创建新会话
@@ -171,20 +166,25 @@ impl SessionManager {
             Some(id) => AgentSession::with_id(id.to_string(), sender.to_string(), mode.clone()),
             None => AgentSession::new(sender.to_string(), mode.clone()),
         };
+        self.persist_session_meta(&session).await?;
         cache.insert(session.id.clone(), session.clone());
-
         Ok(session)
     }
 
-    /// 获取会话（仅缓存）
+    /// 获取会话（缓存 → DB）
     pub async fn get(&self, session_id: &str) -> Option<AgentSession> {
         let cache = self.sessions.lock().await;
-        cache.get(session_id).cloned()
+        if let Some(s) = cache.get(session_id) {
+            return Some(s.clone());
+        }
+        drop(cache);
+        self.load_from_db(session_id).await.ok().flatten()
     }
 
-    /// 创建新的会话并写入缓存
+    /// 创建新会话
     pub async fn create_new(&self, sender: &str, mode: &ConversationMode) -> AgentSession {
         let session = AgentSession::new(sender.to_string(), mode.clone());
+        let _ = self.persist_session_meta(&session).await;
         let mut cache = self.sessions.lock().await;
         cache.insert(session.id.clone(), session.clone());
         session
@@ -202,7 +202,7 @@ impl SessionManager {
 
         let session = cache
             .get_mut(session_id)
-            .ok_or_else(|| AppError::NotFound(format!("Session not found: {}", session_id)))?;
+            .ok_or_else(|| AppError::NotFound(format!("Session not found: {session_id}")))?;
 
         let turn = TurnRecord {
             user_message: user_msg,
@@ -212,19 +212,23 @@ impl SessionManager {
             created: Utc::now(),
         };
 
-        session.append_turn(turn);
+        session.append_turn(turn.clone());
 
-        // 如果超出最大回合数，进行裁剪
         if session.turns.len() > self.max_turns {
             session.turns = session.compressed_turns(self.keep_recent);
         }
 
-        // TODO: 持久化到数据库
+        let sid = session_id.to_string();
+        let updated = session.updated;
+        drop(cache);
+
+        self.persist_turn(&sid, &turn).await?;
+        self.update_session_timestamp(&sid, updated).await?;
 
         Ok(())
     }
 
-    /// 记录失败元数据（不保存半成品）
+    /// 记录失败
     pub async fn mark_failed(
         &self,
         session_id: &str,
@@ -232,66 +236,281 @@ impl SessionManager {
         error: &str,
     ) -> Result<(), AppError> {
         let mut cache = self.sessions.lock().await;
-
         if let Some(session) = cache.get_mut(session_id) {
-            // 更新最后访问时间
             session.updated = Utc::now();
-            // TODO: 记录失败元数据到数据库
-            tracing::error!(
-                session_id = %session_id,
-                error = %error,
-                "session_marked_failed"
-            );
-        }
+            let updated = session.updated;
+            drop(cache);
 
+            self.persist_run_status(session_id, &RunStatus::Failed(error.to_string()))
+                .await?;
+            self.update_session_timestamp(session_id, updated).await?;
+        }
+        tracing::error!(session_id = %session_id, error = %error, "session_marked_failed");
         Ok(())
     }
 
     /// 标记取消
     pub async fn mark_cancelled(&self, session_id: &str) -> Result<(), AppError> {
         let mut cache = self.sessions.lock().await;
-
         if let Some(session) = cache.get_mut(session_id) {
             session.updated = Utc::now();
-            // TODO: 记录取消状态到数据库
-            tracing::info!(session_id = %session_id, "session_marked_cancelled");
-        }
+            let updated = session.updated;
+            drop(cache);
 
+            self.persist_run_status(session_id, &RunStatus::Cancelled)
+                .await?;
+            self.update_session_timestamp(session_id, updated).await?;
+        }
+        tracing::info!(session_id = %session_id, "session_marked_cancelled");
         Ok(())
     }
 
-    /// 获取会话的压缩后历史（用于构建 LLM 上下文）
+    /// 获取压缩后历史
     pub async fn get_compressed_history(
         &self,
         session_id: &str,
     ) -> Result<Vec<ChatMessage>, AppError> {
         let cache = self.sessions.lock().await;
-
         let session = cache
             .get(session_id)
             .cloned()
-            .ok_or_else(|| AppError::NotFound(format!("Session not found: {}", session_id)))?;
-
+            .ok_or_else(|| AppError::NotFound(format!("Session not found: {session_id}")))?;
         Ok(session.compressed_history(self.keep_recent))
     }
 
-    /// 清理过期会话（释放内存）
+    /// 清理过期缓存
     pub async fn prune_inactive_sessions(&self, max_age: chrono::Duration) {
         let mut cache = self.sessions.lock().await;
         let now = Utc::now();
         cache.retain(|_, session| now - session.updated < max_age);
     }
+
+    // ── DB 操作 ─────────────────────────────────────────────────
+
+    async fn persist_session_meta(&self, session: &AgentSession) -> Result<(), AppError> {
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT OR IGNORE INTO sessions (id, sender, mode, created, updated) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                session.id,
+                session.sender,
+                serde_json::to_string(&session.mode).unwrap_or_default(),
+                session.created.to_rfc3339(),
+                session.updated.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    async fn update_session_timestamp(
+        &self,
+        session_id: &str,
+        updated: DateTime<Utc>,
+    ) -> Result<(), AppError> {
+        let db = self.db.lock().await;
+        db.execute(
+            "UPDATE sessions SET updated = ?1 WHERE id = ?2",
+            rusqlite::params![updated.to_rfc3339(), session_id],
+        )?;
+        Ok(())
+    }
+
+    async fn persist_turn(&self, session_id: &str, turn: &TurnRecord) -> Result<(), AppError> {
+        let user_json = serde_json::to_string(&turn.user_message)
+            .map_err(|e| AppError::Storage(format!("serialize user_message: {e}")))?;
+        let assistant_json = turn
+            .assistant_message
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| AppError::Storage(format!("serialize assistant_message: {e}")))?;
+        let trace_json = serde_json::to_string(&turn.tool_trace)
+            .map_err(|e| AppError::Storage(format!("serialize tool_trace: {e}")))?;
+        let status_str = run_status_to_string(&turn.run_status);
+
+        let db = self.db.lock().await;
+        db.execute(
+            "INSERT INTO turns (session_id, user_message, assistant_message, tool_trace, run_status, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                session_id,
+                user_json,
+                assistant_json,
+                trace_json,
+                status_str,
+                turn.created.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    async fn persist_run_status(
+        &self,
+        session_id: &str,
+        status: &RunStatus,
+    ) -> Result<(), AppError> {
+        let status_str = run_status_to_string(status);
+        let db = self.db.lock().await;
+        // 更新该 session 最后一条 turn 的状态（如果有）
+        db.execute(
+            "UPDATE turns SET run_status = ?1 WHERE id = (SELECT MAX(id) FROM turns WHERE session_id = ?2)",
+            rusqlite::params![status_str, session_id],
+        )?;
+        Ok(())
+    }
+
+    async fn load_from_db(&self, session_id: &str) -> Result<Option<AgentSession>, AppError> {
+        let db = self.db.lock().await;
+
+        let mut stmt =
+            db.prepare("SELECT id, sender, mode, created, updated FROM sessions WHERE id = ?1")?;
+
+        let session_row = stmt
+            .query_row(rusqlite::params![session_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .ok();
+
+        let Some((id, sender, mode_str, created_str, updated_str)) = session_row else {
+            return Ok(None);
+        };
+
+        let mode: ConversationMode =
+            serde_json::from_str(&mode_str).unwrap_or(ConversationMode::Chat);
+        let created = DateTime::parse_from_rfc3339(&created_str)
+            .map(|d| d.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+        let updated = DateTime::parse_from_rfc3339(&updated_str)
+            .map(|d| d.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+
+        // 加载 turns
+        let mut turn_stmt = db.prepare(
+            "SELECT user_message, assistant_message, tool_trace, run_status, created FROM turns WHERE session_id = ?1 ORDER BY id",
+        )?;
+
+        let turns: Vec<TurnRecord> = turn_stmt
+            .query_map(rusqlite::params![session_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(
+                |(user_json, asst_json, trace_json, status_str, created_str)| {
+                    let user_message: ChatMessage = serde_json::from_str(&user_json).ok()?;
+                    let assistant_message: Option<ChatMessage> =
+                        asst_json.and_then(|j| serde_json::from_str(&j).ok());
+                    let tool_trace: Vec<ToolTrace> =
+                        serde_json::from_str(&trace_json).unwrap_or_default();
+                    let run_status = run_status_from_string(&status_str);
+                    let created = DateTime::parse_from_rfc3339(&created_str)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now());
+                    Some(TurnRecord {
+                        user_message,
+                        assistant_message,
+                        tool_trace,
+                        run_status,
+                        created,
+                    })
+                },
+            )
+            .collect();
+
+        Ok(Some(AgentSession {
+            id,
+            sender,
+            mode,
+            turns,
+            created,
+            updated,
+        }))
+    }
 }
 
-impl AgentSession {
-    /// 压缩回合记录（保留近期完整，早期转为摘要）
-    fn compressed_turns(&self, keep_recent: usize) -> Vec<TurnRecord> {
-        let total = self.turns.len();
-        if total <= keep_recent {
-            return self.turns.clone();
-        }
+fn run_status_to_string(status: &RunStatus) -> String {
+    match status {
+        RunStatus::Success => "success".to_string(),
+        RunStatus::Failed(msg) => format!("failed:{msg}"),
+        RunStatus::Cancelled => "cancelled".to_string(),
+    }
+}
 
-        // 只保留近期
-        self.turns[total - keep_recent..].to_vec()
+fn run_status_from_string(s: &str) -> RunStatus {
+    if s == "success" {
+        RunStatus::Success
+    } else if s == "cancelled" {
+        RunStatus::Cancelled
+    } else if let Some(msg) = s.strip_prefix("failed:") {
+        RunStatus::Failed(msg.to_string())
+    } else {
+        RunStatus::Failed(s.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::database::open_memory;
+
+    #[tokio::test]
+    async fn test_session_lifecycle() {
+        let db = open_memory().unwrap();
+        let mgr = SessionManager::new(db);
+
+        // 创建会话
+        let session = mgr
+            .get_or_create("test_user", &ConversationMode::Chat, None)
+            .await
+            .unwrap();
+        let sid = session.id.clone();
+        assert_eq!(session.sender, "test_user");
+
+        // 追加 turn
+        mgr.append_turn(
+            &sid,
+            ChatMessage::user("hello"),
+            Some(ChatMessage::assistant_text("hi there")),
+            vec![],
+        )
+        .await
+        .unwrap();
+
+        // 从缓存获取
+        let s = mgr.get(&sid).await.unwrap();
+        assert_eq!(s.turns.len(), 1);
+
+        // 清除缓存后从 DB 恢复
+        mgr.sessions.lock().await.clear();
+        let restored = mgr
+            .get_or_create("test_user", &ConversationMode::Chat, Some(&sid))
+            .await
+            .unwrap();
+        assert_eq!(restored.turns.len(), 1);
+        assert_eq!(restored.turns[0].user_message.text_content(), "hello");
+    }
+
+    #[tokio::test]
+    async fn test_mark_failed_and_cancelled() {
+        let db = open_memory().unwrap();
+        let mgr = SessionManager::new(db);
+
+        let session = mgr
+            .get_or_create("user", &ConversationMode::Chat, None)
+            .await
+            .unwrap();
+
+        mgr.mark_failed(&session.id, "req1", "boom").await.unwrap();
+        mgr.mark_cancelled(&session.id).await.unwrap();
     }
 }

@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Once;
 
+mod claude;
 mod deepseek;
 mod openai;
 mod registry;

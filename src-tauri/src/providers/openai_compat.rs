@@ -87,7 +87,7 @@ impl OpenAICompatProvider {
                 MessageRole::System => {
                     for part in &msg.content {
                         match part {
-                            MessageContent::Text(text) => request_messages.push(
+                            MessageContent::Text { text } => request_messages.push(
                                 ChatCompletionRequestSystemMessageArgs::default()
                                     .content(text.clone())
                                     .build()
@@ -109,7 +109,7 @@ impl OpenAICompatProvider {
                 MessageRole::User => {
                     for part in &msg.content {
                         match part {
-                            MessageContent::Text(text) => request_messages.push(
+                            MessageContent::Text { text } => request_messages.push(
                                 ChatCompletionRequestUserMessageArgs::default()
                                     .content(text.clone())
                                     .build()

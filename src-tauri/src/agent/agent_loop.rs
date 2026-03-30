@@ -305,27 +305,30 @@ impl AgentLoop {
                 break;
             }
 
-            if round == MAX_TOOL_ROUNDS - 1 {
-                self.session_mgr
-                    .mark_failed(&session_id, &request_id, "tool loop exceeded max rounds")
-                    .await?;
-                self.emit_error(&request_id, &session_id, "工具循环超过最大轮数限制", false)
-                    .await?;
-                return Ok(());
-            }
-
             self.emit_status(&request_id, &session_id, UserVisiblePhase::UsingTools)
                 .await?;
 
+            for call in &tool_calls {
+                self.observer
+                    .on_event(&AgentEvent::ToolStarted {
+                        name: call.name.clone(),
+                    })
+                    .await;
+            }
+
+            let tool_start = std::time::Instant::now();
             let results = self
                 .tools
                 .execute_calls(tool_calls.clone(), cancel.clone())
                 .await?;
+            let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
 
             let assistant_parts = {
                 let mut parts = Vec::new();
                 if !text_buffer.is_empty() {
-                    parts.push(MessageContent::Text(text_buffer.clone()));
+                    parts.push(MessageContent::Text {
+                        text: text_buffer.clone(),
+                    });
                 }
                 parts.extend(tool_calls.iter().map(|call| MessageContent::ToolUse {
                     id: call.id.clone(),
@@ -349,7 +352,7 @@ impl AgentLoop {
                     tool_name: call.name.clone(),
                     input_summary: truncate(&call.arguments.to_string(), 500),
                     output_summary: truncate(&result.content, 1000),
-                    duration_ms: 0,
+                    duration_ms: tool_duration_ms,
                     success: !result.is_error,
                     round: round as u32,
                 });
@@ -359,6 +362,16 @@ impl AgentLoop {
                     result.tool_call_id.clone(),
                     result.is_error,
                 ));
+            }
+
+            // 最后一轮仍有工具调用 → 超限报错（检查在工具执行后，确保 8 轮完整执行）
+            if round == MAX_TOOL_ROUNDS - 1 {
+                self.session_mgr
+                    .mark_failed(&session_id, &request_id, "tool loop exceeded max rounds")
+                    .await?;
+                self.emit_error(&request_id, &session_id, "工具循环超过最大轮数限制", false)
+                    .await?;
+                return Ok(());
             }
 
             self.emit_status(&request_id, &session_id, UserVisiblePhase::Thinking)
@@ -470,7 +483,7 @@ impl AgentLoop {
                 system: Some(system_prompt),
                 tools: tool_schemas,
                 tool_choice: ToolChoice::Auto,
-                max_tokens: Some(4_000),
+                max_tokens: None,
                 cancel,
             })
             .await?;
@@ -504,9 +517,6 @@ impl AgentLoop {
                 } => {
                     self.observer
                         .on_event(&AgentEvent::ProviderToolCall { name: name.clone() })
-                        .await;
-                    self.observer
-                        .on_event(&AgentEvent::ToolStarted { name: name.clone() })
                         .await;
                     tool_calls.push(ToolCall {
                         id,

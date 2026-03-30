@@ -1,10 +1,10 @@
-# MindClaw 技术架构设计
+# MindClaw 技术架构设计 — 命令架构
 
 > 完整架构文档索引见 [README.md](./README.md)
 
 ## 三层命令架构
 
-系统提供三种命令入口，覆盖不同使用场景，底层共享 Services 层：
+系统提供三种命令入口，底层共享 Services 层：
 
 ```
 React Frontend ── invoke() ──► Web Commands ──► Services ──► Storage
@@ -17,48 +17,44 @@ React Frontend ── invoke() ──► Web Commands ──► Services ──�
 | 维度 | Web Commands | Agent Commands | CLI Commands |
 |------|-------------|----------------|-------------|
 | 入口 | React `invoke()` | 对话消息 `/xxx` | 终端 `mindclaw` |
-| 职责 | 业务 CRUD（完整） | Agent 生命周期控制 | 自动化/脚本操作 |
+| 职责 | 业务 CRUD | Agent 生命周期控制 | 自动化/脚本 |
 | 数量 | ~25 个 | 4 个 | ~12 个 |
-| 调用链 | Command → Services | AgentLoop 拦截 → Agent 自身 | CliRuntime → Services |
-| 需要 Tauri | 是 | 是（运行在 AgentLoop 内） | 否（独立二进制） |
-| 需要 LLM | 否 | 否（纯控制，不调用 Provider） | 仅 agent 子命令 |
+| 调用链 | Command → Services | AgentLoop 拦截 | AppRuntime → Services |
+| 需要 Tauri | 是 | 是（运行在 AgentLoop 内） | 否 |
+| 需要 LLM | 否 | 否（纯控制） | 仅 agent 子命令 |
 
-**Agent Commands "不触发 LLM 调用"说明**：
+**Agent Commands 说明**：在 `AgentLoop.run_once()` 中拦截，位于 Session 加载之后、Context 组装之前。拦截后直接返回确定性结果，不调用 Provider。
 
-Agent Commands 在 `AgentLoop.run_once()` 中拦截，位于 Session 加载之后、Context 组装之前。虽然消息已经进入 AgentLoop，但拦截后会**直接返回确定性结果**，不会继续执行 Context 组装和 Provider 调用流程。因此"不触发 LLM 调用"指的是：
+---
 
-- 不调用 `Provider.chat()` 或 `Provider.chat_stream()`
-- 不消耗 token
-- 不依赖 LLM 理解用户意图
-- 直接匹配命令名并执行预定义逻辑
+## Web Commands — Tauri IPC
 
-### 3.1 Web Commands — Tauri IPC（前端调用）
+前后端通过 `invoke()` 通信，命令返回 `Result<T, AppError>`。
 
-所有前后端通信通过 Tauri `invoke()` 和 Event System 完成。命令统一返回 `Result<T, AppError>`。
+### 命令清单
 
-调用链：`React invoke() → #[tauri::command] → Services → Storage`
+| 分类 | 命令 | 说明 |
+|------|------|------|
+| **Conversation** | `send_message` | 发送消息，返回 request_id，响应通过 Event 流式推送 |
+| | `get_session_history` | 获取会话历史 |
+| **Daily** | `get_daily` | 获取/创建当日日记 |
+| | `save_daily` | 保存日记 |
+| **Tasks** | `list_tasks` | 任务列表 |
+| | `create_task` | 创建任务 |
+| | `update_task_status` | 更新任务状态 |
+| **Knowledge** | `search_knowledge` | 搜索知识条目 |
+| | `get_knowledge` | 获取知识笔记 |
+| **Settings** | `get_settings` | 读取设置 |
+| | `save_settings` | 保存设置 |
+| | `set_api_key` | 存入 OS Keychain |
+| **System** | `get_system_status` | 系统健康状态 |
 
-#### Resource（资源）
+### 流式响应
 
-| 命令 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `resource_submit` | `{ uri: String, type: String }` | `Resource` | 提交资源（URL/文件） |
-| `resource_list` | `{ status: Option<String> }` | `Vec<Resource>` | 资源列表（可按状态过滤） |
-| `resource_retry` | `{ id: String }` | `()` | 重试失败的资源解析 |
-
-#### Conversation（对话）
-
-| 命令 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `conversation_send` | `{ message: String, session_id?: String, mode?: ConversationMode }` | `SendMessageAck { session_id, request_id }` | 发起对话并入队，最终响应通过 Event 流式推送 |
-| `conversation_history` | `{ session_id: String, limit: u32 }` | `Vec<Message>` | 获取会话历史 |
-| `conversation_sessions` | `{ limit: u32 }` | `Vec<Session>` | 会话列表 |
-
-流式响应通过 Tauri Event 推送。Desktop 端将 `OutboundPayload` 直接映射为统一事件：
+通过 Tauri Event `conversation_event` 推送：
 
 ```
-Event: "conversation_event" →
-  { session_id, request_id, payload }
+{ session_id, request_id, payload }
 
 payload =
   { type: "chunk", content }
@@ -67,599 +63,87 @@ payload =
   | { type: "status", phase }
 ```
 
-前端通过 `listen("conversation_event", callback)` 接收，并按 `payload.type` 更新界面。
+前端通过 `listen("conversation_event", callback)` 接收。
 
-#### Daily（日记）
+### State 注入
 
-| 命令 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `daily_get` | `{ date: String }` | `DailyNote` | 获取或创建当日日记 |
-| `daily_save` | `{ date: String, content: String }` | `()` | 保存日记 |
-| `daily_list` | `{ limit: u32 }` | `Vec<DailyMeta>` | 日记列表（元数据） |
-
-#### Tasks（任务）
-
-| 命令 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `task_create` | `{ content, due?, context?, note_path? }` | `Task` | 创建任务 |
-| `task_update` | `{ id, status?, content?, due? }` | `Task` | 更新任务 |
-| `task_list` | `{ status?: String }` | `Vec<Task>` | 任务列表（可按状态筛选） |
-
-#### Knowledge（知识库）
-
-| 命令 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `knowledge_search` | `{ query: String, limit: u32 }` | `Vec<KnowledgeEntry>` | 搜索知识条目 |
-| `knowledge_list` | `{ tag?: String }` | `Vec<KnowledgeEntry>` | 知识列表 |
-| `knowledge_get` | `{ path: String }` | `KnowledgeNote` | 获取完整知识笔记 |
-| `knowledge_update` | `{ path: String, content: String }` | `()` | 人类纠偏修改 |
-
-#### Settings（设置）
-
-| 命令 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `settings_get` | `{}` | `AppSettings` | 读取全部设置 |
-| `settings_set` | `{ key: String, value: Value }` | `()` | 更新单项设置 |
-| `apikey_store` | `{ key: String }` | `()` | 存入 OS Keychain |
-| `apikey_exists` | `{}` | `bool` | 检查 Key 是否存在 |
-
-#### Agent
-
-| 命令 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `agent_memories` | `{ limit: u32, category?: String }` | `Vec<Memory>` | Agent 记忆查询 |
-| `agent_status` | `{}` | `AgentStatus` | Agent 运行状态 |
-
-#### System（系统）
-
-| 命令 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `system_health` | `{}` | `SystemHealth` | 系统健康状态（Heartbeat） |
-| `gateway_start` | `{ port?: u16 }` | `()` | 启动 Gateway 服务 |
-| `gateway_stop` | `{}` | `()` | 停止 Gateway 服务 |
-| `gateway_status` | `{}` | `GatewayStatus` | Gateway 运行状态 |
-| `cron_list` | `{}` | `Vec<CronJob>` | 定时任务列表 |
-| `cron_toggle` | `{ name: String, enabled: bool }` | `()` | 启用/禁用定时任务 |
-
-#### Tauri 状态管理
-
-通过 `.manage()` 注入全局共享状态：
+通过 `AppRuntime` 统一注入（见 [10-runtime.md](./10-runtime.md)）：
 
 ```rust
-// lib.rs
-.manage(DbState(Mutex::new(connection)))
-.manage(AppConfig::load()?)
-```
-
-命令通过 `State<'_, DbState>` 参数获取。
-
-### 3.2 Agent Commands — 控制指令（对话内）
-
-Agent 生命周期管控指令。用户在对话中输入 `/xxx` 来控制 Agent 行为，不触发 LLM 调用，直接返回确定性结果。
-
-#### 指令清单
-
-| 指令 | 说明 | 行为 |
-|------|------|------|
-| `/new` | 新建会话 | 关闭当前 Session，创建新的空 Session，返回确认 |
-| `/stop` | 停止操作 | 取消所有进行中的 SubAgent 任务，中断流式响应，返回确认 |
-| `/restart` | 重启服务 | 重新初始化 AgentLoop（重载配置、重连 Provider），返回状态 |
-| `/status` | 查看状态 | 返回 Agent 运行状态、活跃 Session 数、SubAgent 队列长度、Provider 连接状态、Memory 统计 |
-
-#### 核心设计
-
-```rust
-// src-tauri/src/agent_commands/traits.rs
-
-pub struct AgentCommandContext {
-    pub session: Session,
-    pub session_mgr: Arc<SessionManager>,
-    pub sub_agent_tx: mpsc::Sender<SubAgentTask>,
-    pub cancel_token: CancellationToken,  // /stop 可触发取消正在进行的操作
-}
-
-pub struct AgentCommandResult {
-    pub response: String,          // 返回给用户的文本
-    pub action: AgentAction,       // 后续动作
-}
-
-pub enum AgentAction {
-    None,                          // /status: 仅返回信息
-    NewSession(Session),           // /new: 切换到新 Session
-    StopAll,                       // /stop: 取消进行中操作
-    Restart,                       // /restart: 触发重启流程
-}
-
-#[async_trait]
-pub trait AgentCommand: Send + Sync {
-    fn name(&self) -> &str;        // "new", "stop" 等（不含 /）
-    fn description(&self) -> &str;
-    async fn execute(&self, ctx: AgentCommandContext) -> Result<AgentCommandResult, AppError>;
-}
-```
-
-```rust
-// src-tauri/src/agent_commands/mod.rs
-
-pub struct AgentCommandRegistry {
-    commands: HashMap<String, Arc<dyn AgentCommand>>,
-}
-
-impl AgentCommandRegistry {
-    pub fn default() -> Self {
-        let mut registry = Self { commands: HashMap::new() };
-        registry.register(Arc::new(NewCommand));
-        registry.register(Arc::new(StopCommand));
-        registry.register(Arc::new(RestartCommand));
-        registry.register(Arc::new(StatusCommand));
-        registry
-    }
-
-    pub fn get(&self, name: &str) -> Option<&Arc<dyn AgentCommand>> {
-        self.commands.get(name)
-    }
-}
-
-/// 解析消息是否为 Agent 控制指令
-/// 仅匹配以 "/" 开头且命令名在注册表中的消息
-pub fn parse_agent_command(input: &str) -> Option<&str> {
-    let trimmed = input.trim();
-    if trimmed.starts_with('/') {
-        Some(trimmed[1..].split_whitespace().next()?)
-    } else {
-        None
-    }
-}
-```
-
-#### 拦截点
-
-Agent Commands 在 `AgentLoop.run_once()` 中拦截，位于 Session 加载之后、Context 组装之前。所有 Channel（Desktop/Telegram/Feishu）自动获得指令支持：
-
-```rust
-// 在 agent_loop.rs run_once() 中
-
-// 1. Session
-let session = self.session_mgr.get_or_create(&message.sender, &message.mode).await?;
-
-// 1.5 Agent Command 拦截（/new /stop /restart /status）
-if let Some(cmd_name) = parse_agent_command(&message.content) {
-    if let Some(cmd) = self.agent_commands.get(cmd_name) {
-        let ctx = AgentCommandContext {
-            session: session.clone(),
-            session_mgr: self.session_mgr.clone(),
-            cancel_token: self.run_cancel_token(&session.id),
-        };
-        let result = cmd.execute(ctx).await?;
-        self.bus.publish_outbound(OutboundMessage {
-            id: Uuid::new_v4().to_string(),
-            request_id: message.request_id.clone(),
-            session_id: session.id.clone(),
-            target: message.source.clone(),
-            payload: OutboundPayload::Chunk { content: result.response.clone() },
-        }).await?;
-        self.bus.publish_outbound(OutboundMessage {
-            id: Uuid::new_v4().to_string(),
-            request_id: message.request_id.clone(),
-            session_id: session.id.clone(),
-            target: message.source.clone(),
-            payload: OutboundPayload::Done,
-        }).await?;
-        self.handle_action(result.action).await?;
-        return Ok(());
-    }
-}
-
-// 2. Context（正常对话流程继续）
-let context = self.context_builder.build(&message, &session).await?;
-// ...
-```
-
-#### 指令实现示例
-
-```rust
-// src-tauri/src/agent_commands/new.rs
-
-pub struct NewCommand;
-
-#[async_trait]
-impl AgentCommand for NewCommand {
-    fn name(&self) -> &str { "new" }
-    fn description(&self) -> &str { "创建新会话" }
-
-    async fn execute(&self, ctx: AgentCommandContext) -> Result<AgentCommandResult, AppError> {
-        // 关闭当前 Session
-        ctx.session_mgr.close(&ctx.session.id).await?;
-
-        // 创建新 Session
-        let new_session = ctx.session_mgr
-            .create(&ctx.session.sender, &ctx.session.mode).await?;
-
-        Ok(AgentCommandResult {
-            response: format!("✓ 已创建新会话 ({})", &new_session.id[..8]),
-            action: AgentAction::NewSession(new_session),
-        })
-    }
-}
-```
-
-### 3.3 CLI Commands — 终端命令行
-
-无 GUI 场景下的操作入口，用于自动化、脚本、远程管理。独立二进制，不启动 Tauri/UI。
-
-#### CLI 定义（基于 clap）
-
-```rust
-// src-tauri/src/cli/mod.rs
-
-use clap::{Parser, Subcommand};
-
-#[derive(Parser)]
-#[command(name = "mindclaw", about = "MindClaw CLI - AI 个人知识管理助手")]
-#[command(version = env!("CARGO_PKG_VERSION"))]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: CliCommand,
-
-    /// 指定 vault 路径（默认 ~/.config/mindclaw）
-    #[arg(long, global = true)]
-    pub vault: Option<PathBuf>,
-}
-
-#[derive(Subcommand)]
-pub enum CliCommand {
-    /// 与 Agent 对话（交互式或单消息模式）
-    Agent {
-        /// 发送单条消息后立即退出
-        #[arg(short, long, value_name = "MESSAGE")]
-        message: Option<String>,
-        /// 指定会话 ID 继续对话
-        #[arg(short, long, value_name = "SESSION_ID")]
-        session: Option<String>,
-        /// 指定 Provider（claude/deepseek/openai）
-        #[arg(short, long, value_name = "PROVIDER")]
-        provider: Option<String>,
-        /// 指定模型 ID
-        #[arg(short = 'o', long, value_name = "MODEL")]
-        model: Option<String>,
-    },
-
-    /// 查看系统状态
-    Status,
-
-    /// 运行诊断检查
-    Doctor,
-
-    /// 会话管理
-    Session {
-        #[command(subcommand)]
-        action: SessionAction,
-    },
-
-    /// 配置管理
-    Config {
-        #[command(subcommand)]
-        action: ConfigAction,
-    },
-
-    /// 生成 shell 补全脚本
-    Completions {
-        /// Shell 类型（bash/zsh/fish）
-        #[arg(value_name = "SHELL")]
-        shell: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum SessionAction {
-    /// 列出所有会话
-    List,
-    /// 导出会话记录
-    Export {
-        session_id: String,
-        #[arg(short, long, value_name = "FILE")]
-        output: Option<String>,
-    },
-    /// 删除会话
-    Delete {
-        session_id: String,
-        #[arg(short, long)]
-        force: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum ConfigAction {
-    /// 初始化配置（引导设置）
-    Init {
-        #[arg(short, long)]
-        force: bool,
-    },
-    /// 查看当前配置
-    Show,
-    /// 设置配置项
-    Set {
-        #[arg(value_name = "KEY")]
-        key: String,
-        #[arg(value_name = "VALUE")]
-        value: String,
-    },
-}
-```
-
-#### 最小运行时
-
-CLI 不依赖 Tauri 运行时，仅初始化 DB + Services + Agent（agent 模式）：
-
-```rust
-// src-tauri/src/cli/runtime.rs
-
-pub struct CliRuntime {
-    pub db: Arc<DbState>,
-    pub services: Arc<ServiceContainer>,
-    pub agent: Option<Arc<AgentLoop>>,  // agent 模式需要
-    pub config: CliConfig,
-}
-
-impl CliRuntime {
-    /// 基础初始化（所有命令共用）
-    pub async fn init(vault_path: PathBuf) -> Result<Self, AppError> {
-        let db = init_database(&vault_path.join("mindclaw.db"))?;
-        let services = Arc::new(ServiceContainer::new(db.clone()));
-        let config = CliConfig::load(&vault_path)?;
-
-        Ok(Self {
-            db,
-            services,
-            agent: None,
-            config,
-        })
-    }
-
-    /// 初始化 Agent（agent 模式需要）
-    pub async fn with_agent(mut self, provider_id: Option<String>) -> Result<Self, AppError> {
-        let provider = init_provider(provider_id)?;
-        let bus = Arc::new(MessageBus::new(100));
-        let session_mgr = Arc::new(SessionManager::new(self.db.clone()));
-        let tools = init_tools()?;
-        let agent_commands = Arc::new(AgentCommandRegistry::with_builtins());
-        let context_pipeline = init_context_pipeline();
-        let observer = Arc::new(TracingObserver::new());
-
-        let agent = Arc::new(AgentLoop::new(
-            bus.clone(),
-            session_mgr,
-            context_pipeline,
-            provider,
-            tools,
-            agent_commands,
-            observer,
-        ));
-
-        // 启动 AgentLoop
-        let agent_clone = agent.clone();
-        tokio::spawn(async move {
-            AgentLoop::run(agent_clone).await.ok();
-        });
-
-        // 启动出站消息消费任务
-        tokio::spawn(async move {
-            consume_outbound_messages(bus).await;
-        });
-
-        self.agent = Some(agent);
-        Ok(self)
-    }
-}
-```
-
-#### 命令清单
-
-| 子命令 | 参数 | 调用 Service/组件 | 说明 |
-|--------|------|------------------|------|
-| `mindclaw agent` | - | AgentLoop | 交互式对话（REPL） |
-| `mindclaw agent -m "msg"` | -m: 消息内容 | AgentLoop | 单轮对话后退出 |
-| `mindclaw agent --session <id>` | -s: 会话ID | AgentLoop | 继续指定会话 |
-| `mindclaw agent -p deepseek` | -p: Provider | AgentLoop | 临时指定 Provider |
-| `mindclaw status` | - | 多组件聚合 | 显示系统状态摘要 |
-| `mindclaw doctor` | - | 多组件检查 | 运行诊断检查 |
-| `mindclaw session list` | - | SessionManager | 列出所有会话 |
-| `mindclaw session export <id>` | -o: 输出文件 | SessionManager | 导出会话为 Markdown |
-| `mindclaw session delete <id>` | -f: 强制删除 | SessionManager | 删除会话 |
-| `mindclaw config init` | -f: 强制重新初始化 | ConfigManager | 交互式初始化配置 |
-| `mindclaw config show` | - | ConfigManager | 显示当前配置 |
-| `mindclaw config set <k> <v>` | - | ConfigManager | 设置配置项 |
-| `mindclaw completions bash` | - | - | 生成 Bash 补全脚本 |
-
-#### 详细命令设计
-
-##### `mindclaw agent` - Agent 对话
-
-**交互模式**（默认）：启动 REPL，持续对话直到输入 `exit`
-
-```bash
-$ mindclaw agent
-🤖 MindClaw Agent - 输入消息开始对话
-提示：输入 /new 创建新会话，Ctrl+C 或输入 'exit' 退出
-
-> 你好
-你好！有什么我可以帮助你的吗？
-
-> /new
-✓ 已创建新会话
-
-> exit
-👋 再见!
-```
-
-**单消息模式**：`-m/--message`，适合脚本调用
-
-```bash
-$ mindclaw agent -m "什么是 Rust 的所有权系统？"
-Rust 的所有权系统是一种内存管理机制...
-
-💾 会话 ID: sess_abc123
-```
-
-**继续已有会话**：`--session`
-
-```bash
-$ mindclaw agent --session sess_abc123
-📝 继续会话: sess_abc123
-
-> 继续刚才的话题
-...
-```
-
-**临时指定 Provider**：`-p/--provider`
-
-```bash
-mindclaw agent -p claude -o claude-sonnet-4-6
-```
-
-##### `mindclaw status` - 系统状态
-
-显示当前系统状态和配置摘要：
-
-```bash
-$ mindclaw status
-🤖 MindClaw 状态
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Provider:   deepseek
-Model:      deepseek-chat
-API Key:    已设置 (DEEPSEEK_API_KEY)
-
-数据库:     ~/.config/mindclaw/mindclaw.db
-配置目录:   ~/.config/mindclaw
-Vault 目录: ~/MindClaw
-
-工具数量:   2 (shell, filesystem)
-会话数量:   5
-
-运行状态:   ✅ 就绪
-```
-
-##### `mindclaw doctor` - 诊断检查
-
-运行系统诊断，检查配置和环境：
-
-```bash
-$ mindclaw doctor
-🔍 运行诊断检查...
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✓ API Key (DEEPSEEK_API_KEY): 已设置
-✓ 数据库连接: 正常 (~/.config/mindclaw/mindclaw.db)
-✓ 配置目录: 可读写
-✓ Vault 目录: 可读写
-✓ Shell 工具: 可用
-✓ Filesystem 工具: 可用
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-诊断完成: 6/6 通过
-```
-
-##### `mindclaw session` - 会话管理
-
-**list**: 列出所有会话
-
-```bash
-$ mindclaw session list
-📋 会话列表
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ID                    创建时间           消息数   最后更新
-───────────────────────────────────────────────────────
-sess_abc123def456    2026-03-30 10:23   12      10:45
-sess_xyz789uvw012    2026-03-29 18:15   5       19:02
-```
-
-**export**: 导出会话记录
-
-```bash
-# 输出到 stdout
-$ mindclaw session export sess_abc123def456
-
-# 输出到文件
-$ mindclaw session export sess_abc123def456 -o ~/Downloads/chat.md
-```
-
-**delete**: 删除会话
-
-```bash
-# 交互式确认
-$ mindclaw session delete sess_abc123def456
-⚠️ 确定要删除会话 sess_abc123def456 吗? [y/N]
-
-# 强制删除
-$ mindclaw session delete sess_abc123def456 -f
-✓ 会话已删除
-```
-
-##### `mindclaw config` - 配置管理
-
-**init**: 初始化配置
-
-```bash
-# 首次初始化（交互式引导）
-$ mindclaw config init
-🔧 MindClaw 配置初始化
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-请选择默认 Provider:
-  1) deepseek
-  2) claude
-  3) openai
-> 1
-
-请输入 DeepSeek API Key:
-> sk-...
-
-配置已保存到: ~/.config/mindclaw/config.toml
-```
-
-**show**: 显示配置
-
-```bash
-$ mindclaw config show
-📋 当前配置 (~/.config/mindclaw/config.toml)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[provider]
-default = "deepseek"
-api_key_env = "DEEPSEEK_API_KEY"
-default_model = "deepseek-chat"
-
-[cli]
-default_mode = "agent"
-```
-
-**set**: 设置配置项
-
-```bash
-$ mindclaw config set provider.default claude
-✓ provider.default = "claude"
-```
-
-##### `mindclaw completions` - Shell 补全
-
-```bash
-# Bash
-$ mindclaw completions bash > /usr/local/etc/bash_completion.d/mindclaw
-
-# Zsh
-$ mindclaw completions zsh > ~/.zsh/completions/_mindclaw
-
-# Fish
-$ mindclaw completions fish > ~/.config/fish/completions/mindclaw.fish
-```
-
-#### Cargo.toml 配置
-
-```toml
-[[bin]]
-name = "mindclaw"
-path = "src/bin/cli.rs"
-
-[dependencies]
-clap = { version = "4", features = ["derive"] }
-clap_complete = "4"
-directories = "6.0"
+#[tauri::command]
+pub async fn list_tasks(
+    runtime: State<'_, Arc<AppRuntime>>,
+) -> AppResult<Vec<Task>>
 ```
 
 ---
+
+## Agent Commands — 控制指令
+
+对话中输入 `/xxx` 控制 Agent 行为，不触发 LLM。
+
+| 指令 | 说明 | 行为 |
+|------|------|------|
+| `/new` | 新建会话 | 关闭当前 Session，创建新 Session |
+| `/stop` | 停止操作 | 取消进行中的任务，中断流式响应 |
+| `/restart` | 重启服务 | 重新初始化 AgentLoop |
+| `/status` | 查看状态 | 返回运行状态、活跃 Session 数等 |
+
+### 核心设计
+
+- **拦截点**：`AgentLoop.run_once()`，Session 加载后、Context 组装前
+- **注册表**：`AgentCommandRegistry`，支持自定义指令
+- **上下文**：`AgentCommandContext` 提供 session、cancel_token 等
+- **返回**：`AgentCommandResult { response, action }`，action 指示后续行为
+
+---
+
+## CLI Commands — 终端命令
+
+独立二进制，不启动 Tauri/UI。
+
+### 命令清单
+
+| 子命令 | 说明 |
+|--------|------|
+| `mindclaw agent` | 交互式对话（REPL） |
+| `mindclaw agent -m <msg>` | 单轮对话后退出 |
+| `mindclaw agent --session <id>` | 继续指定会话 |
+| `mindclaw agent -p <provider>` | 临时指定 Provider |
+| `mindclaw status` | 系统状态摘要 |
+| `mindclaw session list` | 列出会话 |
+| `mindclaw session export <id>` | 导出会话 |
+| `mindclaw session delete <id>` | 删除会话 |
+| `mindclaw config init` | 初始化配置 |
+| `mindclaw config show` | 显示配置 |
+| `mindclaw config set <k> <v>` | 设置配置项 |
+| `mindclaw completions <shell>` | 生成 Shell 补全脚本 |
+
+### 运行时
+
+CLI 直接使用 `AppRuntime`：
+
+```rust
+let rt = AppRuntime::builder().build().await?;
+rt.start().await?;
+// CLI 特有逻辑（REPL、终端输出）
+rt.shutdown().await;
+```
+
+---
+
+## 层级关系
+
+```
+Web Commands (Tauri IPC)
+Agent Commands (AgentLoop 拦截)
+CLI Commands (独立二进制)
+         │
+         ▼
+    AppRuntime
+         │
+    ┌────┴────┐
+Services   Agent
+    │        │
+Storage   Provider
+```

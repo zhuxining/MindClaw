@@ -18,10 +18,10 @@ React Frontend ── invoke() ──► Web Commands ──► Services ──�
 |------|-------------|----------------|-------------|
 | 入口 | React `invoke()` | 对话消息 `/xxx` | 终端 `mindclaw` |
 | 职责 | 业务 CRUD（完整） | Agent 生命周期控制 | 自动化/脚本操作 |
-| 数量 | ~25 个 | 4 个 | ~6 个 |
+| 数量 | ~25 个 | 4 个 | ~12 个 |
 | 调用链 | Command → Services | AgentLoop 拦截 → Agent 自身 | CliRuntime → Services |
 | 需要 Tauri | 是 | 是（运行在 AgentLoop 内） | 否（独立二进制） |
-| 需要 LLM | 否 | 否（纯控制，不调用 Provider） | 仅 chat 子命令 |
+| 需要 LLM | 否 | 否（纯控制，不调用 Provider） | 仅 agent 子命令 |
 
 **Agent Commands "不触发 LLM 调用"说明**：
 
@@ -287,7 +287,7 @@ impl AgentCommand for NewCommand {
 
 无 GUI 场景下的操作入口，用于自动化、脚本、远程管理。独立二进制，不启动 Tauri/UI。
 
-#### CLI 定义
+#### CLI 定义（基于 clap）
 
 ```rust
 // src-tauri/src/cli/mod.rs
@@ -295,55 +295,101 @@ impl AgentCommand for NewCommand {
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "mindclaw", about = "MindClaw CLI")]
+#[command(name = "mindclaw", about = "MindClaw CLI - AI 个人知识管理助手")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 pub struct Cli {
     #[command(subcommand)]
     pub command: CliCommand,
 
-    /// 指定 vault 路径（默认 ~/MindClaw）
+    /// 指定 vault 路径（默认 ~/.config/mindclaw）
     #[arg(long, global = true)]
     pub vault: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
 pub enum CliCommand {
-    /// 查看/创建今日日记
-    Daily { date: Option<String> },
-
-    /// 搜索知识库
-    Search {
-        query: String,
-        #[arg(short, default_value = "5")]
-        limit: u32,
+    /// 与 Agent 对话（交互式或单消息模式）
+    Agent {
+        /// 发送单条消息后立即退出
+        #[arg(short, long, value_name = "MESSAGE")]
+        message: Option<String>,
+        /// 指定会话 ID 继续对话
+        #[arg(short, long, value_name = "SESSION_ID")]
+        session: Option<String>,
+        /// 指定 Provider（claude/deepseek/openai）
+        #[arg(short, long, value_name = "PROVIDER")]
+        provider: Option<String>,
+        /// 指定模型 ID
+        #[arg(short = 'o', long, value_name = "MODEL")]
+        model: Option<String>,
     },
-
-    /// 任务管理
-    Task {
-        #[command(subcommand)]
-        action: TaskAction,
-    },
-
-    /// 发送消息给 Agent（单轮，需 API Key）
-    Chat { message: String },
 
     /// 查看系统状态
     Status,
 
-    /// 导出数据备份
-    Export { format: Option<String> },
+    /// 运行诊断检查
+    Doctor,
+
+    /// 会话管理
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
+
+    /// 配置管理
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
+    /// 生成 shell 补全脚本
+    Completions {
+        /// Shell 类型（bash/zsh/fish）
+        #[arg(value_name = "SHELL")]
+        shell: String,
+    },
 }
 
 #[derive(Subcommand)]
-pub enum TaskAction {
-    Create { content: String, #[arg(long)] due: Option<String> },
-    List { #[arg(long)] status: Option<String> },
-    Complete { id: String },
+pub enum SessionAction {
+    /// 列出所有会话
+    List,
+    /// 导出会话记录
+    Export {
+        session_id: String,
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<String>,
+    },
+    /// 删除会话
+    Delete {
+        session_id: String,
+        #[arg(short, long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// 初始化配置（引导设置）
+    Init {
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// 查看当前配置
+    Show,
+    /// 设置配置项
+    Set {
+        #[arg(value_name = "KEY")]
+        key: String,
+        #[arg(value_name = "VALUE")]
+        value: String,
+    },
 }
 ```
 
 #### 最小运行时
 
-CLI 不依赖 Tauri 运行时，仅初始化 DB + Services：
+CLI 不依赖 Tauri 运行时，仅初始化 DB + Services + Agent（agent 模式）：
 
 ```rust
 // src-tauri/src/cli/runtime.rs
@@ -351,63 +397,259 @@ CLI 不依赖 Tauri 运行时，仅初始化 DB + Services：
 pub struct CliRuntime {
     pub db: Arc<DbState>,
     pub services: Arc<ServiceContainer>,
-    pub provider: Option<Arc<dyn Provider>>,  // 仅 chat 子命令需要
+    pub agent: Option<Arc<AgentLoop>>,  // agent 模式需要
+    pub config: CliConfig,
 }
 
 impl CliRuntime {
-    pub fn init(vault_path: PathBuf) -> Result<Self, AppError> {
-        let db = init_database(&vault_path.join("data/main.db"))?;
+    /// 基础初始化（所有命令共用）
+    pub async fn init(vault_path: PathBuf) -> Result<Self, AppError> {
+        let db = init_database(&vault_path.join("mindclaw.db"))?;
         let services = Arc::new(ServiceContainer::new(db.clone()));
-        Ok(Self { db, services, provider: None })
+        let config = CliConfig::load(&vault_path)?;
+
+        Ok(Self {
+            db,
+            services,
+            agent: None,
+            config,
+        })
     }
 
-    /// chat 子命令需要 Provider
-    pub fn with_provider(mut self) -> Result<Self, AppError> {
-        let key = keyring::Entry::new("mindclaw", "api_key")?.get_password()?;
-        self.provider = Some(Arc::new(ClaudeProvider::from_key(&key)));
+    /// 初始化 Agent（agent 模式需要）
+    pub async fn with_agent(mut self, provider_id: Option<String>) -> Result<Self, AppError> {
+        let provider = init_provider(provider_id)?;
+        let bus = Arc::new(MessageBus::new(100));
+        let session_mgr = Arc::new(SessionManager::new(self.db.clone()));
+        let tools = init_tools()?;
+        let agent_commands = Arc::new(AgentCommandRegistry::with_builtins());
+        let context_pipeline = init_context_pipeline();
+        let observer = Arc::new(TracingObserver::new());
+
+        let agent = Arc::new(AgentLoop::new(
+            bus.clone(),
+            session_mgr,
+            context_pipeline,
+            provider,
+            tools,
+            agent_commands,
+            observer,
+        ));
+
+        // 启动 AgentLoop
+        let agent_clone = agent.clone();
+        tokio::spawn(async move {
+            AgentLoop::run(agent_clone).await.ok();
+        });
+
+        // 启动出站消息消费任务
+        tokio::spawn(async move {
+            consume_outbound_messages(bus).await;
+        });
+
+        self.agent = Some(agent);
         Ok(self)
     }
 }
 ```
 
-```rust
-// src-tauri/src/bin/cli.rs
+#### 命令清单
 
-fn main() {
-    let cli = Cli::parse();
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        let vault = cli.vault.unwrap_or_else(default_vault_path);
-        let runtime = CliRuntime::init(vault)?;
+| 子命令 | 参数 | 调用 Service/组件 | 说明 |
+|--------|------|------------------|------|
+| `mindclaw agent` | - | AgentLoop | 交互式对话（REPL） |
+| `mindclaw agent -m "msg"` | -m: 消息内容 | AgentLoop | 单轮对话后退出 |
+| `mindclaw agent --session <id>` | -s: 会话ID | AgentLoop | 继续指定会话 |
+| `mindclaw agent -p deepseek` | -p: Provider | AgentLoop | 临时指定 Provider |
+| `mindclaw status` | - | 多组件聚合 | 显示系统状态摘要 |
+| `mindclaw doctor` | - | 多组件检查 | 运行诊断检查 |
+| `mindclaw session list` | - | SessionManager | 列出所有会话 |
+| `mindclaw session export <id>` | -o: 输出文件 | SessionManager | 导出会话为 Markdown |
+| `mindclaw session delete <id>` | -f: 强制删除 | SessionManager | 删除会话 |
+| `mindclaw config init` | -f: 强制重新初始化 | ConfigManager | 交互式初始化配置 |
+| `mindclaw config show` | - | ConfigManager | 显示当前配置 |
+| `mindclaw config set <k> <v>` | - | ConfigManager | 设置配置项 |
+| `mindclaw completions bash` | - | - | 生成 Bash 补全脚本 |
 
-        match cli.command {
-            CliCommand::Daily { date } => {
-                let d = date.unwrap_or_else(today_string);
-                let note = runtime.services.daily.get(&d).await?;
-                println!("{}", note.markdown);
-            }
-            CliCommand::Search { query, limit } => {
-                let results = runtime.services.knowledge.search(&query, limit).await?;
-                for r in results {
-                    println!("  {} — {}", r.path, r.title);
-                }
-            }
-            CliCommand::Chat { message } => {
-                let runtime = runtime.with_provider()?;
-                let provider = runtime.provider.as_ref().unwrap();
-                let response = provider.chat(&[
-                    ChatMessage::user(&message),
-                ]).await?;
-                println!("{}", response.text());
-            }
-            // ...
-        }
-        Ok::<(), AppError>(())
-    }).expect("CLI error");
-}
+#### 详细命令设计
+
+##### `mindclaw agent` - Agent 对话
+
+**交互模式**（默认）：启动 REPL，持续对话直到输入 `exit`
+
+```bash
+$ mindclaw agent
+🤖 MindClaw Agent - 输入消息开始对话
+提示：输入 /new 创建新会话，Ctrl+C 或输入 'exit' 退出
+
+> 你好
+你好！有什么我可以帮助你的吗？
+
+> /new
+✓ 已创建新会话
+
+> exit
+👋 再见!
 ```
 
-#### Cargo.toml 变更
+**单消息模式**：`-m/--message`，适合脚本调用
+
+```bash
+$ mindclaw agent -m "什么是 Rust 的所有权系统？"
+Rust 的所有权系统是一种内存管理机制...
+
+💾 会话 ID: sess_abc123
+```
+
+**继续已有会话**：`--session`
+
+```bash
+$ mindclaw agent --session sess_abc123
+📝 继续会话: sess_abc123
+
+> 继续刚才的话题
+...
+```
+
+**临时指定 Provider**：`-p/--provider`
+
+```bash
+mindclaw agent -p claude -o claude-sonnet-4-6
+```
+
+##### `mindclaw status` - 系统状态
+
+显示当前系统状态和配置摘要：
+
+```bash
+$ mindclaw status
+🤖 MindClaw 状态
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Provider:   deepseek
+Model:      deepseek-chat
+API Key:    已设置 (DEEPSEEK_API_KEY)
+
+数据库:     ~/.config/mindclaw/mindclaw.db
+配置目录:   ~/.config/mindclaw
+Vault 目录: ~/MindClaw
+
+工具数量:   2 (shell, filesystem)
+会话数量:   5
+
+运行状态:   ✅ 就绪
+```
+
+##### `mindclaw doctor` - 诊断检查
+
+运行系统诊断，检查配置和环境：
+
+```bash
+$ mindclaw doctor
+🔍 运行诊断检查...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✓ API Key (DEEPSEEK_API_KEY): 已设置
+✓ 数据库连接: 正常 (~/.config/mindclaw/mindclaw.db)
+✓ 配置目录: 可读写
+✓ Vault 目录: 可读写
+✓ Shell 工具: 可用
+✓ Filesystem 工具: 可用
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+诊断完成: 6/6 通过
+```
+
+##### `mindclaw session` - 会话管理
+
+**list**: 列出所有会话
+
+```bash
+$ mindclaw session list
+📋 会话列表
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ID                    创建时间           消息数   最后更新
+───────────────────────────────────────────────────────
+sess_abc123def456    2026-03-30 10:23   12      10:45
+sess_xyz789uvw012    2026-03-29 18:15   5       19:02
+```
+
+**export**: 导出会话记录
+
+```bash
+# 输出到 stdout
+$ mindclaw session export sess_abc123def456
+
+# 输出到文件
+$ mindclaw session export sess_abc123def456 -o ~/Downloads/chat.md
+```
+
+**delete**: 删除会话
+
+```bash
+# 交互式确认
+$ mindclaw session delete sess_abc123def456
+⚠️ 确定要删除会话 sess_abc123def456 吗? [y/N]
+
+# 强制删除
+$ mindclaw session delete sess_abc123def456 -f
+✓ 会话已删除
+```
+
+##### `mindclaw config` - 配置管理
+
+**init**: 初始化配置
+
+```bash
+# 首次初始化（交互式引导）
+$ mindclaw config init
+🔧 MindClaw 配置初始化
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+请选择默认 Provider:
+  1) deepseek
+  2) claude
+  3) openai
+> 1
+
+请输入 DeepSeek API Key:
+> sk-...
+
+配置已保存到: ~/.config/mindclaw/config.toml
+```
+
+**show**: 显示配置
+
+```bash
+$ mindclaw config show
+📋 当前配置 (~/.config/mindclaw/config.toml)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[provider]
+default = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+default_model = "deepseek-chat"
+
+[cli]
+default_mode = "agent"
+```
+
+**set**: 设置配置项
+
+```bash
+$ mindclaw config set provider.default claude
+✓ provider.default = "claude"
+```
+
+##### `mindclaw completions` - Shell 补全
+
+```bash
+# Bash
+$ mindclaw completions bash > /usr/local/etc/bash_completion.d/mindclaw
+
+# Zsh
+$ mindclaw completions zsh > ~/.zsh/completions/_mindclaw
+
+# Fish
+$ mindclaw completions fish > ~/.config/fish/completions/mindclaw.fish
+```
+
+#### Cargo.toml 配置
 
 ```toml
 [[bin]]
@@ -416,19 +658,8 @@ path = "src/bin/cli.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+directories = "6.0"
 ```
-
-#### 命令清单
-
-| 子命令 | 调用 Service | 说明 |
-|--------|-------------|------|
-| `mindclaw daily [date]` | DailyService.get() | 输出 Markdown 到 stdout |
-| `mindclaw search "query"` | KnowledgeService.search() | 列表输出 |
-| `mindclaw task create "content"` | TaskService.create() | 创建任务 |
-| `mindclaw task list [--status done]` | TaskService.list() | 列出任务 |
-| `mindclaw task complete <id>` | TaskService.update() | 完成任务 |
-| `mindclaw chat "message"` | Provider.chat() | 单轮对话，需 API Key |
-| `mindclaw status` | HeartbeatMonitor (lite) | DB + vault 状态检查 |
-| `mindclaw export [json]` | Storage export | 数据备份导出 |
 
 ---

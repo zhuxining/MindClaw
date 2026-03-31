@@ -109,7 +109,6 @@ futures-util = { version = "0.3", default-features = false, features = [
 dashmap = "6.0"
 tokio-util = "0.7"
 
-
 ripgrep = "15.1.0"
 fd-find = "10.4.2"
 

@@ -6,11 +6,11 @@
 
 三层架构：**Web 层（遥控器）→ Tauri 层（连接线）→ Rust 层（主机）**
 
-| 层 | 职责 | 原则 |
-|---|------|------|
-| Web (React) | UI 渲染、用户交互、状态展示 | 薄客户端，不持有业务逻辑 |
-| Tauri (IPC + Plugins) | 窗口管理、系统能力桥接、权限管控 | 胶水层，不写业务逻辑 |
-| Rust (Services) | 全部业务逻辑、数据持久化、LLM 通信 | 核心层，可脱离 Tauri 独立运行 |
+| 层                    | 职责                               | 原则                          |
+| --------------------- | ---------------------------------- | ----------------------------- |
+| Web (React)           | UI 渲染、用户交互、状态展示        | 薄客户端，不持有业务逻辑      |
+| Tauri (IPC + Plugins) | 窗口管理、系统能力桥接、权限管控   | 胶水层，不写业务逻辑          |
+| Rust (Services)       | 全部业务逻辑、数据持久化、LLM 通信 | 核心层，可脱离 Tauri 独立运行 |
 
 ### Web 端使用边界
 
@@ -23,20 +23,20 @@
 
 #### Tauri Plugin 分类
 
-| 用法 | Plugin | 说明 |
-|------|--------|------|
-| 前端直接用 JS API | clipboard、dialog、notification、fs | 纯 UI 交互，不经过业务逻辑 |
-| Rust 端后台用 | persisted-scope、autostart、window-state | 前端不感知 |
-| 被 Service 包装 | stronghold | 密钥存取，通过 command 暴露 |
+| 用法              | Plugin                                   | 说明                        |
+| ----------------- | ---------------------------------------- | --------------------------- |
+| 前端直接用 JS API | clipboard、dialog、notification、fs      | 纯 UI 交互，不经过业务逻辑  |
+| Rust 端后台用     | persisted-scope、autostart、window-state | 前端不感知                  |
+| 被 Service 包装   | stronghold                               | 密钥存取，通过 command 暴露 |
 
 #### 不该用 Plugin 的场景
 
-| 需求 | 正确方案 | 原因 |
-|------|---------|------|
-| HTTP 请求 | Rust `reqwest` | 统一出口，便于 retry/logging |
-| WebSocket | Rust `tokio-tungstenite` | Channel 层长连接，生命周期由 Rust 管理 |
-| KV 存储 | Rust SQLite / 文件 | 单一数据源 |
-| Shell 执行 | Rust `tokio::process` | Agent tool，需权限管控 |
+| 需求       | 正确方案                 | 原因                                   |
+| ---------- | ------------------------ | -------------------------------------- |
+| HTTP 请求  | Rust `reqwest`           | 统一出口，便于 retry/logging           |
+| WebSocket  | Rust `tokio-tungstenite` | Channel 层长连接，生命周期由 Rust 管理 |
+| KV 存储    | Rust SQLite / 文件       | 单一数据源                             |
+| Shell 执行 | Rust `tokio::process`    | Agent tool，需权限管控                 |
 
 #### 逻辑归属决策
 
@@ -124,16 +124,16 @@ anyhow = "1.0"
 
 #### 框架与 UI
 
-| 包 | 版本 | 用途 |
-|---|------|------|
-| react / react-dom | ^19 | 前端框架 |
-| shadcn + tailwindcss + tw-animate-css | ^4 / ^4 / ^1 | UI 组件系统（基于 **Base UI**，按需`bunx shadcn@latest add <name>`） |
-| @base-ui/react | ^1 | shadcn 底层无头组件库（非 Radix UI） |
-| class-variance-authority + clsx + tailwind-merge | — | shadcn 配套样式工具 |
-| lucide-react | ^1 | 图标库 |
-| cmdk | ^1 | Command palette（⌘K） |
-| react-resizable-panels | ^4 | 可拖拽分栏面板 |
-| @fontsource-variable/inter | ^5 | 字体 |
+| 包                                               | 版本         | 用途                                                                 |
+| ------------------------------------------------ | ------------ | -------------------------------------------------------------------- |
+| react / react-dom                                | ^19          | 前端框架                                                             |
+| shadcn + tailwindcss + tw-animate-css            | ^4 / ^4 / ^1 | UI 组件系统（基于 **Base UI**，按需`bunx shadcn@latest add <name>`） |
+| @base-ui/react                                   | ^1           | shadcn 底层无头组件库（非 Radix UI）                                 |
+| class-variance-authority + clsx + tailwind-merge | —            | shadcn 配套样式工具                                                  |
+| lucide-react                                     | ^1           | 图标库                                                               |
+| cmdk                                             | ^1           | Command palette（⌘K）                                                |
+| react-resizable-panels                           | ^4           | 可拖拽分栏面板                                                       |
+| @fontsource-variable/inter                       | ^5           | 字体                                                                 |
 
 **shadcn/ui 使用规范：**
 
@@ -146,17 +146,17 @@ anyhow = "1.0"
 
 #### 编辑器
 
-| 包 | 版本 | 用途 |
-|---|------|------|
-| @milkdown/crepe | ^7 | Markdown 所见即所得编辑器（用于 Knowledge / Daily 编辑） |
+| 包              | 版本 | 用途                                                     |
+| --------------- | ---- | -------------------------------------------------------- |
+| @milkdown/crepe | ^7   | Markdown 所见即所得编辑器（用于 Knowledge / Daily 编辑） |
 
 #### 状态与路由
 
-| 包 | 版本 | 用途 |
-|---|------|------|
-| zustand | ^5 | 轻量状态管理（UI 状态：sidebar、当前页面等） |
-| @tanstack/react-router | ^1 | 类型安全路由 |
-| @tanstack/react-query | ^5 | 服务端状态管理（invoke 请求缓存、自动重取） |
+| 包                     | 版本 | 用途                                         |
+| ---------------------- | ---- | -------------------------------------------- |
+| zustand                | ^5   | 轻量状态管理（UI 状态：sidebar、当前页面等） |
+| @tanstack/react-router | ^1   | 类型安全路由                                 |
+| @tanstack/react-query  | ^5   | 服务端状态管理（invoke 请求缓存、自动重取）  |
 
 #### Tauri Plugin 前端包
 

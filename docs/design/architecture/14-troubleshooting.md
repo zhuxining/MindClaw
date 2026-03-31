@@ -21,10 +21,10 @@ panic——即使插件在代码中已提供了默认值。
 
 **受影响插件**
 
-| 插件 | 必需的 `tauri.conf.json` 配置 |
-|------|-------------------------------|
+| 插件                   | 必需的 `tauri.conf.json` 配置                                                          |
+| ---------------------- | -------------------------------------------------------------------------------------- |
 | `tauri-plugin-updater` | `plugins.updater.pubkey`（签名公钥）+ `plugins.updater.endpoints`（更新检查 URL 列表） |
-| `tauri-plugin-cli` | `plugins.cli.args` / `plugins.cli.subcommands`（CLI 参数定义） |
+| `tauri-plugin-cli`     | `plugins.cli.args` / `plugins.cli.subcommands`（CLI 参数定义）                         |
 
 **处理策略**
 

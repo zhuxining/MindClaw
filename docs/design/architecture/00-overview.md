@@ -4,20 +4,20 @@
 
 ## 技术栈
 
-| 层 | 技术 | 版本 |
-|---|------|------|
-| 桌面框架 | Tauri | 2.x |
-| 前端框架 | React + TypeScript | 19.x / 6.x |
-| UI 组件 | shadcn/ui (基于 **Base UI**) + Tailwind CSS + Lucide icons | 4.x / 4.x |
-| 编辑器 | Milkdown (Crepe) | 7.x |
-| 状态管理 | Zustand | 5.x |
-| 路由 | TanStack Router | 1.x |
-| 数据请求 | TanStack Query | 5.x |
-| 后端 | Rust | 2021 Edition |
-| 构建 | Vite + Bun | 8.x / latest |
-| 代码质量 | Biome (lint + format) | 2.x |
-| 存储 | SQLite + Markdown + 本地文件系统 | — |
-| LLM | Claude API (BYOK) | — |
+| 层       | 技术                                                       | 版本         |
+| -------- | ---------------------------------------------------------- | ------------ |
+| 桌面框架 | Tauri                                                      | 2.x          |
+| 前端框架 | React + TypeScript                                         | 19.x / 6.x   |
+| UI 组件  | shadcn/ui (基于 **Base UI**) + Tailwind CSS + Lucide icons | 4.x / 4.x    |
+| 编辑器   | Milkdown (Crepe)                                           | 7.x          |
+| 状态管理 | Zustand                                                    | 5.x          |
+| 路由     | TanStack Router                                            | 1.x          |
+| 数据请求 | TanStack Query                                             | 5.x          |
+| 后端     | Rust                                                       | 2021 Edition |
+| 构建     | Vite + Bun                                                 | 8.x / latest |
+| 代码质量 | Biome (lint + format)                                      | 2.x          |
+| 存储     | SQLite + Markdown + 本地文件系统                           | —            |
+| LLM      | Claude API (BYOK)                                          | —            |
 
 ### 架构分层
 

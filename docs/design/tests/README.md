@@ -13,9 +13,9 @@
 
 Provider 测试位于 `src-tauri/src/providers/tests/`，当前分为两类：
 
-| 类型 | 文件 | 特点 |
-|------|------|------|
-| 本地测试 | `registry.rs` + `*_config` 测试 | 不依赖网络，不依赖真实密钥，适合默认执行 |
+| 类型     | 文件                                                           | 特点                                          |
+| -------- | -------------------------------------------------------------- | --------------------------------------------- |
+| 本地测试 | `registry.rs` + `*_config` 测试                                | 不依赖网络，不依赖真实密钥，适合默认执行      |
 | 联网测试 | `openai.rs`、`deepseek.rs` 中的 `chat` / `stream` / `reasoner` | 依赖外部 API 和有效密钥，默认标记为 `ignored` |
 
 这样设计的原因是：
@@ -68,11 +68,11 @@ cargo test --package mindclaw --lib providers::tests::openai::test_openai_stream
 
 Provider 配置当前使用以下环境变量：
 
-| Provider | 环境变量 |
-|----------|----------|
-| OpenAI | `OPENAI_API_KEY` |
-| DeepSeek | `DEEPSEEK_API_KEY` |
-| Claude | `ANTHROPIC_API_KEY` |
+| Provider | 环境变量            |
+| -------- | ------------------- |
+| OpenAI   | `OPENAI_API_KEY`    |
+| DeepSeek | `DEEPSEEK_API_KEY`  |
+| Claude   | `ANTHROPIC_API_KEY` |
 
 联网测试会优先从当前测试进程读取环境变量。
 

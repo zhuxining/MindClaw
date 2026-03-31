@@ -163,11 +163,11 @@ CREATE TABLE messages (
 
 知识笔记采用渐进式加载策略，用最少的 token 做最精准的检索：
 
-| Level | Name | Token 限制 | 存储位置 | 用途 |
-|-------|------|-----------|---------|------|
-| **L0** | Tags | ~100 tokens | SQLite `notes.tags`（JSON 数组） | 向量搜索、FTS5 过滤、分类筛选、快速扫描 |
-| **L1** | Overview | ~2k tokens | SQLite `notes.overview` | 重排序、内容导航、RAG 上下文注入 |
-| **L2** | Detail | 无限制 | 文件系统 `vault/knowledge/*.md` | 完整内容，Agent 按需加载 |
+| Level  | Name     | Token 限制  | 存储位置                         | 用途                                    |
+| ------ | -------- | ----------- | -------------------------------- | --------------------------------------- |
+| **L0** | Tags     | ~100 tokens | SQLite `notes.tags`（JSON 数组） | 向量搜索、FTS5 过滤、分类筛选、快速扫描 |
+| **L1** | Overview | ~2k tokens  | SQLite `notes.overview`          | 重排序、内容导航、RAG 上下文注入        |
+| **L2** | Detail   | 无限制      | 文件系统 `vault/knowledge/*.md`  | 完整内容，Agent 按需加载                |
 
 **L0 就是 tags**——精心设计的标签本身就是最好的语义摘要，天然适合向量化和精确匹配，不需要额外的 abstract 字段。
 
@@ -191,7 +191,6 @@ updated: 2026-03-20
 
 价值投资由本杰明·格雷厄姆创立……
 
-
 ## 安全边际
 
 ……完整内容……
@@ -199,11 +198,11 @@ updated: 2026-03-20
 
 **`source` 字段**——标识知识笔记的创建方式：
 
-| 值 | 含义 | 说明 |
-|----|------|------|
-| NULL | 用户手动创建 | 直接在 vault 中编写 |
-| `resource` | 从资源结晶 | URL/PDF 解析产出，原始资源详见 `resources` 表 |
-| `session:ID` | 对话蒸馏 | SubAgent 从会话中提炼的洞见，非资源 |
+| 值           | 含义         | 说明                                          |
+| ------------ | ------------ | --------------------------------------------- |
+| NULL         | 用户手动创建 | 直接在 vault 中编写                           |
+| `resource`   | 从资源结晶   | URL/PDF 解析产出，原始资源详见 `resources` 表 |
+| `session:ID` | 对话蒸馏     | SubAgent 从会话中提炼的洞见，非资源           |
 
 **资源结晶流程**：
 
@@ -281,11 +280,11 @@ SQLite notes 表（目录也是一条记录，path 无 .md 后缀）：
 
 #### L1 生成策略
 
-| 策略 | 方式 | 写入位置 | 适用场景 |
-|------|------|---------|---------|
-| **LLM 生成** | SubAgent 从正文生成结构化概要 | 写入 frontmatter `overview` 字段 | 默认策略，笔记创建/更新时异步触发 |
-| **人工编写** | 用户直接编辑 frontmatter overview | frontmatter（真相源） | 高价值笔记需精确概要 |
-| **截断兜底** | 取正文前 ~2k tokens | 仅缓存到 SQLite（不写 frontmatter） | LLM 调用失败时的降级策略 |
+| 策略         | 方式                              | 写入位置                            | 适用场景                          |
+| ------------ | --------------------------------- | ----------------------------------- | --------------------------------- |
+| **LLM 生成** | SubAgent 从正文生成结构化概要     | 写入 frontmatter `overview` 字段    | 默认策略，笔记创建/更新时异步触发 |
+| **人工编写** | 用户直接编辑 frontmatter overview | frontmatter（真相源）               | 高价值笔记需精确概要              |
+| **截断兜底** | 取正文前 ~2k tokens               | 仅缓存到 SQLite（不写 frontmatter） | LLM 调用失败时的降级策略          |
 
 overview 的生命周期：
 
@@ -295,20 +294,20 @@ overview 的生命周期：
 
 #### 索引更新触发
 
-| 触发事件 | 更新内容 |
-|---------|---------|
-| 笔记创建/更新 | 提取 frontmatter tags → L0；提取 frontmatter overview → L1（无则 LLM 生成写回）；更新 FTS5；聚合 parent_dir 目录的 L0/L1 |
-| 笔记删除 | 移除 notes/notes_fts 记录；重新聚合所属目录 |
-| 新目录出现 | 自动插入目录记录（path 无 .md 后缀），聚合子笔记 tags → L0，SubAgent 生成 L1 |
-| 定时任务 index_rebuild | 增量对比 mtime，修复不一致，补全缺失的目录记录 |
+| 触发事件               | 更新内容                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 笔记创建/更新          | 提取 frontmatter tags → L0；提取 frontmatter overview → L1（无则 LLM 生成写回）；更新 FTS5；聚合 parent_dir 目录的 L0/L1 |
+| 笔记删除               | 移除 notes/notes_fts 记录；重新聚合所属目录                                                                              |
+| 新目录出现             | 自动插入目录记录（path 无 .md 后缀），聚合子笔记 tags → L0，SubAgent 生成 L1                                             |
+| 定时任务 index_rebuild | 增量对比 mtime，修复不一致，补全缺失的目录记录                                                                           |
 
 ### 对话历史分层
 
-| 层 | 内容 | 存储 | 保留 |
-|---|------|------|------|
-| 原始消息 | 每句对话 | SQLite messages 表 | 90 天 |
-| 会话摘要 | 每次会话精华 | SQLite sessions.summary | 永久 |
-| 蒸馏知识 | 提炼的洞见 | vault/knowledge/ Markdown | 永久 |
+| 层       | 内容         | 存储                      | 保留  |
+| -------- | ------------ | ------------------------- | ----- |
+| 原始消息 | 每句对话     | SQLite messages 表        | 90 天 |
+| 会话摘要 | 每次会话精华 | SQLite sessions.summary   | 永久  |
+| 蒸馏知识 | 提炼的洞见   | vault/knowledge/ Markdown | 永久  |
 
 90 天后原始消息导出为 JSONL 冷归档（`data/archive/YYYY-MM.jsonl`），SQLite 中删除。
 

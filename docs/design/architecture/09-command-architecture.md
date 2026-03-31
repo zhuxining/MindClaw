@@ -14,14 +14,14 @@ React Frontend ── invoke() ──► Web Commands ──► Services ──�
 
 ### 跨层命令矩阵
 
-| 维度 | Web Commands | Agent Commands | CLI Commands |
-|------|-------------|----------------|-------------|
-| 入口 | React `invoke()` | 对话消息 `/xxx` | 终端 `mindclaw` |
-| 职责 | 业务 CRUD | Agent 生命周期控制 | 自动化/脚本 |
-| 数量 | ~25 个 | 4 个 | ~12 个 |
-| 调用链 | Command → Services | AgentLoop 拦截 | AppRuntime → Services |
-| 需要 Tauri | 是 | 是（运行在 AgentLoop 内） | 否 |
-| 需要 LLM | 否 | 否（纯控制） | 仅 agent 子命令 |
+| 维度       | Web Commands       | Agent Commands            | CLI Commands          |
+| ---------- | ------------------ | ------------------------- | --------------------- |
+| 入口       | React `invoke()`   | 对话消息 `/xxx`           | 终端 `mindclaw`       |
+| 职责       | 业务 CRUD          | Agent 生命周期控制        | 自动化/脚本           |
+| 数量       | ~25 个             | 4 个                      | ~12 个                |
+| 调用链     | Command → Services | AgentLoop 拦截            | AppRuntime → Services |
+| 需要 Tauri | 是                 | 是（运行在 AgentLoop 内） | 否                    |
+| 需要 LLM   | 否                 | 否（纯控制）              | 仅 agent 子命令       |
 
 **Agent Commands 说明**：在 `AgentLoop.run_once()` 中拦截，位于 Session 加载之后、Context 组装之前。拦截后直接返回确定性结果，不调用 Provider。
 
@@ -33,21 +33,21 @@ React Frontend ── invoke() ──► Web Commands ──► Services ──�
 
 ### 命令清单
 
-| 分类 | 命令 | 说明 |
-|------|------|------|
-| **Conversation** | `send_message` | 发送消息，返回 request_id，响应通过 Event 流式推送 |
-| | `get_session_history` | 获取会话历史 |
-| **Daily** | `get_daily` | 获取/创建当日日记 |
-| | `save_daily` | 保存日记 |
-| **Tasks** | `list_tasks` | 任务列表 |
-| | `create_task` | 创建任务 |
-| | `update_task_status` | 更新任务状态 |
-| **Knowledge** | `search_knowledge` | 搜索知识条目 |
-| | `get_knowledge` | 获取知识笔记 |
-| **Settings** | `get_settings` | 读取设置 |
-| | `save_settings` | 保存设置 |
-| | `set_api_key` | 存入 OS Keychain |
-| **System** | `get_system_status` | 系统健康状态 |
+| 分类             | 命令                  | 说明                                               |
+| ---------------- | --------------------- | -------------------------------------------------- |
+| **Conversation** | `send_message`        | 发送消息，返回 request_id，响应通过 Event 流式推送 |
+|                  | `get_session_history` | 获取会话历史                                       |
+| **Daily**        | `get_daily`           | 获取/创建当日日记                                  |
+|                  | `save_daily`          | 保存日记                                           |
+| **Tasks**        | `list_tasks`          | 任务列表                                           |
+|                  | `create_task`         | 创建任务                                           |
+|                  | `update_task_status`  | 更新任务状态                                       |
+| **Knowledge**    | `search_knowledge`    | 搜索知识条目                                       |
+|                  | `get_knowledge`       | 获取知识笔记                                       |
+| **Settings**     | `get_settings`        | 读取设置                                           |
+|                  | `save_settings`       | 保存设置                                           |
+|                  | `set_api_key`         | 存入 OS Keychain                                   |
+| **System**       | `get_system_status`   | 系统健康状态                                       |
 
 ### 流式响应
 
@@ -82,12 +82,12 @@ pub async fn list_tasks(
 
 对话中输入 `/xxx` 控制 Agent 行为，不触发 LLM。
 
-| 指令 | 说明 | 行为 |
-|------|------|------|
-| `/new` | 新建会话 | 关闭当前 Session，创建新 Session |
-| `/stop` | 停止操作 | 取消进行中的任务，中断流式响应 |
-| `/restart` | 重启服务 | 重新初始化 AgentLoop |
-| `/status` | 查看状态 | 返回运行状态、活跃 Session 数等 |
+| 指令       | 说明     | 行为                             |
+| ---------- | -------- | -------------------------------- |
+| `/new`     | 新建会话 | 关闭当前 Session，创建新 Session |
+| `/stop`    | 停止操作 | 取消进行中的任务，中断流式响应   |
+| `/restart` | 重启服务 | 重新初始化 AgentLoop             |
+| `/status`  | 查看状态 | 返回运行状态、活跃 Session 数等  |
 
 ### 核心设计
 
@@ -104,20 +104,20 @@ pub async fn list_tasks(
 
 ### 命令清单
 
-| 子命令 | 说明 |
-|--------|------|
-| `mindclaw agent` | 交互式对话（REPL） |
-| `mindclaw agent -m <msg>` | 单轮对话后退出 |
-| `mindclaw agent --session <id>` | 继续指定会话 |
-| `mindclaw agent -p <provider>` | 临时指定 Provider |
-| `mindclaw status` | 系统状态摘要 |
-| `mindclaw session list` | 列出会话 |
-| `mindclaw session export <id>` | 导出会话 |
-| `mindclaw session delete <id>` | 删除会话 |
-| `mindclaw config init` | 初始化配置 |
-| `mindclaw config show` | 显示配置 |
-| `mindclaw config set <k> <v>` | 设置配置项 |
-| `mindclaw completions <shell>` | 生成 Shell 补全脚本 |
+| 子命令                          | 说明                |
+| ------------------------------- | ------------------- |
+| `mindclaw agent`                | 交互式对话（REPL）  |
+| `mindclaw agent -m <msg>`       | 单轮对话后退出      |
+| `mindclaw agent --session <id>` | 继续指定会话        |
+| `mindclaw agent -p <provider>`  | 临时指定 Provider   |
+| `mindclaw status`               | 系统状态摘要        |
+| `mindclaw session list`         | 列出会话            |
+| `mindclaw session export <id>`  | 导出会话            |
+| `mindclaw session delete <id>`  | 删除会话            |
+| `mindclaw config init`          | 初始化配置          |
+| `mindclaw config show`          | 显示配置            |
+| `mindclaw config set <k> <v>`   | 设置配置项          |
+| `mindclaw completions <shell>`  | 生成 Shell 补全脚本 |
 
 ### 运行时
 

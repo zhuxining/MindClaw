@@ -39,9 +39,9 @@ pub trait Channel: Send + Sync {
 
 ### Channel 实现一览
 
-| Channel | 传输方式 | 流式支持 | 入站机制 | Phase |
-|---------|---------|---------|---------|-------|
-| **Desktop** | Tauri IPC invoke + Event emit | Yes | Tauri command 桥接推入 Bus（listen 为空实现） | MVP |
-| **Telegram** | HTTP API / Long polling | No | getUpdates 或 Webhook → Bus | Phase 1 后期 |
-| **Feishu** | HTTP API / Webhook | No | Webhook → Bus | Phase 2 |
-| **Webhook** | HTTP POST → Bus | No | Gateway 接收 → Bus | Phase 1 后期 |
+| Channel      | 传输方式                      | 流式支持 | 入站机制                                      | Phase        |
+| ------------ | ----------------------------- | -------- | --------------------------------------------- | ------------ |
+| **Desktop**  | Tauri IPC invoke + Event emit | Yes      | Tauri command 桥接推入 Bus（listen 为空实现） | MVP          |
+| **Telegram** | HTTP API / Long polling       | No       | getUpdates 或 Webhook → Bus                   | Phase 1 后期 |
+| **Feishu**   | HTTP API / Webhook            | No       | Webhook → Bus                                 | Phase 2      |
+| **Webhook**  | HTTP POST → Bus               | No       | Gateway 接收 → Bus                            | Phase 1 后期 |

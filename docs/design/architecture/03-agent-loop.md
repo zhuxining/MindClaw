@@ -47,19 +47,20 @@ Channel ◄── publish_outbound ◄──┘              ▼
 ```
 
 **设计决策**：
+
 - 事件驱动，无定时轮询
 - inbound/outbound Receiver 采用 `take` 语义，单消费者
 - 出站消息显式 `payload` enum，前端不解析正文状态
 
 ### 消息类型
 
-| 方向 | 类型 | 说明 |
-|------|------|------|
-| Inbound | `InboundMessage` | 用户消息，含 session_id, content, mode |
-| Outbound | `OutboundPayload::Chunk` | 文本片段 |
-| | `OutboundPayload::Done` | 完成标记 |
-| | `OutboundPayload::Error` | 错误信息 |
-| | `OutboundPayload::Status` | 用户可见状态 |
+| 方向     | 类型                      | 说明                                   |
+| -------- | ------------------------- | -------------------------------------- |
+| Inbound  | `InboundMessage`          | 用户消息，含 session_id, content, mode |
+| Outbound | `OutboundPayload::Chunk`  | 文本片段                               |
+|          | `OutboundPayload::Done`   | 完成标记                               |
+|          | `OutboundPayload::Error`  | 错误信息                               |
+|          | `OutboundPayload::Status` | 用户可见状态                           |
 
 ---
 
@@ -85,6 +86,7 @@ UI invoke() ──► publish_inbound ──► AgentLoop.consume ──► Sess
 ```
 
 **关键边界**：
+
 - `send_message` 入队后立即返回 `{ session_id, request_id }`
 - AgentLoop 保证同一 session 串行化，不允许多个 run 同时执行
 - 工具回合是单次 run 内的有限 loop（最多 8 轮）
@@ -112,6 +114,7 @@ AgentLoop
 ```
 
 **AgentLoop 职责**：
+
 1. 消费 `InboundMessage` 并按 session 串行排队
 2. 为每条消息创建单次 `run_once()` 执行
 3. 驱动 Session → Context → Provider → Tool → Session append
@@ -122,6 +125,7 @@ AgentLoop
 ### Session 串行化
 
 每个 session 一个 `SessionSlot`：
+
 - **queue**: 待处理消息队列
 - **active_run**: 当前执行的 RunHandle（含 CancellationToken）
 - **steering_queue**: 运行中注入的补充指令
@@ -152,6 +156,7 @@ AgentLoop
 ```
 
 **运行规则**：
+
 - 工具回合上限：8 轮 LLM 调用
 - 取消：`/stop` 触发 CancellationToken，仅影响当前 session
 - 超时：单轮工具执行 30s 超时
@@ -177,6 +182,7 @@ TurnRecord
 ```
 
 **核心方法**：
+
 - `get_or_create()` — 获取或创建会话
 - `append_turn()` — 成功完成后追加 turn
 - `prune()` — 近 N 轮完整 + 早期摘要压缩
@@ -188,11 +194,11 @@ TurnRecord
 
 三层事件分离：
 
-| 层级 | 类型 | 用途 |
-|------|------|------|
-| Provider → Agent | `ProviderEvent` | TextDelta, ToolCall, Finished |
-| Agent 内部 | `AgentEvent` | 日志/审计/指标（RunStarted, ToolFinished...） |
-| Agent → 用户 | `OutboundPayload` | UI/Channel 可见事件 |
+| 层级             | 类型              | 用途                                          |
+| ---------------- | ----------------- | --------------------------------------------- |
+| Provider → Agent | `ProviderEvent`   | TextDelta, ToolCall, Finished                 |
+| Agent 内部       | `AgentEvent`      | 日志/审计/指标（RunStarted, ToolFinished...） |
+| Agent → 用户     | `OutboundPayload` | UI/Channel 可见事件                           |
 
 ### AgentEvent 类型
 
@@ -211,25 +217,25 @@ TurnRecord
 
 ## 关键设计决策
 
-| 决策 | 选择 | 理由 |
-|------|------|------|
-| 每轮定义 | 一次完整 `chat_stream` 调用 | 返回多个 tool calls 按轮计更可预测 |
-| 工具执行时机 | 收完 stream 后批量执行 | 避免 stream 中途暂停的复杂状态 |
-| 工具结果回传 | 追加到 messages 发起新请求 | OpenAI/Claude 无状态 API 设计 |
-| 工具并行 | Semaphore(4) 限制并发 | 独立 tool calls 可并行，防资源爆炸 |
-| 取消检查 | 每轮开始 + HTTP abort | 粗粒度 + 细粒度结合 |
-| 运行中注入 | Steering 软打断 | 保留已完成工具轮次 |
+| 决策         | 选择                        | 理由                               |
+| ------------ | --------------------------- | ---------------------------------- |
+| 每轮定义     | 一次完整 `chat_stream` 调用 | 返回多个 tool calls 按轮计更可预测 |
+| 工具执行时机 | 收完 stream 后批量执行      | 避免 stream 中途暂停的复杂状态     |
+| 工具结果回传 | 追加到 messages 发起新请求  | OpenAI/Claude 无状态 API 设计      |
+| 工具并行     | Semaphore(4) 限制并发       | 独立 tool calls 可并行，防资源爆炸 |
+| 取消检查     | 每轮开始 + HTTP abort       | 粗粒度 + 细粒度结合                |
+| 运行中注入   | Steering 软打断             | 保留已完成工具轮次                 |
 
 ---
 
 ## 子章节导航
 
-| 文件 | 内容 |
-|------|------|
-| **本文件** | AgentLoop 核心 · MessageBus · 消息流水线 · Session |
-| [03.01-context.md](./03.01-context.md) | Context Pipeline |
-| [03.02-provider.md](./03.02-provider.md) | Provider 层 |
-| [03.03-tools.md](./03.03-tools.md) | Tool 层（MCP、Hooks、Skills） |
-| [03.04-memory.md](./03.04-memory.md) | Memory 层 |
-| [03.05-services.md](./03.05-services.md) | Services 层 |
-| [03.06-subagent.md](./03.06-subagent.md) | SubAgent |
+| 文件                                     | 内容                                               |
+| ---------------------------------------- | -------------------------------------------------- |
+| **本文件**                               | AgentLoop 核心 · MessageBus · 消息流水线 · Session |
+| [03.01-context.md](./03.01-context.md)   | Context Pipeline                                   |
+| [03.02-provider.md](./03.02-provider.md) | Provider 层                                        |
+| [03.03-tools.md](./03.03-tools.md)       | Tool 层（MCP、Hooks、Skills）                      |
+| [03.04-memory.md](./03.04-memory.md)     | Memory 层                                          |
+| [03.05-services.md](./03.05-services.md) | Services 层                                        |
+| [03.06-subagent.md](./03.06-subagent.md) | SubAgent                                           |

@@ -37,6 +37,7 @@ AppRuntime
 ```
 
 `bus` 和 `session_mgr` 在 AppRuntime 和 AgentLoop 中都有 Arc 引用，职责明确：
+
 - **AppRuntime** 持有是因为外部入口（Tauri commands、CLI）需要直接访问
 - **AgentLoop** 持有是因为内部消息驱动和会话编排需要
 
@@ -62,6 +63,7 @@ let rt = AppRuntime::builder()
 8. 组装 `AppRuntime`
 
 Agent 和 AgentLoop 的构建职责分离：
+
 - **AgentBuilder** 只构建大脑（Provider、ToolRegistry、ContextPipeline、Observer）
 - **AppRuntimeBuilder** 构建基础设施 + 用 AgentBuilder 构建 Agent + 组装 AgentLoop
 
@@ -150,12 +152,12 @@ db + services + bus + agent_loop + session_mgr + config ──► AppRuntime
 
 ## 关键设计
 
-| 决策              | 说明                                                         |
-| ----------------- | ------------------------------------------------------------ |
-| Tauri 无关        | Runtime 不依赖 `tauri::*`，可被 CLI/Gateway 独立使用         |
-| Agent/Loop 分离   | Agent 无状态可共享，AgentLoop 负责编排，职责不混              |
-| 两级 Builder      | AgentBuilder 只建大脑，AppRuntimeBuilder 建基础设施 + 组装   |
-| Observer 共享     | Agent 和 AgentLoop 持有同一个 Arc，各发射所属层事件          |
-| Commands 归 Loop  | `/new`, `/stop` 等拦截器在 Context 构建前短路，属于编排层     |
-| CancellationToken | tokio-util 实现优雅关停                                      |
-| ServiceContainer  | 具体 struct 而非 trait，YAGNI                                |
+| 决策              | 说明                                                       |
+| ----------------- | ---------------------------------------------------------- |
+| Tauri 无关        | Runtime 不依赖 `tauri::*`，可被 CLI/Gateway 独立使用       |
+| Agent/Loop 分离   | Agent 无状态可共享，AgentLoop 负责编排，职责不混           |
+| 两级 Builder      | AgentBuilder 只建大脑，AppRuntimeBuilder 建基础设施 + 组装 |
+| Observer 共享     | Agent 和 AgentLoop 持有同一个 Arc，各发射所属层事件        |
+| Commands 归 Loop  | `/new`, `/stop` 等拦截器在 Context 构建前短路，属于编排层  |
+| CancellationToken | tokio-util 实现优雅关停                                    |
+| ServiceContainer  | 具体 struct 而非 trait，YAGNI                              |

@@ -51,8 +51,7 @@ src-tauri/
       keychain.rs               # OS Keychain 存取（keyring crate）
     agent/                       # Agent 核心（大脑 + 驱动器分离）
       mod.rs                    # 导出 Agent, AgentLoop, AgentBuilder
-      agent.rs                  # Agent（大脑）：ContextPipeline + Provider + ToolRegistry + Observer
-      builder.rs                # AgentBuilder：构建 Agent（只需 AppConfig，无基础设施依赖）
+      agent.rs                  # Agent（大脑）+ AgentBuilder：构建 Agent（只需 AppConfig，无基础设施依赖）
       agent_loop.rs             # AgentLoop（驱动器）：事件编排 + Session + Commands
       commands/                 # Agent 控制指令（对话内 /xxx 生命周期管控）
         mod.rs                  # AgentCommandRegistry：注册/解析/分发

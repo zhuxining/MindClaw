@@ -10,6 +10,11 @@ src-tauri/
     main.rs                     # 入口，委托给 lib::run()
     lib.rs                      # Tauri Builder：插件注册、命令注册、状态注入
     error.rs                    # 统一错误类型 AppError（实现 Serialize 用于 IPC）
+    runtime/                    # Tauri 无关的运行时（Desktop/CLI/Gateway 共享）
+      mod.rs                    # AppRuntime：核心运行时 + 生命周期
+      builder.rs                # AppRuntimeBuilder：11 步初始化
+      config.rs                 # AppConfig：配置集中管理
+      services.rs               # ServiceContainer：业务服务统一封装
     channels/
       mod.rs                    # Channel trait 定义 + start_channels()
       traits.rs                 # ChannelMessage, SendMessage, Channel trait
@@ -17,8 +22,8 @@ src-tauri/
       telegram.rs               # Telegram Bot Channel（Phase 1 后期）
       feishu.rs                 # 飞书 Bot Channel（Phase 2）
     bus/
-      mod.rs                    # MessageBus：双向异步消息队列（Channel ↔ Agent 解耦）
-      events.rs                 # InboundMessage, OutboundMessage, OutboundPayload 显式事件定义
+      mod.rs                    # MessageBus：双向异步消息队列（AgentLoop 内部使用）
+      events.rs                 # InboundMessage, OutboundPayload 显式事件定义
     commands/                    # Tier 1: Web Commands（Tauri IPC，前端 invoke() 调用）
       mod.rs                    # 导出所有命令模块
       conversation.rs           # 对话：→ AgentLoop (入队) + SessionManager (查历史)
@@ -27,16 +32,8 @@ src-tauri/
       knowledge.rs              # 知识库：→ KnowledgeService
       settings.rs               # 设置：→ Storage (settings.json + keychain)
       system.rs                 # 系统：→ Heartbeat + Gateway + Cron 状态
-    agent_commands/              # Tier 2: Agent 控制指令（对话内 /xxx 生命周期管控）
-      mod.rs                    # AgentCommandRegistry：注册/解析/分发
-      traits.rs                 # AgentCommand trait + AgentCommandContext + AgentAction
-      new.rs                    # /new — 创建新会话（关闭当前 Session）
-      stop.rs                   # /stop — 停止所有进行中操作（取消 SubAgent 任务）
-      restart.rs                # /restart — 重启 Agent 服务（重新初始化）
-      status.rs                 # /status — 查看 Agent 状态、连接、队列
-    cli/                         # Tier 3: CLI 命令行（终端使用，独立二进制）
+    cli/                         # Tier 2: CLI 命令行（终端使用，独立二进制）
       mod.rs                    # clap App 定义 + run()
-      runtime.rs                # CliRuntime：最小运行时（DB + Services，无 UI）
       daily.rs                  # mindclaw daily [date]
       search.rs                 # mindclaw search "query"
       task.rs                   # mindclaw task create/list/complete
@@ -52,45 +49,54 @@ src-tauri/
       vector.rs                 # sqlite-vss 向量索引（Phase 2，MVP 用 FTS5）
       archive.rs                # JSONL 冷归档读写
       keychain.rs               # OS Keychain 存取（keyring crate）
-    agent/
-      mod.rs                    # AgentService 构造与初始化、接线
-      agent_loop.rs             # AgentLoop：事件驱动编排器，Bus → Session Queue → RunOnce → ProviderEvent → Tool Loop → OutboundEvent
-      events.rs                 # ProviderEvent / AgentEvent / RunPhase 等运行时事件类型
-      context.rs                # ContextPipeline：可插拔上下文管线（ContextSource trait + 优先级 + token 预算）
-      hooks.rs                  # HookRegistry：事件钩子（PreMessage/PostMessage/PreToolUse/PostToolUse）
-      session.rs                # SessionManager：按 sender 隔离会话、turn 追加、裁剪、持久化
-      sub_agent.rs              # SubAgentRegistry：trait-based 任务注册表 + SubAgentExecutor
+    agent/                       # Agent 核心（大脑 + 驱动器分离）
+      mod.rs                    # 导出 Agent, AgentLoop, AgentBuilder
+      agent.rs                  # Agent（大脑）：ContextPipeline + Provider + ToolRegistry + Observer
+      builder.rs                # AgentBuilder：构建 Agent（只需 AppConfig，无基础设施依赖）
+      agent_loop.rs             # AgentLoop（驱动器）：事件编排 + Session + Commands
+      commands/                 # Agent 控制指令（对话内 /xxx 生命周期管控）
+        mod.rs                  # AgentCommandRegistry：注册/解析/分发
+        traits.rs               # AgentCommand trait + AgentCommandContext + AgentAction
+        new.rs                  # /new — 创建新会话
+        stop.rs                 # /stop — 停止当前运行
+        restart.rs              # /restart — 重启 Agent 服务
+        status.rs               # /status — 查看 Agent 状态
+      events.rs                 # ProviderEvent / AgentEvent / AgentObserver trait
+      context.rs                # ContextPipeline：可插拔上下文管线
+      hooks.rs                  # HookRegistry：事件钩子
+      session.rs                # SessionManager：会话编排、turn 管理
+      sub_agent.rs              # SubAgentRegistry + SubAgentExecutor
     memory/
-      mod.rs                    # MemoryManager：统一记忆层入口（单表 memories，upsert by key）
+      mod.rs                    # MemoryManager：统一记忆层入口
       types.rs                  # Memory, MemoryCategory 结构定义
-      recall.rs                 # 记忆召回：关键词 + 向量检索，importance 排序
+      recall.rs                 # 记忆召回：关键词 + 向量检索
     services/
       mod.rs                    # 导出所有业务 Service
-      knowledge.rs              # KnowledgeService：知识笔记 CRUD、wikilink 提取、索引同步
-      daily.rs                  # DailyService：日记读写、模板创建、条目追加
-      task.rs                   # TaskService：任务 CRUD、状态管理
+      knowledge.rs              # KnowledgeService：知识笔记 CRUD
+      daily.rs                  # DailyService：日记读写
+      task.rs                   # TaskService：任务 CRUD
     providers/
       mod.rs                    # 模块导出 + re-export
       traits.rs                 # Provider trait、ChatMessage、ProviderResponse
-      config.rs                 # ProviderConfig / ModelConfig 数据结构 + builtin_configs()
-      registry.rs               # ProviderRegistry：配置注册 + 工厂方法（配置驱动，非代码驱动）
-      openai_compat.rs          # OpenAICompatProvider：通用 OpenAI 兼容实现（OpenAI/DeepSeek/Moonshot 等）
-      claude.rs                 # ClaudeProvider：Claude API 实现（独立协议，stub）
+      config.rs                 # ProviderConfig / ModelConfig 数据结构
+      registry.rs               # ProviderRegistry：配置注册 + 工厂方法
+      openai_compat.rs          # OpenAICompatProvider：通用 OpenAI 兼容实现
+      claude.rs                 # ClaudeProvider：Claude API 实现
     tools/
-      mod.rs                    # ToolRegistry + Tool trait（注册/查找/执行）
+      mod.rs                    # ToolRegistry + Tool trait
       traits.rs                 # Tool trait、ToolInput、ToolOutput
-      # --- 基础能力工具（常驻上下文，3 个 Schema）---
-      filesystem.rs             # vault 内文件操作（安全边界约束）
-      shell.rs                  # 白名单受限 Shell（沙箱执行）
+      filesystem.rs             # vault 内文件操作
+      shell.rs                  # 白名单受限 Shell
       mcp_client.rs             # MCP Client：接入外部工具服务
-      operations.rs             # 元工具：list/call 动态发现并调用 Services + Memory
-      skills.rs                 # SkillRegistry：技能系统（分发 ContextSources/Hooks/SubAgentTasks/Operations）
+      operations.rs             # 元工具：list/call Services + Memory + SubAgent
+      sub_agent_tool.rs         # SubAgentTool：Agent-as-Tool 包装器
+      skills.rs                 # SkillRegistry：技能系统
     gateway/
       mod.rs                    # Gateway 启动与路由配置
-      server.rs                 # HTTP Server（actix-web / axum）：PWA 静态文件 + API
-      api.rs                    # REST API：webhook 接收、chat endpoint、知识查询
+      server.rs                 # HTTP Server：PWA 静态文件 + API
+      api.rs                    # REST API：webhook 接收、chat endpoint
       ws.rs                     # WebSocket endpoint：实时对话通道
-      auth.rs                   # 认证：Bearer token、签名验证、IP 限制
+      auth.rs                   # 认证：Bearer token、签名验证
     cron/
       mod.rs                    # CronScheduler：定时任务注册与调度
       jobs.rs                   # 具体任务定义
@@ -100,9 +106,15 @@ src-tauri/
     models/
       mod.rs
       note.rs                   # Note, DailyNote, KnowledgeEntry
-      task.rs                   # Task（状态、截止日期、上下文）
+      task.rs                   # Task
       conversation.rs           # Message, Session, ConversationMode
       settings.rs               # AppSettings, UserRole, AgentPreference
+  agents/                       # 内置 SubAgent（Markdown 定义，编译期嵌入）
+    explore.md                  # 只读探索（Haiku 模型）
+    plan.md                     # 规划（继承主模型）
+    knowledge-distill.md        # 从对话提炼知识笔记
+    session-summarize.md        # 会话摘要生成
+    daily-summary.md            # 当日回顾
   Cargo.toml
   tauri.conf.json
   capabilities/
@@ -171,6 +183,11 @@ src/
   │ │       └── 深度工作.md
   │ ├── private/                # 私密区（Agent 不可见）
   │ └── _assets/                # 附件（图片、PDF）
+  .agents/                      # 用户级 Agent 定义（SubAgent + Skill）
+  │ ├── agents/                 # SubAgent Markdown 文件
+  │ │   └── my-custom-agent.md  # 用户自定义 Agent
+  │ └── skills/                 # Skill 文件（SKILL.md）
+  │     └── my-skill.md
   data/
   │ ├── main.db                 # SQLite 主库（L0/L1 索引 + FTS5）
   │ └── archive/                # 冷归档
@@ -178,6 +195,19 @@ src/
   config/
     └── settings.json           # 非敏感设置
 ```
+
+项目级 Agent 定义（可选）：
+
+```
+<project>/
+  .agents/                      # 项目级 Agent 定义（需信任确认）
+    ├── agents/
+    │   └── project-specific-agent.md
+    └── skills/
+        └── project-skill.md
+```
+
+Agent 发现优先级：`Project > User > Builtin`（同名高优先级覆盖）
 
 整个 `~/MindClaw/` 目录 zip 打包即完整备份。
 

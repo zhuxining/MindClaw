@@ -1,21 +1,15 @@
+use super::path_guard::PathGuard;
 use super::traits::{Tool, ToolInput, ToolOutput};
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-/// vault 内文件操作（安全边界约束：只允许访问 vault 目录，拒绝 private/ 路径）
+/// vault 内文件操作（安全边界约束：只允许访问授权目录，拒绝 private/ 路径）
 pub struct FilesystemTool {
-    vault_root: PathBuf,
-}
-
-/// 目录条目信息
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DirEntry {
-    pub name: String,
-    pub file_type: String, // "file" | "directory"
-    pub size: u64,
+    guard: Arc<PathGuard>,
 }
 
 /// 编辑操作
@@ -41,83 +35,18 @@ pub enum EditOp {
 impl FilesystemTool {
     pub fn new(vault_root: impl Into<PathBuf>) -> Self {
         Self {
-            vault_root: vault_root.into(),
+            guard: Arc::new(PathGuard::vault_only(vault_root).with_denied("private")),
         }
     }
 
-    /// 解析并校验路径（核心安全方法）
-    fn resolve_path(&self, path: &str) -> Result<PathBuf, AppError> {
-        // 处理空路径（表示根目录）
-        let full_path = if path.is_empty() {
-            self.vault_root.clone()
-        } else {
-            self.vault_root.join(path)
-        };
-
-        // 规范化：清理 .. 组件，但保留根目录
-        let mut components = Vec::new();
-        let mut is_absolute = false;
-        for comp in full_path.components() {
-            match comp {
-                std::path::Component::RootDir => {
-                    is_absolute = true;
-                }
-                std::path::Component::Prefix(p) => {
-                    components.push(std::path::Component::Prefix(p));
-                }
-                std::path::Component::ParentDir => {
-                    components.pop();
-                }
-                std::path::Component::Normal(c) => {
-                    components.push(std::path::Component::Normal(c));
-                }
-                _ => {}
-            }
-        }
-
-        // 重新构建路径
-        let mut normalized = PathBuf::new();
-        if is_absolute {
-            normalized.push("/");
-        }
-        for comp in &components {
-            if let std::path::Component::Normal(c) = comp {
-                normalized.push(c);
-            }
-        }
-
-        // 检查是否在 vault 内：确保 normalized 以 vault_root 开头
-        let vault_str = self.vault_root.to_string_lossy();
-        let normalized_str = normalized.to_string_lossy();
-
-        if !normalized_str.starts_with(vault_str.as_ref()) {
-            return Err(AppError::PermissionDenied(format!(
-                "Path '{}' is outside vault",
-                path
-            )));
-        }
-
-        // 检查是否包含 private/
-        if !self.is_allowed(path) {
-            return Err(AppError::PermissionDenied(format!(
-                "Access to 'private/' is denied: {}",
-                path
-            )));
-        }
-
-        Ok(normalized)
-    }
-
-    /// 检查路径是否允许访问
-    fn is_allowed(&self, path: &str) -> bool {
-        !path.contains("private/") && !path.starts_with("private")
+    pub fn with_guard(guard: Arc<PathGuard>) -> Self {
+        Self { guard }
     }
 
     // ── 操作实现 ──────────────────────────────────────────────
 
-    /// 读取文件内容
     async fn file_read(&self, path: &str) -> Result<String, AppError> {
-        let full_path = self.resolve_path(path)?;
+        let full_path = self.guard.resolve(path)?;
 
         if !full_path.exists() {
             return Err(AppError::NotFound(format!("File not found: {}", path)));
@@ -134,9 +63,8 @@ impl FilesystemTool {
         Ok(truncate_content(&content, 1_048_576))
     }
 
-    /// 写入文件（覆盖）
     async fn file_write(&self, path: &str, content: &str) -> Result<(), AppError> {
-        let full_path = self.resolve_path(path)?;
+        let full_path = self.guard.resolve(path)?;
 
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent)?;
@@ -146,44 +74,8 @@ impl FilesystemTool {
         Ok(())
     }
 
-    /// 列出目录内容
-    async fn file_list(&self, path: &str) -> Result<Vec<DirEntry>, AppError> {
-        let full_path = self.resolve_path(path)?;
-
-        if !full_path.exists() {
-            return Err(AppError::NotFound(format!("Directory not found: {}", path)));
-        }
-
-        if full_path.is_file() {
-            return Err(AppError::Validation(format!(
-                "'{}' is a file, not a directory",
-                path
-            )));
-        }
-
-        let mut entries = Vec::new();
-        for entry in fs::read_dir(&full_path)? {
-            let entry = entry?;
-            let metadata = entry.metadata()?;
-            entries.push(DirEntry {
-                name: entry.file_name().to_string_lossy().to_string(),
-                file_type: if metadata.is_dir() {
-                    "directory"
-                } else {
-                    "file"
-                }
-                .to_string(),
-                size: metadata.len(),
-            });
-        }
-
-        entries.truncate(1000);
-        Ok(entries)
-    }
-
-    /// 编辑文件（局部修改）
     async fn file_edit(&self, path: &str, edits: Vec<EditOp>) -> Result<(), AppError> {
-        let full_path = self.resolve_path(path)?;
+        let full_path = self.guard.resolve(path)?;
 
         if !full_path.exists() {
             return Err(AppError::NotFound(format!("File not found: {}", path)));
@@ -196,11 +88,9 @@ impl FilesystemTool {
             )));
         }
 
-        // 读取文件内容
         let content = fs::read_to_string(&full_path)?;
         let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
-        // 按顺序应用编辑
         for edit in edits {
             match edit {
                 EditOp::Prepend { content } => {
@@ -228,7 +118,6 @@ impl FilesystemTool {
                 } => {
                     if from_line <= to_line && to_line < lines.len() {
                         lines.drain(from_line..=to_line);
-                        // 将替换内容按行拆分后插入
                         for (i, line) in content.lines().enumerate() {
                             lines.insert(from_line + i, line.to_string());
                         }
@@ -237,9 +126,7 @@ impl FilesystemTool {
             }
         }
 
-        // 写回文件
-        let new_content = lines.join("\n");
-        fs::write(&full_path, new_content)?;
+        fs::write(&full_path, lines.join("\n"))?;
         Ok(())
     }
 }
@@ -260,7 +147,7 @@ impl Tool for FilesystemTool {
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["read", "write", "list", "edit"],
+                    "enum": ["read", "write", "edit"],
                     "description": "操作类型"
                 },
                 "path": {
@@ -307,13 +194,6 @@ impl Tool for FilesystemTool {
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::Validation("missing 'path' parameter".into()))?;
 
-        if !self.is_allowed(path) {
-            return Ok(ToolOutput::err(format!(
-                "Access denied: path '{}' contains 'private/'",
-                path
-            )));
-        }
-
         match operation {
             "read" => self
                 .file_read(path)
@@ -335,16 +215,6 @@ impl Tool for FilesystemTool {
                     .map(|_| ToolOutput::ok(format!("Successfully wrote to '{}'", path)))
                     .map_err(|e| AppError::Storage(format!("write failed: {}", e)))
             }
-
-            "list" => self
-                .file_list(path)
-                .await
-                .map(|entries| {
-                    let json =
-                        serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string());
-                    ToolOutput::ok(json)
-                })
-                .map_err(|e| AppError::Storage(format!("list failed: {}", e))),
 
             "edit" => {
                 let edits_value = input.parameters.get("edits").ok_or_else(|| {
@@ -374,7 +244,6 @@ impl Tool for FilesystemTool {
 
 // ── 辅助函数 ──────────────────────────────────────────────
 
-/// 截断超长内容
 fn truncate_content(content: &str, max_bytes: usize) -> String {
     if content.len() <= max_bytes {
         return content.to_string();
@@ -405,7 +274,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let vault = temp_dir.path().join("vault");
         fs::create_dir_all(&vault).unwrap();
-        let tool = FilesystemTool::new(vault.clone()); // 使用 clone 确保路径一致
+        let tool = FilesystemTool::new(vault);
         (tool, temp_dir)
     }
 
@@ -427,7 +296,7 @@ mod tests {
         tool.file_edit(
             "test.txt",
             vec![EditOp::Insert {
-                after_line: 0, // 在第 0 行（line1）后插入
+                after_line: 0,
                 content: "inserted".to_string(),
             }],
         )
@@ -497,18 +366,6 @@ mod tests {
 
         let content = tool.file_read("test.txt").await.unwrap();
         assert_eq!(content, "line1\nappended");
-    }
-
-    #[tokio::test]
-    async fn test_list() {
-        let (tool, temp) = setup_test_vault();
-        let vault_path = temp.path().join("vault");
-        fs::write(vault_path.join("file1.txt"), "content1").unwrap();
-        fs::write(vault_path.join("file2.txt"), "content2").unwrap();
-        fs::create_dir_all(vault_path.join("subdir")).unwrap();
-
-        let entries = tool.file_list("").await.unwrap();
-        assert!(entries.len() >= 3);
     }
 
     #[tokio::test]

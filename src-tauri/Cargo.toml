@@ -42,6 +42,7 @@ tauri-plugin-stronghold = "2"
 
 
 
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
 tauri-plugin-cli = "2"
@@ -109,8 +110,11 @@ futures-util = { version = "0.3", default-features = false, features = [
 dashmap = "6.0"
 tokio-util = "0.7"
 
-ripgrep = "15.1.0"
-fd-find = "10.4.2"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+globset = "0.4"
+rmcp = { version = "0.16.0", features = ["server", "client", "transport-child-process"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }

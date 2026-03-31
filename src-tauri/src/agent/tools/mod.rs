@@ -1,6 +1,9 @@
 pub mod filesystem;
-pub mod mcp_client;
+pub mod find_files;
+pub mod mcp_bridge;
 pub mod operations;
+pub mod path_guard;
+pub mod search_content;
 pub mod shell;
 pub mod skills;
 pub mod traits;

@@ -5,7 +5,9 @@
 use crate::agent::commands::AgentCommandRegistry;
 use crate::agent::observer::{AgentObserver, TracingObserver};
 use crate::agent::tools::{
-    filesystem::FilesystemTool, shell::ShellTool, traits::Tool, ToolRegistry,
+    filesystem::FilesystemTool, find_files::FindFilesTool, mcp_bridge::McpBridgeManager,
+    path_guard::PathGuard, search_content::SearchContentTool, shell::ShellTool, traits::Tool,
+    ToolRegistry,
 };
 use crate::agent::{
     AgentLoop, ContextPipeline, ConversationHistorySource, SessionManager, SystemPromptSource,
@@ -134,7 +136,7 @@ impl AppRuntimeBuilder {
         let provider = init_provider(&config)?;
 
         // 7. 初始化 ToolRegistry
-        let tools = init_tools(&config, self.extra_tools)?;
+        let tools = init_tools(&config, self.extra_tools).await?;
 
         // 8. 创建 AgentCommandRegistry
         let agent_commands = Arc::new(AgentCommandRegistry::with_builtins());
@@ -210,15 +212,25 @@ fn init_provider(config: &AppConfig) -> AppResult<Arc<dyn Provider>> {
 }
 
 /// 初始化默认工具 + 额外工具
-fn init_tools(
+async fn init_tools(
     config: &AppConfig,
     extra: Vec<Arc<dyn Tool + Send + Sync>>,
 ) -> AppResult<Arc<ToolRegistry>> {
     let mut tools = ToolRegistry::new();
 
     // 内置工具
-    tools.register(Arc::new(ShellTool));
-    tools.register(Arc::new(FilesystemTool::new(config.vault_path.clone())));
+    let guard = Arc::new(PathGuard::vault_only(config.vault_path.clone()).with_denied("private"));
+    tools.register(Arc::new(ShellTool::new(config.data_dir.clone())));
+    tools.register(Arc::new(FilesystemTool::with_guard(Arc::clone(&guard))));
+    tools.register(Arc::new(FindFilesTool::new(Arc::clone(&guard))));
+    tools.register(Arc::new(SearchContentTool::new(Arc::clone(&guard))));
+
+    // MCP proxy tools：从 data_dir/mcp.toml 加载外部 server 配置
+    let bridge = McpBridgeManager::from_file(&config.data_dir).await;
+    if bridge.server_count() > 0 {
+        bridge.inject_tools(&mut tools).await?;
+        tracing::info!(servers = %bridge.server_count(), "MCP bridge initialized");
+    }
 
     // 额外工具
     for tool in extra {

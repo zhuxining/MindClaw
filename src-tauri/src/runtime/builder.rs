@@ -2,22 +2,9 @@
 //!
 //! 从 CliRuntime::new_with_agent() 提取的通用初始化逻辑
 
-use crate::agent::commands::AgentCommandRegistry;
-use crate::agent::observer::{AgentObserver, TracingObserver};
-use crate::agent::tools::{
-    filesystem::FilesystemTool, find_files::FindFilesTool, mcp_bridge::McpBridgeManager,
-    path_guard::PathGuard, search_content::SearchContentTool, shell::ShellTool, traits::Tool,
-    ToolRegistry,
-};
-use crate::agent::{
-    AgentLoop, ContextPipeline, ConversationHistorySource, SessionManager, SystemPromptSource,
-    UserMessageSource,
-};
+use crate::agent::AgentBuilder;
 use crate::bus::MessageBus;
-use crate::error::{AppError, AppResult};
-use crate::providers::config::builtin_configs;
-use crate::providers::openai_compat::OpenAICompatProvider;
-use crate::providers::Provider;
+use crate::error::AppResult;
 use crate::runtime::config::AppConfig;
 use crate::runtime::services::ServiceContainer;
 use crate::runtime::AppRuntime;
@@ -35,8 +22,6 @@ pub struct AppRuntimeBuilder {
     bus_capacity: Option<usize>,
     context_token_limit: Option<usize>,
     system_prompt: Option<String>,
-    observer: Option<Arc<dyn AgentObserver>>,
-    extra_tools: Vec<Arc<dyn Tool + Send + Sync>>,
 }
 
 impl AppRuntimeBuilder {
@@ -48,8 +33,6 @@ impl AppRuntimeBuilder {
             bus_capacity: None,
             context_token_limit: None,
             system_prompt: None,
-            observer: None,
-            extra_tools: Vec::new(),
         }
     }
 
@@ -80,16 +63,6 @@ impl AppRuntimeBuilder {
 
     pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = Some(prompt.into());
-        self
-    }
-
-    pub fn observer(mut self, obs: Arc<dyn AgentObserver>) -> Self {
-        self.observer = Some(obs);
-        self
-    }
-
-    pub fn add_tool(mut self, tool: Arc<dyn Tool + Send + Sync>) -> Self {
-        self.extra_tools.push(tool);
         self
     }
 
@@ -127,38 +100,14 @@ impl AppRuntimeBuilder {
         let services = Arc::new(ServiceContainer::new(db.clone(), &config)?);
 
         // 4. 创建 SessionManager
-        let session_mgr = Arc::new(SessionManager::new(db.clone()));
+        let session_mgr = Arc::new(crate::agent::SessionManager::new(db.clone()));
 
         // 5. 创建 MessageBus
         let bus = Arc::new(MessageBus::new(config.bus_capacity));
 
-        // 6. 初始化 Provider
-        let provider = init_provider(&config)?;
-
-        // 7. 初始化 ToolRegistry
-        let tools = init_tools(&config, self.extra_tools).await?;
-
-        // 8. 创建 AgentCommandRegistry
-        let agent_commands = Arc::new(AgentCommandRegistry::with_builtins());
-
-        // 9. 创建 ContextPipeline
-        let context_pipeline = build_context_pipeline(&config);
-
-        // 10. 创建 Observer
-        let observer = self
-            .observer
-            .unwrap_or_else(|| Arc::new(TracingObserver::new()));
-
-        // 11. 创建 AgentLoop
-        let agent = Arc::new(AgentLoop::new(
-            bus.clone(),
-            session_mgr.clone(),
-            context_pipeline,
-            provider,
-            tools,
-            agent_commands,
-            observer,
-        ));
+        // 6. 使用 AgentBuilder 构建 AgentLoop
+        let agent_builder = AgentBuilder::new(config.clone(), bus.clone(), session_mgr.clone());
+        let agent = Arc::new(agent_builder.build().await?);
 
         let shutdown = CancellationToken::new();
 
@@ -179,73 +128,4 @@ impl Default for AppRuntimeBuilder {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// 根据配置初始化 LLM Provider
-fn init_provider(config: &AppConfig) -> AppResult<Arc<dyn Provider>> {
-    let configs = builtin_configs();
-    let provider_config = configs
-        .iter()
-        .find(|c| c.name == config.provider_id)
-        .ok_or_else(|| {
-            AppError::Provider(format!(
-                "provider '{}' not found in builtin configs",
-                config.provider_id
-            ))
-        })?;
-
-    let provider = OpenAICompatProvider::from_env(provider_config, config.model_id.as_deref())
-        .map_err(|e| {
-            AppError::Provider(format!(
-                "failed to initialize {} provider: {}",
-                config.provider_id, e
-            ))
-        })?;
-
-    tracing::info!(
-        provider = %config.provider_id,
-        model = %provider.model_id(),
-        "provider_initialized"
-    );
-
-    Ok(Arc::new(provider))
-}
-
-/// 初始化默认工具 + 额外工具
-async fn init_tools(
-    config: &AppConfig,
-    extra: Vec<Arc<dyn Tool + Send + Sync>>,
-) -> AppResult<Arc<ToolRegistry>> {
-    let mut tools = ToolRegistry::new();
-
-    // 内置工具
-    let guard = Arc::new(PathGuard::vault_only(config.vault_path.clone()).with_denied("private"));
-    tools.register(Arc::new(ShellTool::new(config.data_dir.clone())));
-    tools.register(Arc::new(FilesystemTool::with_guard(Arc::clone(&guard))));
-    tools.register(Arc::new(FindFilesTool::new(Arc::clone(&guard))));
-    tools.register(Arc::new(SearchContentTool::new(Arc::clone(&guard))));
-
-    // MCP proxy tools：从 data_dir/mcp.toml 加载外部 server 配置
-    let bridge = McpBridgeManager::from_file(&config.data_dir).await;
-    if bridge.server_count() > 0 {
-        bridge.inject_tools(&mut tools).await?;
-        tracing::info!(servers = %bridge.server_count(), "MCP bridge initialized");
-    }
-
-    // 额外工具
-    for tool in extra {
-        tools.register(tool);
-    }
-
-    tracing::info!(tool_count = %tools.len(), "tools_initialized");
-    Ok(Arc::new(tools))
-}
-
-/// 构建上下文管道
-fn build_context_pipeline(config: &AppConfig) -> Arc<ContextPipeline> {
-    let mut pipeline = ContextPipeline::new(config.context_token_limit);
-    pipeline.add_source(Arc::new(SystemPromptSource::new(&config.system_prompt)));
-    pipeline.add_source(Arc::new(ConversationHistorySource::new(5)));
-    pipeline.add_source(Arc::new(UserMessageSource));
-    Arc::new(pipeline)
 }

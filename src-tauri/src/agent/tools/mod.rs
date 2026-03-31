@@ -187,3 +187,54 @@ impl ToolRegistry {
         self.tools.keys().cloned().collect()
     }
 }
+
+// ============================================================================
+// 便捷构建方法
+// ============================================================================
+
+impl ToolRegistry {
+    /// 初始化默认工具集
+    ///
+    /// 包含以下内置工具：
+    /// - ShellTool - Shell 命令执行
+    /// - FilesystemTool - 文件系统操作（受 PathGuard 保护）
+    /// - FindFilesTool - 文件搜索
+    /// - SearchContentTool - 内容搜索
+    /// - McpBridge - MCP 桥接（如果 mcp.toml 存在）
+    pub async fn init_default(
+        config: &crate::runtime::config::AppConfig,
+        extra: Vec<Arc<dyn Tool + Send + Sync>>,
+    ) -> AppResult<Arc<Self>> {
+        use crate::agent::tools::filesystem::FilesystemTool;
+        use crate::agent::tools::find_files::FindFilesTool;
+        use crate::agent::tools::mcp_bridge::McpBridgeManager;
+        use crate::agent::tools::path_guard::PathGuard;
+        use crate::agent::tools::search_content::SearchContentTool;
+        use crate::agent::tools::shell::ShellTool;
+
+        let mut tools = Self::new();
+
+        // 内置工具
+        let guard =
+            Arc::new(PathGuard::vault_only(config.vault_path.clone()).with_denied("private"));
+        tools.register(Arc::new(ShellTool::new(config.data_dir.clone())));
+        tools.register(Arc::new(FilesystemTool::with_guard(Arc::clone(&guard))));
+        tools.register(Arc::new(FindFilesTool::new(Arc::clone(&guard))));
+        tools.register(Arc::new(SearchContentTool::new(Arc::clone(&guard))));
+
+        // MCP proxy tools：从 data_dir/mcp.toml 加载外部 server 配置
+        let bridge = McpBridgeManager::from_file(&config.data_dir).await;
+        if bridge.server_count() > 0 {
+            bridge.inject_tools(&mut tools).await?;
+            tracing::info!(servers = %bridge.server_count(), "MCP bridge initialized");
+        }
+
+        // 额外工具
+        for tool in extra {
+            tools.register(tool);
+        }
+
+        tracing::info!(tool_count = %tools.len(), "tools_initialized");
+        Ok(Arc::new(tools))
+    }
+}

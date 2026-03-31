@@ -332,6 +332,26 @@ impl ConversationHistorySource {
     }
 }
 
+// ============================================================================
+// 便捷构建方法
+// ============================================================================
+
+impl ContextPipeline {
+    /// 根据配置构建默认的上下文管线
+    ///
+    /// 包含三个默认来源：
+    /// 1. SystemPromptSource - 系统提示词
+    /// 2. ConversationHistorySource - 对话历史（近 5 轮）
+    /// 3. UserMessageSource - 用户消息
+    pub fn build_default(config: &crate::runtime::config::AppConfig) -> Arc<Self> {
+        let mut pipeline = Self::new(config.context_token_limit);
+        pipeline.add_source(Arc::new(SystemPromptSource::new(&config.system_prompt)));
+        pipeline.add_source(Arc::new(ConversationHistorySource::new(5)));
+        pipeline.add_source(Arc::new(UserMessageSource));
+        Arc::new(pipeline)
+    }
+}
+
 impl Default for ConversationHistorySource {
     fn default() -> Self {
         Self::new(5)

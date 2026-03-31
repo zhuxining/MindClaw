@@ -79,7 +79,15 @@ UI invoke() ──► publish_inbound ──► AgentLoop.consume ──► Sess
     │  Provider.chat_stream ◄───────────────────────────────────┘      │
     │       │                                                          │
     │       ├── TextDelta ──► Outbound.Chunk                          │
-    │       └── ToolCall ──► Tool.execute ──► next round               │
+    │       │                                                          │
+    │       └── ToolCall ──► [工具执行流水线]                           │
+    │                          │                                       │
+    │                          ├── 准备阶段 ──► before_tool_call        │
+    │                          ├── 执行阶段 ──► execute (Seq/Parallel)  │
+    │                          └── 终结阶段 ──► after_tool_call         │
+    │                                          │                       │
+    │                                          ▼                       │
+    │                                   ToolResult ──► next round      │
     │                                                                  │
     │  Session.append_turn ──► Outbound.Done ──► Dispatcher.send      │
     └──────────────────────────────────────────────────────────────────┘
@@ -158,9 +166,13 @@ pub struct AgentLoop {
     bus: Arc<MessageBus>,                                  // 消息流
     session_mgr: Arc<SessionManager>,                      // 会话编排
     commands: Arc<AgentCommandRegistry>,                   // 命令拦截器
-    observer: Arc<dyn AgentObserver>,                      // 观测（与 agent.observer 同一 Arc）
+    observer: Arc<dyn AgentObserver>,                      // 观测（共享同一个 Arc）
     sessions: DashMap<String, Mutex<SessionSlot>>,         // 运行时状态
 }
+```
+
+**Observer 共享机制**：Agent 和 AgentLoop 持有**同一个** `Arc<dyn AgentObserver>` 实例（通过 `AgentBuilder` 创建时传入，AgentLoop 从 Agent 中获取）。Agent 发射智能层事件（ContextBuilt, ToolCallStarted），AgentLoop 发射编排层事件（RunStarted, TurnCompleted），两者通过同一个 Observer 实例分发到订阅者。
+
 ```
 
 **AgentLoop 职责**：
@@ -191,11 +203,52 @@ pub struct AgentLoop {
 
 每个 session 一个 `SessionSlot`：
 
-- **queue**: 待处理消息队列
+- **follow_up_queue**: 待处理的用户消息队列（Follow-up）
+- **steering_queue**: 运行中注入的补充指令（Steering）
 - **active_run**: 当前执行的 RunHandle（含 CancellationToken）
-- **steering_queue**: 运行中注入的补充指令
 
 同一 session 同时最多一个活跃 run，后续消息入队等待。
+
+#### Follow-up vs Steering 语义
+
+| 维度         | Follow-up          | Steering                 |
+| ------------ | ------------------ | ------------------------ |
+| **触发时机** | 当前无活跃 run     | 当前有活跃 run           |
+| **用户意图** | 下一条正常消息     | 打断/补充当前运行        |
+| **队列**     | `follow_up_queue`  | `steering_queue`         |
+| **消费时机** | run 完成后自旋消费 | 每轮结束后、下一轮开始前 |
+| **效果**     | 启动新 run         | 软打断，保留已完成轮次   |
+
+```
+
+用户消息 A ──► run_once(A) 执行中 ──► 用户消息 B（Steering）
+│
+▼
+steering_queue 入队
+│
+当前轮次（LLM响应+工具执行）完成后
+│
+▼
+检查 steering_queue
+│
+注入上下文，开始下一轮
+
+````
+
+#### Steering 消费策略
+
+```rust
+pub enum SteeringMode {
+    OneAtATime,  // 默认：每轮只取一条，防止模型过载
+    All,         // 全部取出（未来扩展）
+}
+````
+
+**默认 `OneAtATime`**：
+
+- 防止用户连续发送多条 steering 指令导致上下文爆炸
+- 每条 steering 作为独立消息处理，LLM 有机会响应
+- 安全默认值，符合"渐进式引导"的使用模式
 
 ### 单次 run 状态机
 
@@ -228,6 +281,102 @@ pub struct AgentLoop {
 - 取消：`/stop` 触发 CancellationToken，仅影响当前 session
 - 超时：单轮工具执行 30s 超时
 - Steering vs Cancel：软打断保留已完成工具轮次，硬中止丢弃
+
+---
+
+## 工具执行流水线
+
+工具执行遵循三阶段生命周期：**准备 → 执行 → 终结**。支持顺序执行和并行执行两种模式。
+
+### 执行模式
+
+| 模式                 | 准备阶段 | 执行阶段                   | 适用场景                           |
+| -------------------- | -------- | -------------------------- | ---------------------------------- |
+| **Sequential**       | 逐个进行 | 逐个进行                   | 具有共享副作用的工具（如文件写入） |
+| **Parallel**（默认） | 顺序预检 | 并发执行（Semaphore 限制） | 独立的只读操作（如多个 read_file） |
+
+**关键设计**：并行模式下，准备阶段仍然是顺序运行的——`before_tool_call` 钩子可能阻止某些调用，必须在分派前确定哪些调用被阻止。所有准备完成后，未被阻止的调用并发启动。
+
+### 三阶段流水线
+
+```
+ToolCall
+    │
+    ▼
+[阶段 1: 准备] prepare_tool_call()
+    ├── 工具查找（ToolRegistry）
+    ├── 参数验证（JSON Schema）
+    └── before_tool_call 钩子（可阻止执行）
+    │
+    ▼（未被阻止）
+[阶段 2: 执行] execute_tool()
+    ├── 并发执行（Parallel 模式）
+    ├── 超时控制（30s）
+    └── 进度回调（on_update）
+    │
+    ▼
+[阶段 3: 终结] finalize_tool_call()
+    ├── after_tool_call 钩子（可覆盖结果）
+    └── 构建 ToolResultMessage
+```
+
+### 工具钩子
+
+```rust
+pub struct ToolExecutionConfig {
+    pub mode: ToolExecutionMode,                    // Sequential / Parallel
+    pub before_tool_call: Option<BeforeHook>,       // 执行前拦截
+    pub after_tool_call: Option<AfterHook>,         // 执行后处理
+}
+
+pub type BeforeHook = fn(&ToolCall, &Context) -> BeforeResult;
+pub type AfterHook = fn(&ToolCall, &ToolResult, &Context) -> ToolResult;
+```
+
+**配置位置**：在 `ToolRegistry::register()` 时指定，或工具实现 `Tool::execution_config()` 方法返回。
+
+```rust
+// 注册时配置
+registry.register_with_config(
+    filesystem_tool,
+    ToolExecutionConfig {
+        mode: ToolExecutionMode::Sequential,  // 文件写入必须顺序
+        before_tool_call: Some(check_write_permission),
+        after_tool_call: None,
+    }
+);
+
+// 或工具自身声明
+impl Tool for FileSystemTool {
+    fn execution_config(&self) -> ToolExecutionConfig {
+        ToolExecutionConfig {
+            mode: ToolExecutionMode::Sequential,
+            ..Default::default()
+        }
+    }
+}
+```
+
+**before_tool_call**：返回 `Block { reason }` 可阻止执行，循环会发出错误工具结果。
+
+**after_tool_call**：接收完整上下文（助手消息、工具调用、参数、结果、错误状态），可选择性覆盖 content/details/isError。
+
+### 并发控制
+
+```rust
+// 全局工具执行信号量，限制并发数
+static TOOL_SEMAPHORE: Semaphore = Semaphore::new(4);
+
+// Parallel 模式：获取 permit 后并发执行
+let permits = TOOL_SEMAPHORE.acquire_many(n).await?;
+let results = join_all(tools.map(|t| t.execute())).await;
+```
+
+**设计理由**：
+
+- 防止资源爆炸（同时打开过多文件/网络连接）
+- 保证 `before_tool_call` 看到的上下文状态一致
+- 文件写入类工具应声明为 `Sequential`，避免并行竞态
 
 ---
 
@@ -279,7 +428,68 @@ Observer 是横切关注点，Agent 和 AgentLoop 共享同一个 `Arc<dyn Agent
 **Agent 层事件**（智能执行）：
 
 - ContextBuilt, ProviderTextDelta, ProviderToolCall
-- ToolStarted, ToolFinished
+- ToolCallStarted, ToolCallFinished — 一次 tool_call 的完整生命周期（含所有执行阶段）
+
+**Turn 级别事件**（单次助手响应 + 工具执行的完整回合）：
+
+- TurnStarted — 开始一次新的助手回合（发送上下文到 LLM）
+- TurnCompleted — 回合完成（所有工具执行完毕，结果已追加到上下文）
+
+```rust
+pub struct TurnStarted {
+    pub turn_index: usize,      // 当前 run 中的第几轮
+    pub message_count: usize,   // 上下文消息数
+}
+
+pub struct TurnCompleted {
+    pub turn_index: usize,
+    pub assistant_message: AssistantMessage,
+    pub tool_results: Vec<ToolResult>,
+}
+```
+
+**工具执行进度事件**（长时间运行工具的渐进式反馈）：
+
+- ToolExecutionStarted — 工具开始执行
+- ToolExecutionUpdate — 执行中的部分结果/进度
+- ToolExecutionCompleted — 工具执行完成
+
+```rust
+pub struct ToolExecutionUpdate {
+    pub tool_call_id: String,
+    pub partial_result: ToolOutput,  // 部分结果（如搜索到的前几条）
+    pub progress: Option<f32>,       // 可选进度百分比
+}
+```
+
+**事件层级关系**：
+
+```
+RunStarted
+    ├── TurnStarted (turn 0)
+    │       ├── ProviderTextDelta...
+    │       ├── ProviderToolCall
+    │       │       └── ToolCallStarted
+    │       │               ├── ToolExecutionStarted
+    │       │               ├── ToolExecutionUpdate (多次)
+    │       │               └── ToolExecutionCompleted
+    │       │       └── ToolCallFinished
+    │       └── TurnCompleted
+    ├── TurnStarted (turn 1)...
+    └── RunCompleted
+```
+
+### OutboundPayload 与 AgentEvent 映射
+
+| OutboundPayload（用户可见） | 触发事件                         | 说明           |
+| --------------------------- | -------------------------------- | -------------- |
+| `Status(Thinking)`          | `TurnStarted`                    | 开始组装上下文 |
+| `Status(UsingTools)`        | `ToolCallStarted`                | 开始执行工具   |
+| `Chunk`                     | `ProviderTextDelta`              | 流式文本片段   |
+| `Done`                      | `TurnCompleted` / `RunCompleted` | 完成标记       |
+| `Error`                     | `RunFailed`                      | 错误信息       |
+
+**设计原则**：OutboundPayload 是聚合后的用户可见状态，AgentEvent 是细粒度的内部观测事件。一个 OutboundPayload 可能由多个 AgentEvent 触发。
 
 ### UserVisiblePhase
 

@@ -145,10 +145,11 @@ pub struct AgentBuilder {
     services: Arc<ServiceContainer>,      // IdentitySource 依赖
     extra_tools: Vec<Arc<dyn Tool + Send + Sync>>,
     observer: Option<Arc<dyn AgentObserver>>,
+    subagent_manager: Option<Arc<SubagentManager>>, // 有则注册 spawn_subagent 工具
 }
 ```
 
-AgentBuilder 负责初始化 Provider、ToolRegistry、ContextPipeline（含各 Source 的构造注入）、Observer。
+AgentBuilder 负责初始化 Provider、ToolRegistry、ContextPipeline（含各 Source 的构造注入）、Observer。若传入 `subagent_manager`，自动注册 `SpawnSubagentTool`；构建 SubAgent 用的 Agent 时不传入，防止递归委派。
 
 ---
 
@@ -351,6 +352,8 @@ impl Tool for FileSystemTool {
 ```
 
 对于无法实现 `Tool` trait 的外部工具（如 MCP），`register_with_mode()` 提供覆盖入口，优先级高于 trait 方法。
+
+`spawn_subagent` 工具声明为 `Parallel`——spawn 本身是非阻塞的（立即返回 task_id），SubAgent 在后台独立运行，结果异步回注 MessageBus。
 
 ### 并发控制
 

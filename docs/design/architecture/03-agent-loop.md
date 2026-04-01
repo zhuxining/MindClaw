@@ -142,7 +142,7 @@ pub struct AgentBuilder {
     config: Arc<AppConfig>,
     memory: Arc<MemoryManager>,           // MemoryRecallSource 依赖
     db: Arc<DbState>,                     // RAGKnowledgeSource 依赖
-    services: Arc<ServiceContainer>,      // SystemPromptSource 依赖
+    services: Arc<ServiceContainer>,      // IdentitySource 依赖
     extra_tools: Vec<Arc<dyn Tool + Send + Sync>>,
     observer: Option<Arc<dyn AgentObserver>>,
 }
@@ -188,8 +188,6 @@ pub struct AgentLoop {
 ```
 
 **Observer 共享机制**：Agent 和 AgentLoop 持有**同一个** `Arc<dyn AgentObserver>` 实例（通过 `AgentBuilder` 创建时传入，AgentLoop 从 Agent 中获取）。Agent 发射智能层事件（ContextBuilt, ToolCallStarted, RoundCompleted），AgentLoop 发射编排层事件（RunStarted, RunCompleted），两者通过同一个 Observer 实例分发到订阅者。
-
-```
 
 **AgentLoop 职责**：
 
@@ -251,7 +249,7 @@ steering_queue 入队
 │
 注入上下文，开始下一轮
 
-````
+```
 
 #### Steering 消费策略
 
@@ -380,21 +378,78 @@ let results = join_all(tools.map(|t| t.execute())).await;
 Session
 ├── id, sender, mode
 ├── turns: Vec<TurnRecord>
+├── summary: Option<String>         // 早期轮次的 LLM 摘要
+├── summary_covers_turns: usize     // 摘要覆盖到的 turn 索引（不含）
 └── created/updated
 
 TurnRecord
 ├── user_message
 ├── assistant_message (Option)
 ├── tool_trace: Vec<ToolTrace>
+│       ├── tool_name, inputs, status, token_count  // 元数据，始终保留
+│       └── raw_output: Option<String>              // 工具原始输出，可被微压缩清除
 └── run_status
 ```
 
 **核心方法**：
 
 - `get_or_create()` — 获取或创建会话
-- `append_turn()` — 成功完成后追加 turn
-- `prune()` — 近 N 轮完整 + 早期摘要压缩
-- `compressed_history()` — 返回压缩后的 provider messages
+- `append_turn()` — 追加 turn，并触发 Level 1 微压缩检查
+- `prune()` — 近 N 轮完整 + 早期摘要压缩（Level 2 摘要生成）
+- `compressed_history()` — 返回压缩后的 provider messages，含 Level 3 兜底
+
+### 三级压缩策略
+
+#### Level 1 — ToolTrace 微压缩（无 LLM，eagerly 执行）
+
+触发：每次 `append_turn()` 完成后，自动对 `turns[0..len-3]` 执行。
+
+操作：清除 `tool_trace[*].raw_output`（工具原始输出），保留元数据（tool_name、inputs、status、token_count）。
+
+理由：工具输出（文件读取、搜索结果）体积大但时效短；assistant_message 已综合了重要内容；保留元数据可用于调试追溯。类比 Claude Code 的 microCompact。
+
+#### Level 2 — Session 摘要（LLM 异步，SubAgent 执行）
+
+触发：`append_turn()` 后，若 `session.turns.len() > SUMMARIZE_THRESHOLD`（默认 10），异步派发 `session-summarize` SubAgent。
+
+操作：SubAgent 读取 `turns[0..len-5]`（早期轮次），生成结构化摘要后写回 `session.summary` 和 `session.summary_covers_turns`。
+
+摘要结构：
+```
+- 已完成的主要任务
+- 关键技术决策与代码改动
+- 重要上下文（文件路径、变量名、接口约定）
+- 未解决的问题与待办事项
+```
+
+特性：
+- 不阻塞当前 run（摘要有滞后一轮的容忍）
+- 下次 `compressed_history()` 调用时，`summary_covers_turns` 以内的轮次被摘要替代
+- 类比 Claude Code 的 compact.ts（全量结构化压缩）
+
+手动触发：`/compact` SessionCommand → 同步执行 Level 2（阻塞，返回完成状态给用户）
+
+#### Level 3 — 紧急预算削减（同步兜底，在 compressed_history() 内）
+
+触发：`compressed_history()` 估算 token 数超过 `ConversationHistorySource` 预算（~50K）。
+
+操作（递进）：
+```
+Step 1: recent_turns 窗口收窄 5 → 3 → 1
+Step 2: 仅保留 summary（若存在）
+Step 3: 单轮内截断过长的 assistant_message
+```
+
+类比 Claude Code 的 autoCompact（93% 阈值触发）。
+
+### 压缩触发汇总
+
+| 触发条件 | 级别 | 同步/异步 | 类比 |
+|---|---|---|---|
+| 每次 `append_turn()` | Level 1 微压缩 | 同步 | microCompact |
+| `turns.len() > 10` | Level 2 摘要 | 异步 SubAgent | compact.ts |
+| `/compact` 命令 | Level 2 摘要 | 同步（阻塞） | 手动 /compact |
+| `compressed_history()` token 超预算 | Level 3 削减 | 同步兜底 | autoCompact |
 
 ---
 
@@ -473,13 +528,13 @@ RunStarted
 
 ### OutboundMessage 与 AgentEvent 映射
 
-| OutboundMessage（用户可见） | 触发事件                           | 说明           |
-| --------------------------- | ---------------------------------- | -------------- |
-| `Status(Thinking)`          | `RoundStarted`                     | 开始组装上下文 |
-| `Status(UsingTools)`        | `ToolCallStarted`                  | 开始执行工具   |
-| `Chunk`                     | `ProviderTextDelta`                | 流式文本片段   |
-| `Done`                      | `RoundCompleted` / `RunCompleted`  | 完成标记       |
-| `Error`                     | `RunFailed`                        | 错误信息       |
+| OutboundMessage（用户可见） | 触发事件                          | 说明           |
+| --------------------------- | --------------------------------- | -------------- |
+| `Status(Thinking)`          | `RoundStarted`                    | 开始组装上下文 |
+| `Status(UsingTools)`        | `ToolCallStarted`                 | 开始执行工具   |
+| `Chunk`                     | `ProviderTextDelta`               | 流式文本片段   |
+| `Done`                      | `RoundCompleted` / `RunCompleted` | 完成标记       |
+| `Error`                     | `RunFailed`                       | 错误信息       |
 
 **设计原则**：OutboundMessage 是聚合后的用户可见状态，AgentEvent 是细粒度的内部观测事件。一个 OutboundMessage 可能由多个 AgentEvent 触发。
 

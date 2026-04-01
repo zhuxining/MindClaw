@@ -415,6 +415,7 @@ TurnRecord
 操作：SubAgent 读取 `turns[0..len-5]`（早期轮次），生成结构化摘要后写回 `session.summary` 和 `session.summary_covers_turns`。
 
 摘要结构：
+
 ```
 - 已完成的主要任务
 - 关键技术决策与代码改动
@@ -423,6 +424,7 @@ TurnRecord
 ```
 
 特性：
+
 - 不阻塞当前 run（摘要有滞后一轮的容忍）
 - 下次 `compressed_history()` 调用时，`summary_covers_turns` 以内的轮次被摘要替代
 - 类比 Claude Code 的 compact.ts（全量结构化压缩）
@@ -434,6 +436,7 @@ TurnRecord
 触发：`compressed_history()` 估算 token 数超过 `ConversationHistorySource` 预算（~50K）。
 
 操作（递进）：
+
 ```
 Step 1: recent_turns 窗口收窄 5 → 3 → 1
 Step 2: 仅保留 summary（若存在）
@@ -444,12 +447,12 @@ Step 3: 单轮内截断过长的 assistant_message
 
 ### 压缩触发汇总
 
-| 触发条件 | 级别 | 同步/异步 | 类比 |
-|---|---|---|---|
-| 每次 `append_turn()` | Level 1 微压缩 | 同步 | microCompact |
-| `turns.len() > 10` | Level 2 摘要 | 异步 SubAgent | compact.ts |
-| `/compact` 命令 | Level 2 摘要 | 同步（阻塞） | 手动 /compact |
-| `compressed_history()` token 超预算 | Level 3 削减 | 同步兜底 | autoCompact |
+| 触发条件                            | 级别           | 同步/异步     | 类比          |
+| ----------------------------------- | -------------- | ------------- | ------------- |
+| 每次 `append_turn()`                | Level 1 微压缩 | 同步          | microCompact  |
+| `turns.len() > 10`                  | Level 2 摘要   | 异步 SubAgent | compact.ts    |
+| `/compact` 命令                     | Level 2 摘要   | 同步（阻塞）  | 手动 /compact |
+| `compressed_history()` token 超预算 | Level 3 削减   | 同步兜底      | autoCompact   |
 
 ---
 

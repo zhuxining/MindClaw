@@ -23,7 +23,7 @@ src-tauri/
       feishu.rs                 # 飞书 Bot Channel（Phase 2）
     bus/
       mod.rs                    # MessageBus：双向异步消息队列（AgentLoop 内部使用）
-      events.rs                 # InboundMessage, OutboundPayload 显式事件定义
+      events.rs                 # InboundMessage, OutboundMessage 显式事件定义
     commands/                    # Tier 1: Web Commands（Tauri IPC，前端 invoke() 调用）
       mod.rs                    # 导出所有命令模块
       conversation.rs           # 对话：→ AgentLoop (入队) + SessionManager (查历史)
@@ -51,11 +51,11 @@ src-tauri/
       keychain.rs               # OS Keychain 存取（keyring crate）
     agent/                       # Agent 核心（大脑 + 驱动器分离）
       mod.rs                    # 导出 Agent, AgentLoop, AgentBuilder
-      agent.rs                  # Agent（大脑）+ AgentBuilder：构建 Agent（只需 AppConfig，无基础设施依赖）
+      agent.rs                  # Agent（大脑）+ AgentBuilder：构建 Agent（需 Provider/Memory/Db/Services）
       agent_loop.rs             # AgentLoop（驱动器）：事件编排 + Session + Commands
-      commands/                 # Agent 控制指令（对话内 /xxx 生命周期管控）
-        mod.rs                  # AgentCommandRegistry：注册/解析/分发
-        traits.rs               # AgentCommand trait + AgentCommandContext + AgentAction
+      commands/                 # Session 控制指令（对话内 /xxx 生命周期管控）
+        mod.rs                  # SessionCommandRegistry：注册/解析/分发
+        traits.rs               # SessionCommand trait + SessionCommandContext + SessionAction
         new.rs                  # /new — 创建新会话
         stop.rs                 # /stop — 停止当前运行
         restart.rs              # /restart — 重启 Agent 服务

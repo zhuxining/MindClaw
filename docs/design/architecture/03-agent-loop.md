@@ -57,47 +57,50 @@ Channel ◄── publish_outbound ◄──┘              ▼
 | 方向     | 类型                      | 说明                                   |
 | -------- | ------------------------- | -------------------------------------- |
 | Inbound  | `InboundMessage`          | 用户消息，含 session_id, content, mode |
-| Outbound | `OutboundPayload::Chunk`  | 文本片段                               |
-|          | `OutboundPayload::Done`   | 完成标记                               |
-|          | `OutboundPayload::Error`  | 错误信息                               |
-|          | `OutboundPayload::Status` | 用户可见状态                           |
+| Outbound | `OutboundMessage::Chunk`  | 文本片段                               |
+|          | `OutboundMessage::Done`   | 完成标记                               |
+|          | `OutboundMessage::Error`  | 错误信息                               |
+|          | `OutboundMessage::Status` | 用户可见状态                           |
 
 ---
 
 ## 消息流水线
 
 ```
-UI invoke() ──► publish_inbound ──► AgentLoop.consume ──► Session.enqueue
+UI invoke() ──► publish_inbound ──► AgentLoop ──► SessionRuntime.enqueue
                                                             │
                                                             ▼
-                                                    run_once(message)
+                                                    dispatch(message)
                                                             │
     ┌───────────────────────────────────────────────────────┼──────────┐
-    │                                                       ▼          │
-    │  Session.get_or_create ──► AgentCommand.intercept ──► Context.build
-    │                                                           │      │
-    │  Provider.chat_stream ◄───────────────────────────────────┘      │
-    │       │                                                          │
-    │       ├── TextDelta ──► Outbound.Chunk                          │
-    │       │                                                          │
-    │       └── ToolCall ──► [工具执行流水线]                           │
-    │                          │                                       │
-    │                          ├── 准备阶段 ──► before_tool_call        │
-    │                          ├── 执行阶段 ──► execute (Seq/Parallel)  │
-    │                          └── 终结阶段 ──► after_tool_call         │
+    │ [AgentLoop]                                           ▼          │
+    │  session_mgr.get_or_create ──► SessionCommand.intercept          │
+    │                                          │                       │
+    │                          session_mgr.compressed_history()        │
+    │                                          │                       │
+    │                              ContextInput { inbound, history }   │
     │                                          │                       │
     │                                          ▼                       │
-    │                                   ToolResult ──► next round      │
-    │                                                                  │
-    │  Session.append_turn ──► Outbound.Done ──► Dispatcher.send      │
+    │                         ┌── agent.run(input, cancel) ──────────┐ │
+    │                         │ [Agent]                               │ │
+    │                         │  Context.build                        │ │
+    │                         │  Provider.chat_stream                 │ │
+    │                         │    ├── TextDelta ──► observer         │ │
+    │                         │    └── ToolCall  ──► tools.execute    │ │
+    │                         │         └── ToolResult → next round   │ │
+    │                         │  [repeat up to 8 rounds]              │ │
+    │                         └───────────────────────────────────────┘ │
+    │                                          │                       │
+    │ [AgentLoop]  session_mgr.append_turn ◄───┘                       │
+    │              OutboundMessage::Done ──► Dispatcher.send           │
     └──────────────────────────────────────────────────────────────────┘
 ```
 
 **关键边界**：
 
 - `send_message` 入队后立即返回 `{ session_id, request_id }`
-- AgentLoop 保证同一 session 串行化，不允许多个 run 同时执行
-- 工具回合是单次 run 内的有限 loop（最多 8 轮）
+- AgentLoop 保证同一 session 串行化，不允许多个 dispatch 同时执行
+- Agent 内部工具循环上限 8 rounds，AgentLoop 不感知内部迭代
 - `Done/Error/Status` 与 `Chunk` 分离，避免正文承载协议
 
 ---
@@ -113,26 +116,39 @@ pub struct Agent {
     pub(crate) tools: Arc<ToolRegistry>,                 // 工具执行
     pub(crate) observer: Arc<dyn AgentObserver>,         // 观测（共享）
 }
+
+impl Agent {
+    /// Context 组装 → Provider 流式调用 → Tool 执行的完整循环，最多 8 rounds。
+    /// AgentLoop 只调用此方法，不感知内部迭代细节。
+    pub async fn run(
+        &self,
+        input: ContextInput,           // inbound + history（由 AgentLoop 预提取）
+        cancel: CancellationToken,
+    ) -> Result<AgentRunOutput, AppError>;
+}
 ```
 
 **设计原则**：
 
 - **无状态**：不持有 history、session 等可变状态，由外部（SessionManager）管理
-- **无基础设施依赖**：不依赖 MessageBus、db 等基础设施
+- **封装内部循环**：Context → Provider → Tool 的迭代由 `run()` 内部处理，对 AgentLoop 不透明
 - **可共享**：多个 AgentLoop 或 SubAgent 可共享同一个 `Arc<Agent>` 实例
-- **由 AgentBuilder 构建**：只需 `AppConfig`，不需要 bus/session_mgr
+- **由 AgentBuilder 构建**：不需要 bus/session_mgr，但需要 ContextSource 所依赖的基础设施
 
 ### AgentBuilder
 
 ```rust
 pub struct AgentBuilder {
     config: Arc<AppConfig>,
+    memory: Arc<MemoryManager>,           // MemoryRecallSource 依赖
+    db: Arc<DbState>,                     // RAGKnowledgeSource 依赖
+    services: Arc<ServiceContainer>,      // SystemPromptSource 依赖
     extra_tools: Vec<Arc<dyn Tool + Send + Sync>>,
     observer: Option<Arc<dyn AgentObserver>>,
 }
 ```
 
-AgentBuilder 只关心大脑组件的初始化：Provider、ToolRegistry、ContextPipeline、Observer。
+AgentBuilder 负责初始化 Provider、ToolRegistry、ContextPipeline（含各 Source 的构造注入）、Observer。
 
 ---
 
@@ -148,12 +164,12 @@ MessageBus
     ▼
 AgentLoop
     ├── Commands (拦截 /new, /stop 等)
-    ├── Session router ──► SessionSlot (queue + active_run)
-    ├── run_once()
+    ├── Session router ──► SessionRuntime (queue + active_run)
+    ├── dispatch()
     │       ├── SessionManager (get/create)
-    │       ├── Agent.context_pipeline (build)
-    │       ├── Agent.provider (chat_stream)
-    │       ├── Agent.tools (execute)
+    │       ├── SessionCommand.intercept()
+    │       ├── session_mgr.compressed_history() ──► ContextInput
+    │       ├── agent.run(input, cancel)          ← 委托，不感知内部
     │       └── SessionManager (append_turn)
     └── Observer (共享，发射 loop 层事件)
 ```
@@ -162,46 +178,48 @@ AgentLoop
 
 ```rust
 pub struct AgentLoop {
-    agent: Agent,                                          // 大脑
-    bus: Arc<MessageBus>,                                  // 消息流
-    session_mgr: Arc<SessionManager>,                      // 会话编排
-    commands: Arc<AgentCommandRegistry>,                   // 命令拦截器
-    observer: Arc<dyn AgentObserver>,                      // 观测（共享同一个 Arc）
-    sessions: DashMap<String, Mutex<SessionSlot>>,         // 运行时状态
+    agent: Arc<Agent>,                                        // 大脑（可共享）
+    bus: Arc<MessageBus>,                                     // 消息流
+    session_mgr: Arc<SessionManager>,                         // 会话编排
+    commands: Arc<SessionCommandRegistry>,                    // 命令拦截器
+    observer: Arc<dyn AgentObserver>,                         // 观测（共享同一个 Arc）
+    sessions: DashMap<String, Mutex<SessionRuntime>>,         // 每 session 运行时状态
 }
 ```
 
-**Observer 共享机制**：Agent 和 AgentLoop 持有**同一个** `Arc<dyn AgentObserver>` 实例（通过 `AgentBuilder` 创建时传入，AgentLoop 从 Agent 中获取）。Agent 发射智能层事件（ContextBuilt, ToolCallStarted），AgentLoop 发射编排层事件（RunStarted, TurnCompleted），两者通过同一个 Observer 实例分发到订阅者。
+**Observer 共享机制**：Agent 和 AgentLoop 持有**同一个** `Arc<dyn AgentObserver>` 实例（通过 `AgentBuilder` 创建时传入，AgentLoop 从 Agent 中获取）。Agent 发射智能层事件（ContextBuilt, ToolCallStarted, RoundCompleted），AgentLoop 发射编排层事件（RunStarted, RunCompleted），两者通过同一个 Observer 实例分发到订阅者。
 
 ```
 
 **AgentLoop 职责**：
 
 1. 消费 `InboundMessage` 并按 session 串行排队
-2. 拦截 Agent Commands（`/new`, `/stop`, `/restart`, `/status`）
-3. 为每条消息创建单次 `run_once()` 执行
-4. 委托 Agent 完成 Context → Provider → Tool 循环
-5. 映射运行态为 `OutboundPayload` 和观测事件
+2. 拦截 Session Commands（`/new`, `/stop`, `/restart`, `/status`）
+3. 预提取会话历史，组装 `ContextInput` 传给 Agent
+4. 调用 `agent.run(input, cancel)`，不感知内部 round 迭代
+5. 将 run 结果持久化并映射为 `OutboundMessage`
 6. 管理取消令牌与活跃 run 生命周期
 7. run 完成后自旋消费同 session 的下一条消息
 
 ### Agent vs AgentLoop 职责划分
 
-| 关注点     | Agent（大脑）                              | AgentLoop（驱动器）                      |
-| ---------- | ------------------------------------------ | ---------------------------------------- |
-| 上下文组装 | ContextPipeline                            | —                                        |
-| LLM 调用   | Provider                                   | —                                        |
-| 工具执行   | ToolRegistry                               | —                                        |
-| 消息流     | —                                          | MessageBus                               |
-| 会话管理   | —                                          | SessionManager                           |
-| 命令拦截   | —                                          | AgentCommandRegistry                     |
-| 串行化     | —                                          | SessionSlot / DashMap                    |
-| 取消控制   | —                                          | CancellationToken                        |
-| 观测       | brain 事件（ContextBuilt, ToolStarted...） | loop 事件（RunStarted, RunCancelled...） |
+| 关注点     | Agent（大脑）                                  | AgentLoop（驱动器）                      |
+| ---------- | ---------------------------------------------- | ---------------------------------------- |
+| 上下文组装 | ContextPipeline                                | —                                        |
+| LLM 调用   | Provider                                       | —                                        |
+| 工具执行   | ToolRegistry                                   | —                                        |
+| 内部循环   | Context→Provider→Tool（round 迭代，最多 8 次） | —                                        |
+| 历史提取   | —                                              | session_mgr.compressed_history()         |
+| 消息流     | —                                              | MessageBus                               |
+| 会话管理   | —                                              | SessionManager                           |
+| 命令拦截   | —                                              | SessionCommandRegistry                   |
+| 串行化     | —                                              | SessionRuntime / DashMap                 |
+| 取消控制   | —                                              | CancellationToken                        |
+| 观测       | brain 事件（ContextBuilt, ToolCallStarted...） | loop 事件（RunStarted, RunCancelled...） |
 
 ### Session 串行化
 
-每个 session 一个 `SessionSlot`：
+每个 session 一个 `SessionRuntime`：
 
 - **follow_up_queue**: 待处理的用户消息队列（Follow-up）
 - **steering_queue**: 运行中注入的补充指令（Steering）
@@ -221,7 +239,7 @@ pub struct AgentLoop {
 
 ```
 
-用户消息 A ──► run_once(A) 执行中 ──► 用户消息 B（Steering）
+用户消息 A ──► dispatch(A) 执行中 ──► 用户消息 B（Steering）
 │
 ▼
 steering_queue 入队
@@ -249,31 +267,38 @@ steering_queue 入队
 [*] ──► ResolvingSession (AgentLoop: session_mgr)
           │
           ▼
-    CheckingAgentCommand (AgentLoop: commands) ──► [Completed]
+    CheckingSessionCommand (AgentLoop: commands) ──► [Completed]
           │
           ▼
-    BuildingContext (Agent: context_pipeline) ──► StreamingAssistant (Agent: provider)
-                              │
-                    ┌─────────┴─────────┐
-                    ▼                   ▼
-              TextDelta            ToolCall
-                    │                   │
-                    │                   ▼
-                    │             ExecutingTools (Agent: tools)
-                    │                   │
-                    └────────◄─── tool results (next round)
-                              │
-                    [PersistingTurn] (AgentLoop: session_mgr) ──► [Completed]
+    PreparingContext (AgentLoop: compressed_history → ContextInput)
+          │
+          ▼
+    ┌─── agent.run(input, cancel) ──────────────────────────────────┐
+    │                        [Agent 内部]                            │
+    │  BuildingContext ──► StreamingAssistant                        │
+    │                            │                                   │
+    │                  ┌─────────┴─────────┐                        │
+    │                  ▼                   ▼                         │
+    │            TextDelta            ToolCall                       │
+    │                  │                   │                         │
+    │                  │             ExecutingTools                  │
+    │                  │                   │                         │
+    │                  └─────◄─── tool results (next round)          │
+    │                           [repeat, max 8 rounds]               │
+    └────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+    [PersistingTurn] (AgentLoop: session_mgr) ──► [Completed]
 ```
 
-状态机中，Session 解析/持久化和 Command 拦截由 AgentLoop 处理，Context/Provider/Tool 循环委托给 Agent。
+**AgentLoop** 只感知 `agent.run()` 的输入/输出边界，不感知内部 round 迭代。
 
 **运行规则**：
 
-- 工具回合上限：8 轮 LLM 调用
+- 工具 round 上限：8 次 LLM 调用
 - 取消：`/stop` 触发 CancellationToken，仅影响当前 session
-- 超时：单轮工具执行 30s 超时
-- Steering vs Cancel：软打断保留已完成工具轮次，硬中止丢弃
+- 超时：单次工具执行 30s 超时
+- Steering vs Cancel：软打断保留已完成工具 round，硬中止丢弃
 
 ---
 
@@ -315,27 +340,19 @@ ToolCall
 
 > 工具执行的业务拦截（验证、审计、结果覆盖）统一通过 Agent Hooks 的 `PreToolUse` / `PostToolUse` 实现，详见 [03.03-tools.md](./03.03-tools.md)。
 
-### ToolExecutionConfig — 执行语义配置
+### 执行模式声明
 
-`ToolExecutionConfig` 仅声明执行模式（不含业务 Hook）：
-
-```rust
-pub struct ToolExecutionConfig {
-    pub mode: ToolExecutionMode,  // Sequential / Parallel
-}
-```
-
-**配置方式**：工具通过实现 `Tool::execution_config()` 声明，无需外部指定：
+工具通过实现 `Tool::execution_mode()` 声明自身的执行语义，默认 `Parallel`：
 
 ```rust
 impl Tool for FileSystemTool {
-    fn execution_config(&self) -> ToolExecutionConfig {
-        ToolExecutionConfig { mode: ToolExecutionMode::Sequential }
+    fn execution_mode(&self) -> ToolExecutionMode {
+        ToolExecutionMode::Sequential  // 写操作必须顺序
     }
 }
 ```
 
-对于无法实现 `Tool` trait 的外部工具（如 MCP），`register_with_config()` 提供覆盖入口，优先级高于 trait 方法。
+对于无法实现 `Tool` trait 的外部工具（如 MCP），`register_with_mode()` 提供覆盖入口，优先级高于 trait 方法。
 
 ### 并发控制
 
@@ -389,7 +406,7 @@ TurnRecord
 | -------------------- | ----------------- | --------------------------------------------- |
 | Provider → Agent     | `ProviderEvent`   | TextDelta, ToolCall, Finished                 |
 | Agent/AgentLoop 内部 | `AgentEvent`      | 日志/审计/指标（RunStarted, ToolFinished...） |
-| AgentLoop → 用户     | `OutboundPayload` | UI/Channel 可见事件                           |
+| AgentLoop → 用户     | `OutboundMessage` | UI/Channel 可见事件                           |
 
 ### AgentEvent 类型
 
@@ -402,22 +419,22 @@ Observer 是横切关注点，Agent 和 AgentLoop 共享同一个 `Arc<dyn Agent
 
 **Agent 层事件**（智能执行）：
 
-- ContextBuilt, ProviderTextDelta, ProviderToolCall
+- ContextBuilt, ProviderTextDelta, LlmToolCallRequested
 - ToolCallStarted, ToolCallFinished — 一次 LLM tool_call 从接收到结果回传的完整生命周期
 
-**Turn 级别事件**（单次助手响应 + 工具执行的完整回合）：
+**Round 级别事件**（一次 `chat_stream` 调用的完整生命周期）：
 
-- TurnStarted — 开始一次新的助手回合（发送上下文到 LLM）
-- TurnCompleted — 回合完成（所有工具执行完毕，结果已追加到上下文）
+- RoundStarted — 开始一次新的 LLM 调用（发送上下文到 Provider）
+- RoundCompleted — 本次调用完成（所有工具执行完毕，结果已追加到上下文）
 
 ```rust
-pub struct TurnStarted {
-    pub turn_index: usize,      // 当前 run 中的第几轮
+pub struct RoundStarted {
+    pub round_index: usize,     // 当前 run 中的第几个 round（0-based）
     pub message_count: usize,   // 上下文消息数
 }
 
-pub struct TurnCompleted {
-    pub turn_index: usize,
+pub struct RoundCompleted {
+    pub round_index: usize,
     pub assistant_message: AssistantMessage,
     pub tool_results: Vec<ToolResult>,
 }
@@ -441,30 +458,30 @@ pub struct ToolRunProgress {
 
 ```
 RunStarted
-    ├── TurnStarted (turn 0)
+    ├── RoundStarted (round 0)
     │       ├── ProviderTextDelta...
-    │       ├── ProviderToolCall
-    │       │       └── ToolCallStarted          ← LLM tool_call 生命周期
+    │       ├── LlmToolCallRequested
+    │       │       └── ToolCallStarted          ← tool_call 处理生命周期
     │       │               ├── ToolRunStarted   ← 实际执行开始
     │       │               ├── ToolRunProgress (多次)
     │       │               └── ToolRunCompleted
     │       │       └── ToolCallFinished
-    │       └── TurnCompleted
-    ├── TurnStarted (turn 1)...
+    │       └── RoundCompleted
+    ├── RoundStarted (round 1)...
     └── RunCompleted
 ```
 
-### OutboundPayload 与 AgentEvent 映射
+### OutboundMessage 与 AgentEvent 映射
 
-| OutboundPayload（用户可见） | 触发事件                         | 说明           |
-| --------------------------- | -------------------------------- | -------------- |
-| `Status(Thinking)`          | `TurnStarted`                    | 开始组装上下文 |
-| `Status(UsingTools)`        | `ToolCallStarted`                | 开始执行工具   |
-| `Chunk`                     | `ProviderTextDelta`              | 流式文本片段   |
-| `Done`                      | `TurnCompleted` / `RunCompleted` | 完成标记       |
-| `Error`                     | `RunFailed`                      | 错误信息       |
+| OutboundMessage（用户可见） | 触发事件                           | 说明           |
+| --------------------------- | ---------------------------------- | -------------- |
+| `Status(Thinking)`          | `RoundStarted`                     | 开始组装上下文 |
+| `Status(UsingTools)`        | `ToolCallStarted`                  | 开始执行工具   |
+| `Chunk`                     | `ProviderTextDelta`                | 流式文本片段   |
+| `Done`                      | `RoundCompleted` / `RunCompleted`  | 完成标记       |
+| `Error`                     | `RunFailed`                        | 错误信息       |
 
-**设计原则**：OutboundPayload 是聚合后的用户可见状态，AgentEvent 是细粒度的内部观测事件。一个 OutboundPayload 可能由多个 AgentEvent 触发。
+**设计原则**：OutboundMessage 是聚合后的用户可见状态，AgentEvent 是细粒度的内部观测事件。一个 OutboundMessage 可能由多个 AgentEvent 触发。
 
 ### UserVisiblePhase
 

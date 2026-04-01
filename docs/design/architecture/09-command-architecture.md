@@ -23,7 +23,7 @@ React Frontend ── invoke() ──► Web Commands ──► Services ──�
 | 需要 Tauri | 是                 | 是（运行在 AgentLoop 内） | 否                    |
 | 需要 LLM   | 否                 | 否（纯控制）              | 仅 agent 子命令       |
 
-**Agent Commands 说明**：在 `AgentLoop.run_once()` 中拦截，位于 Session 加载之后、Context 组装之前。拦截后直接返回确定性结果，不调用 Provider。
+**Session Commands 说明**：在 `AgentLoop.dispatch()` 中拦截，位于 Session 加载之后、`agent.run()` 调用之前。拦截后直接返回确定性结果，不调用 Provider。
 
 ---
 
@@ -78,9 +78,9 @@ pub async fn list_tasks(
 
 ---
 
-## Agent Commands — 控制指令
+## Session Commands — 控制指令
 
-对话中输入 `/xxx` 控制 Agent 行为，不触发 LLM。
+对话中输入 `/xxx` 控制会话行为，不触发 LLM。
 
 | 指令       | 说明     | 行为                             |
 | ---------- | -------- | -------------------------------- |
@@ -91,10 +91,10 @@ pub async fn list_tasks(
 
 ### 核心设计
 
-- **拦截点**：`AgentLoop.run_once()`，Session 加载后、Context 组装前
-- **注册表**：`AgentCommandRegistry`，支持自定义指令
-- **上下文**：`AgentCommandContext` 提供 session、cancel_token 等
-- **返回**：`AgentCommandResult { response, action }`，action 指示后续行为
+- **拦截点**：`AgentLoop.dispatch()`，Session 加载后、`agent.run()` 调用前
+- **注册表**：`SessionCommandRegistry`，支持自定义指令
+- **上下文**：`SessionCommandContext` 提供 session、cancel_token 等
+- **返回**：`SessionCommandResult { response, action }`，action 指示后续行为
 
 ---
 

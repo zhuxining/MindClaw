@@ -18,15 +18,15 @@
 
 ### 对话流（Conversation Flow）
 
-> 完整时序图和 `run_once()` 实现见 [03-agent-loop.md](./03-agent-loop.md) §3.3-3.4。
+> 完整时序图和 `dispatch()` / `agent.run()` 实现见 [03-agent-loop.md](./03-agent-loop.md)。
 
 对话流关键规则：
 
 - `send_message` 只入队（`publish_inbound`），不等待最终模型文本，立即返回 `{ session_id, request_id }`。
-- `AgentLoop` 按 session 串行处理消息；同一 session 的后续消息进入 `SessionSlot` 队列。
-- Provider 通过事件流向 AgentLoop 发送 `TextDelta` / `ToolCall` / `Finished`。
-- `Chunk`、`Done`、`Error`、`Status(Thinking/UsingTools/Streaming)` 是统一的用户可见出站事件。
-- 工具调用发生在单次 run 内部的有限回合 loop 中，最多 8 轮 LLM 调用。
+- `AgentLoop` 按 session 串行处理消息；同一 session 的后续消息进入 `SessionRuntime` 队列。
+- Provider 通过事件流向 Agent 发送 `TextDelta` / `LlmToolCallRequested` / `Finished`。
+- `Chunk`、`Done`、`Error`、`Status(Thinking/UsingTools/Streaming)` 是统一的用户可见出站事件（`OutboundMessage`）。
+- 工具调用发生在单次 run 内部的有限 round loop 中，最多 8 rounds。
 
 ### 日记流（Daily Flow）
 

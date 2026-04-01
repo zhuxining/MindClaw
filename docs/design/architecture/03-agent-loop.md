@@ -237,14 +237,7 @@ steering_queue 入队
 
 #### Steering 消费策略
 
-```rust
-pub enum SteeringMode {
-    OneAtATime,  // 默认：每轮只取一条，防止模型过载
-    All,         // 全部取出（未来扩展）
-}
-````
-
-**默认 `OneAtATime`**：
+每轮只取一条 steering 指令（`OneAtATime`）：
 
 - 防止用户连续发送多条 steering 指令导致上下文爆炸
 - 每条 steering 作为独立消息处理，LLM 有机会响应
@@ -295,7 +288,7 @@ pub enum SteeringMode {
 | **Sequential**       | 逐个进行 | 逐个进行                   | 具有共享副作用的工具（如文件写入） |
 | **Parallel**（默认） | 顺序预检 | 并发执行（Semaphore 限制） | 独立的只读操作（如多个 read_file） |
 
-**关键设计**：并行模式下，准备阶段仍然是顺序运行的——`before_tool_call` 钩子可能阻止某些调用，必须在分派前确定哪些调用被阻止。所有准备完成后，未被阻止的调用并发启动。
+**关键设计**：并行模式下，准备阶段仍然是顺序运行的——`PreToolUse` Hook 可能阻止某些调用，必须在分派前确定哪些调用被阻止。所有准备完成后，未被阻止的调用并发启动。
 
 ### 三阶段流水线
 
@@ -306,60 +299,43 @@ ToolCall
 [阶段 1: 准备] prepare_tool_call()
     ├── 工具查找（ToolRegistry）
     ├── 参数验证（JSON Schema）
-    └── before_tool_call 钩子（可阻止执行）
+    └── PreToolUse Hook（Agent Hooks，可阻止执行）
     │
     ▼（未被阻止）
 [阶段 2: 执行] execute_tool()
     ├── 并发执行（Parallel 模式）
     ├── 超时控制（30s）
-    └── 进度回调（on_update）
+    └── 进度事件（ToolRunProgress）
     │
     ▼
 [阶段 3: 终结] finalize_tool_call()
-    ├── after_tool_call 钩子（可覆盖结果）
+    ├── PostToolUse Hook（Agent Hooks，可覆盖结果）
     └── 构建 ToolResultMessage
 ```
 
-### 工具钩子
+> 工具执行的业务拦截（验证、审计、结果覆盖）统一通过 Agent Hooks 的 `PreToolUse` / `PostToolUse` 实现，详见 [03.03-tools.md](./03.03-tools.md)。
+
+### ToolExecutionConfig — 执行语义配置
+
+`ToolExecutionConfig` 仅声明执行模式（不含业务 Hook）：
 
 ```rust
 pub struct ToolExecutionConfig {
-    pub mode: ToolExecutionMode,                    // Sequential / Parallel
-    pub before_tool_call: Option<BeforeHook>,       // 执行前拦截
-    pub after_tool_call: Option<AfterHook>,         // 执行后处理
+    pub mode: ToolExecutionMode,  // Sequential / Parallel
 }
-
-pub type BeforeHook = fn(&ToolCall, &Context) -> BeforeResult;
-pub type AfterHook = fn(&ToolCall, &ToolResult, &Context) -> ToolResult;
 ```
 
-**配置位置**：在 `ToolRegistry::register()` 时指定，或工具实现 `Tool::execution_config()` 方法返回。
+**配置方式**：工具通过实现 `Tool::execution_config()` 声明，无需外部指定：
 
 ```rust
-// 注册时配置
-registry.register_with_config(
-    filesystem_tool,
-    ToolExecutionConfig {
-        mode: ToolExecutionMode::Sequential,  // 文件写入必须顺序
-        before_tool_call: Some(check_write_permission),
-        after_tool_call: None,
-    }
-);
-
-// 或工具自身声明
 impl Tool for FileSystemTool {
     fn execution_config(&self) -> ToolExecutionConfig {
-        ToolExecutionConfig {
-            mode: ToolExecutionMode::Sequential,
-            ..Default::default()
-        }
+        ToolExecutionConfig { mode: ToolExecutionMode::Sequential }
     }
 }
 ```
 
-**before_tool_call**：返回 `Block { reason }` 可阻止执行，循环会发出错误工具结果。
-
-**after_tool_call**：接收完整上下文（助手消息、工具调用、参数、结果、错误状态），可选择性覆盖 content/details/isError。
+对于无法实现 `Tool` trait 的外部工具（如 MCP），`register_with_config()` 提供覆盖入口，优先级高于 trait 方法。
 
 ### 并发控制
 
@@ -375,7 +351,6 @@ let results = join_all(tools.map(|t| t.execute())).await;
 **设计理由**：
 
 - 防止资源爆炸（同时打开过多文件/网络连接）
-- 保证 `before_tool_call` 看到的上下文状态一致
 - 文件写入类工具应声明为 `Sequential`，避免并行竞态
 
 ---
@@ -428,7 +403,7 @@ Observer 是横切关注点，Agent 和 AgentLoop 共享同一个 `Arc<dyn Agent
 **Agent 层事件**（智能执行）：
 
 - ContextBuilt, ProviderTextDelta, ProviderToolCall
-- ToolCallStarted, ToolCallFinished — 一次 tool_call 的完整生命周期（含所有执行阶段）
+- ToolCallStarted, ToolCallFinished — 一次 LLM tool_call 从接收到结果回传的完整生命周期
 
 **Turn 级别事件**（单次助手响应 + 工具执行的完整回合）：
 
@@ -448,14 +423,14 @@ pub struct TurnCompleted {
 }
 ```
 
-**工具执行进度事件**（长时间运行工具的渐进式反馈）：
+**工具运行进度事件**（`ToolCallStarted` 内部，长时间运行工具的渐进式反馈）：
 
-- ToolExecutionStarted — 工具开始执行
-- ToolExecutionUpdate — 执行中的部分结果/进度
-- ToolExecutionCompleted — 工具执行完成
+- ToolRunStarted — 工具开始实际执行
+- ToolRunProgress — 执行中的部分结果/进度
+- ToolRunCompleted — 工具执行完成
 
 ```rust
-pub struct ToolExecutionUpdate {
+pub struct ToolRunProgress {
     pub tool_call_id: String,
     pub partial_result: ToolOutput,  // 部分结果（如搜索到的前几条）
     pub progress: Option<f32>,       // 可选进度百分比
@@ -469,10 +444,10 @@ RunStarted
     ├── TurnStarted (turn 0)
     │       ├── ProviderTextDelta...
     │       ├── ProviderToolCall
-    │       │       └── ToolCallStarted
-    │       │               ├── ToolExecutionStarted
-    │       │               ├── ToolExecutionUpdate (多次)
-    │       │               └── ToolExecutionCompleted
+    │       │       └── ToolCallStarted          ← LLM tool_call 生命周期
+    │       │               ├── ToolRunStarted   ← 实际执行开始
+    │       │               ├── ToolRunProgress (多次)
+    │       │               └── ToolRunCompleted
     │       │       └── ToolCallFinished
     │       └── TurnCompleted
     ├── TurnStarted (turn 1)...

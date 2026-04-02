@@ -4,6 +4,7 @@ pub mod commands;
 pub mod context;
 pub mod events;
 pub mod hooks;
+pub mod memory;
 pub mod observer;
 pub mod session;
 pub mod sub_agent;
@@ -17,6 +18,7 @@ pub use context::{
     ConversationHistorySource, MessageRole, SystemPromptSource, UserMessageSource,
 };
 pub use events::{AgentEvent, ProviderEvent, RunPhase, UsageStats, UserVisiblePhase};
+pub use memory::recall;
 pub use observer::{AgentObserver, CompositeObserver, TracingObserver};
 pub use session::{AgentSession, RunStatus, SessionManager, ToolTrace, TurnRecord};
 pub use sub_agent::{

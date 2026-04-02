@@ -7,7 +7,6 @@ pub mod cron;
 pub mod error;
 pub mod gateway;
 pub mod heartbeat;
-pub mod memory;
 pub mod models;
 pub mod providers;
 pub mod runtime;

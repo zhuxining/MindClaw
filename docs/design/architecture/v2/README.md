@@ -8,12 +8,12 @@
 
 ## Reading Order
 
-1. [00-overview.md](./v2/00-overview.md)
-2. [01-session.md](./v2/01-session.md)
-3. [02-agent-loop.md](./v2/02-agent-loop.md)
-4. [03-tools-services.md](./v2/03-tools-services.md)
-5. [04-memory-subagent-bus.md](./v2/04-memory-subagent-bus.md)
-6. [05-execution-runtime.md](./v2/05-execution-runtime.md)
+1. [00-overview.md](./00-overview.md)
+2. [01-session.md](./01-session.md)
+3. [02-agent-loop.md](./02-agent-loop.md)
+4. [03-tools-services.md](./03-tools-services.md)
+5. [04-memory-subagent-bus.md](./04-memory-subagent-bus.md)
+6. [05-execution-runtime.md](./05-execution-runtime.md)
 
 ## Core Principles
 

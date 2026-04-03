@@ -129,4 +129,3 @@ sequenceDiagram
 - 绕开多 Channel 的一致分发
 
 因此在 V2 中，所有异步结果必须先回到 bus，再回到 loop。
-

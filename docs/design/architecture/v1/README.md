@@ -1,6 +1,8 @@
-# MindClaw 技术架构设计 — 文档索引
+# MindClaw 技术架构设计 — 文档索引（v1 旧版）
 
-> MindClaw 项目完整技术架构设计文档
+> ⚠️ **注意**：这是 v1 旧版架构文档。新版 Agent 核心架构请参考 [../03-agent-core.md](../03-agent-core.md)（基于 nanobot 双层架构设计）。
+
+MindClaw 项目完整技术架构设计文档
 
 ## 文档索引
 
@@ -30,7 +32,18 @@
 
 ## 阅读建议
 
-### 快速了解全貌
+### 🀄️ 新版 Agent 核心（推荐）
+
+基于 nanobot 双层架构设计的全新 Agent 核心文档：
+
+1. [03-agent-core.md](../03-agent-core.md) - 双层架构总览
+2. [03.01-agent-loop.md](../03.01-agent-loop.md) - 业务编排层
+3. [03.02-agent-runner.md](../03.02-agent-runner.md) - 纯执行层
+4. [03.03-agent-spec.md](../03.03-agent-spec.md) - AgentRunSpec / AgentRunResult
+5. [03.04-agent-hook.md](../03.04-agent-hook.md) - 生命周期钩子
+6. [03.05-tool-execution.md](../03.05-tool-execution.md) - 工具执行策略
+
+### 快速了解全貌（v1 旧版）
 
 1. 先读 [00-overview.md](./00-overview.md) 的架构分层图
 2. 再看 [02-data-flows.md](./02-data-flows.md) 理解数据流动

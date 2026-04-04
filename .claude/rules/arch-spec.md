@@ -309,17 +309,20 @@ paths:
 **各类参考文档编写规则：**
 
 **config.md**：
+
 - **REQUIRED** 列出每个配置项的名称、类型、默认值、说明
 - **REQUIRED** 说明配置加载顺序（默认值 → 环境变量 → 运行时覆盖）
 - **REQUIRED** 包含配置文件格式示例
 
 **database-notes.md**：
+
 - **REQUIRED** 列出所有表名、写入方、索引用途
 - **REQUIRED** 说明归档策略（数据生命周期、冷热分离规则）
 - **REQUIRED** 说明并发模型（WAL 模式、连接池策略）
 - **OPTIONAL** 列出完整 DDL（若 DDL 较短）；否则链接到迁移文件
 
 **type-registry.md**：
+
 - **REQUIRED** 列出所有跨模块接口契约（trait）的位置和关键约束
 - **REQUIRED** 列出核心数据结构的位置、用途和关键约束
 - **OPTIONAL** 包含关键接口签名（单块 ≤ 10 行）

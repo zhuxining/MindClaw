@@ -1,37 +1,34 @@
-//! AgentLoop：消息处理主循环
+//! AgentLoop：业务编排层
 //!
-//! Channel → Hooks → Context → Provider → Tool 循环 → 响应
-//!
-//! Agent 核心围绕"事件驱动外层 + 单次 run 状态机 + 有限工具循环"构建
+//! Channel → MessageBus → AgentLoop → AgentRunner
+//! 
+//! 负责消息消费、会话管理、上下文构建、命令路由、结果持久化
+//! 不执行工具，也不维护复杂任务状态，只负责编排
 
 use crate::agent::commands::traits::{AgentAction, AgentCommandContext};
 use crate::agent::commands::AgentCommandRegistry;
 use crate::agent::context::{ContextBuildContext, ContextPipeline};
-use crate::agent::events::{AgentEvent, ProviderEvent, UsageStats, UserVisiblePhase};
+use crate::agent::events::{AgentEvent, UserVisiblePhase};
+use crate::agent::hook::{LoopHook, LoopHookPublisher};
 use crate::agent::observer::AgentObserver;
+use crate::agent::runner::AgentRunner;
 use crate::agent::session::{SessionManager, ToolTrace};
-use crate::agent::tools::{ToolCall, ToolRegistry};
+use crate::agent::spec::{AgentRunResult, AgentRunSpec};
+use crate::agent::tools::ToolRegistry;
 use crate::bus::events::{InboundMessage, OutboundPayload};
 use crate::bus::MessageBus;
 use crate::error::AppError;
-use crate::providers::{ChatMessage, ChatRequest, MessageContent, Provider, ToolChoice};
+use crate::providers::{ChatMessage, Provider};
+use crate::runtime::config::AppConfig;
 use dashmap::DashMap;
-use futures_util::StreamExt;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-/// 最大工具回合数
-const MAX_TOOL_ROUNDS: usize = 8;
-
 /// Session 级串行化状态
-///
-/// 队列 + 活跃 run 合并在同一 Mutex 内，避免 check-then-act 竞态
 struct SessionSlot {
-    /// 等待处理的消息队列
     queue: VecDeque<InboundMessage>,
-    /// 当前活跃 run 的取消句柄
     active_run: Option<RunHandle>,
 }
 
@@ -44,14 +41,12 @@ impl SessionSlot {
     }
 }
 
-/// 活跃 run 句柄
 #[derive(Clone)]
 struct RunHandle {
-    /// 取消令牌
     cancel: CancellationToken,
 }
 
-/// Agent 主循环
+/// Agent 主循环 - 业务编排层
 pub struct AgentLoop {
     /// 消息总线
     bus: Arc<MessageBus>,
@@ -59,8 +54,8 @@ pub struct AgentLoop {
     session_mgr: Arc<SessionManager>,
     /// 上下文管线
     context_pipeline: Arc<ContextPipeline>,
-    /// LLM Provider
-    provider: Arc<dyn Provider>,
+    /// AgentRunner（纯执行层）
+    runner: Arc<AgentRunner>,
     /// 工具注册表
     tools: Arc<ToolRegistry>,
     /// Agent 命令注册表
@@ -69,10 +64,15 @@ pub struct AgentLoop {
     sessions: DashMap<String, Mutex<SessionSlot>>,
     /// 观测器
     observer: Arc<dyn AgentObserver>,
+    /// 并发闸（限制并行 LLM 请求数）
+    concurrency_gate: Arc<tokio::sync::Semaphore>,
+    /// 应用配置
+    config: Arc<AppConfig>,
 }
 
 impl AgentLoop {
     /// 创建新的 AgentLoop
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         bus: Arc<MessageBus>,
         session_mgr: Arc<SessionManager>,
@@ -81,16 +81,22 @@ impl AgentLoop {
         tools: Arc<ToolRegistry>,
         agent_commands: Arc<AgentCommandRegistry>,
         observer: Arc<dyn AgentObserver>,
+        config: Arc<AppConfig>,
     ) -> Self {
+        let runner = Arc::new(AgentRunner::new(provider, tools.clone()));
+        let llm_concurrency = config.llm_concurrency;
+
         Self {
             bus,
             session_mgr,
             context_pipeline,
-            provider,
+            runner,
             tools,
             agent_commands,
             sessions: DashMap::new(),
             observer,
+            concurrency_gate: Arc::new(tokio::sync::Semaphore::new(llm_concurrency)),
+            config,
         }
     }
 
@@ -101,20 +107,27 @@ impl AgentLoop {
         tracing::info!("agent_loop_started");
 
         while let Some(message) = rx.recv().await {
-            Self::on_inbound(&self_arc, message).await;
+            Self::dispatch(&self_arc, message).await;
         }
 
         tracing::info!("agent_loop_stopped");
         Ok(())
     }
 
-    /// 处理入站消息（按 session 串行化）
-    async fn on_inbound(self_arc: &Arc<Self>, message: InboundMessage) {
+    /// 消息分发
+    async fn dispatch(self_arc: &Arc<Self>, message: InboundMessage) {
         let session_key = message
             .session_id
             .clone()
             .unwrap_or_else(|| format!("pending:{}", message.request_id));
 
+        // 检查是否为优先级命令（如 /stop）
+        if self_arc.is_priority_command(&message) {
+            self_arc.handle_priority_command(&session_key, message).await;
+            return;
+        }
+
+        // 包装为异步任务
         let slot = self_arc
             .sessions
             .entry(session_key.clone())
@@ -153,8 +166,8 @@ impl AgentLoop {
         first: InboundMessage,
         cancel: CancellationToken,
     ) {
-        if let Err(error) = self.run_once(first, cancel.clone()).await {
-            tracing::error!(session_key = %session_key, error = %error, "run_once_failed");
+        if let Err(error) = self.process_message(first, cancel.clone()).await {
+            tracing::error!(session_key = %session_key, error = %error, "process_message_failed");
         }
 
         loop {
@@ -179,8 +192,8 @@ impl AgentLoop {
 
             match next {
                 Some((msg, cancel)) => {
-                    if let Err(error) = self.run_once(msg, cancel).await {
-                        tracing::error!(session_key = %session_key, error = %error, "run_once_failed");
+                    if let Err(error) = self.process_message(msg, cancel).await {
+                        tracing::error!(session_key = %session_key, error = %error, "process_message_failed");
                     }
                 }
                 None => break,
@@ -188,14 +201,22 @@ impl AgentLoop {
         }
     }
 
-    /// 单次 run 执行（核心状态机）
-    async fn run_once(
+    /// 处理单条消息（核心管线）
+    async fn process_message(
         &self,
         message: InboundMessage,
         cancel: CancellationToken,
     ) -> Result<(), AppError> {
         let request_id = message.request_id.clone();
 
+        // 1. 双层并发控制
+        let _permit = self
+            .concurrency_gate
+            .acquire()
+            .await
+            .map_err(|_| AppError::Internal("Concurrency gate closed".to_string()))?;
+
+        // 2. 获取或创建会话
         let session = self
             .session_mgr
             .get_or_create(
@@ -212,11 +233,6 @@ impl AgentLoop {
                 request_id: request_id.clone(),
             })
             .await;
-        self.observer
-            .on_event(&AgentEvent::SessionResolved {
-                session_id: session_id.clone(),
-            })
-            .await;
 
         if cancel.is_cancelled() {
             self.session_mgr.mark_cancelled(&session_id).await?;
@@ -224,6 +240,7 @@ impl AgentLoop {
             return Ok(());
         }
 
+        // 3. 检查斜杠命令
         if self
             .maybe_handle_agent_command(&message, &session_id, cancel.clone())
             .await?
@@ -231,168 +248,81 @@ impl AgentLoop {
             return Ok(());
         }
 
-        self.emit_status(&request_id, &session_id, UserVisiblePhase::Thinking)
-            .await?;
-
+        // 4. 构建上下文
         let ctx = ContextBuildContext::new(message.clone(), Arc::new(session.clone()));
-        let built_context = match self.context_pipeline.build(&ctx).await {
-            Ok(ctx) => {
-                self.observer
-                    .on_event(&AgentEvent::ContextBuilt {
-                        fragments: ctx.fragments.len(),
-                    })
-                    .await;
-                ctx
-            }
-            Err(error) => {
-                self.session_mgr
-                    .mark_failed(&session_id, &request_id, &error.to_string())
-                    .await?;
-                self.observer
-                    .on_event(&AgentEvent::RunFailed {
-                        message: error.to_string(),
-                    })
-                    .await;
-                self.emit_error(&request_id, &session_id, &error.to_string(), false)
-                    .await?;
-                return Ok(());
-            }
-        };
+        let built_context = self.context_pipeline.build(&ctx).await?;
 
-        let mut messages = built_context.messages;
-        let mut final_text = String::new();
-        let mut all_tool_traces = Vec::new();
-        let tool_schemas = self.tools.schemas();
+        self.observer
+            .on_event(&AgentEvent::ContextBuilt {
+                fragments: built_context.fragments.len(),
+            })
+            .await;
 
-        for round in 0..MAX_TOOL_ROUNDS {
-            if cancel.is_cancelled() {
-                self.session_mgr.mark_cancelled(&session_id).await?;
-                self.observer.on_event(&AgentEvent::RunCancelled).await;
-                return Ok(());
-            }
+        // 5. 构建 AgentRunSpec（使用配置值）
+        let spec = AgentRunSpec::with_config(
+            built_context.system_prompt.clone(),
+            built_context.messages.clone(),
+            self.tools.schemas(),
+            self.runner.provider_model(),
+            &self.config,
+        );
 
-            let (text_buffer, tool_calls, usage) = match self
-                .stream_provider_round(
-                    &request_id,
-                    &session_id,
-                    &built_context.system_prompt,
-                    &messages,
-                    &tool_schemas,
-                    cancel.clone(),
-                )
-                .await
-            {
-                Ok(result) => result,
-                Err(error) => {
-                    self.session_mgr
-                        .mark_failed(&session_id, &request_id, &error.to_string())
-                        .await?;
-                    self.observer
-                        .on_event(&AgentEvent::RunFailed {
-                            message: error.to_string(),
-                        })
-                        .await;
-                    self.emit_error(&request_id, &session_id, &error.to_string(), true)
-                        .await?;
-                    return Ok(());
-                }
-            };
+        // 6. 创建 Hook（桥接两层）
+        let publisher = BusPublisher::new(
+            self.bus.clone(),
+            request_id.clone(),
+            session_id.clone(),
+        );
+        let mut hook = LoopHook::new(
+            Box::new(publisher),
+            session_id.clone(),
+            request_id.clone(),
+        );
 
-            final_text = text_buffer.clone();
-            let _ = usage;
+        // 7. 调用 AgentRunner
+        let result = self.runner.run(spec, &mut hook, cancel.clone()).await?;
 
-            if tool_calls.is_empty() {
-                break;
-            }
+        // 8. 持久化 turn
+        self.persist_turn(&session_id, &message.content, &result).await?;
 
-            self.emit_status(&request_id, &session_id, UserVisiblePhase::UsingTools)
-                .await?;
-
-            for call in &tool_calls {
-                self.observer
-                    .on_event(&AgentEvent::ToolStarted {
-                        name: call.name.clone(),
-                    })
-                    .await;
-            }
-
-            let tool_start = std::time::Instant::now();
-            let results = self
-                .tools
-                .execute_calls(tool_calls.clone(), cancel.clone())
-                .await?;
-            let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
-
-            let assistant_parts = {
-                let mut parts = Vec::new();
-                if !text_buffer.is_empty() {
-                    parts.push(MessageContent::Text {
-                        text: text_buffer.clone(),
-                    });
-                }
-                parts.extend(tool_calls.iter().map(|call| MessageContent::ToolUse {
-                    id: call.id.clone(),
-                    name: call.name.clone(),
-                    input: call.arguments.clone(),
-                }));
-                parts
-            };
-
-            messages.push(ChatMessage::assistant_parts(assistant_parts));
-
-            for (call, result) in tool_calls.iter().zip(results.iter()) {
-                self.observer
-                    .on_event(&AgentEvent::ToolFinished {
-                        name: call.name.clone(),
-                        success: !result.is_error,
-                    })
-                    .await;
-
-                all_tool_traces.push(ToolTrace {
-                    tool_name: call.name.clone(),
-                    input_summary: truncate(&call.arguments.to_string(), 500),
-                    output_summary: truncate(&result.content, 1000),
-                    duration_ms: tool_duration_ms,
-                    success: !result.is_error,
-                    round: round as u32,
-                });
-
-                messages.push(ChatMessage::tool_result(
-                    truncate(&result.content, 4_000),
-                    result.tool_call_id.clone(),
-                    result.is_error,
-                ));
-            }
-
-            // 最后一轮仍有工具调用 → 超限报错（检查在工具执行后，确保 8 轮完整执行）
-            if round == MAX_TOOL_ROUNDS - 1 {
-                self.session_mgr
-                    .mark_failed(&session_id, &request_id, "tool loop exceeded max rounds")
-                    .await?;
-                self.emit_error(&request_id, &session_id, "工具循环超过最大轮数限制", false)
-                    .await?;
-                return Ok(());
-            }
-
-            self.emit_status(&request_id, &session_id, UserVisiblePhase::Thinking)
-                .await?;
-        }
-
-        self.session_mgr
-            .append_turn(
-                &session_id,
-                ChatMessage::user(&message.content),
-                Some(ChatMessage::assistant_text(&final_text)),
-                all_tool_traces,
-            )
-            .await?;
-
+        // 9. 发送完成信号
         self.emit_done(&request_id, &session_id).await?;
+
         self.observer.on_event(&AgentEvent::RunCompleted).await;
 
         Ok(())
     }
 
+    /// 检查是否为优先级命令
+    fn is_priority_command(&self, message: &InboundMessage) -> bool {
+        message.content.starts_with("/stop")
+            || message.content.starts_with("/restart")
+    }
+
+    /// 处理优先级命令（同步分发，绕过并发控制）
+    async fn handle_priority_command(&self, session_key: &str, message: InboundMessage) {
+        match message.content.as_str() {
+            "/stop" => {
+                // 取消活跃任务
+                if let Some(slot) = self.sessions.get(session_key) {
+                    let slot = slot.lock().await;
+                    if let Some(run) = &slot.active_run {
+                        run.cancel.cancel();
+                    }
+                }
+                // 发送停止确认
+                let _ = self.emit_text(&message.request_id, session_key, "Stopped.").await;
+                let _ = self.emit_done(&message.request_id, session_key).await;
+            }
+            "/restart" => {
+                // 重启逻辑（配置不变）
+                tracing::info!(session_key = %session_key, "restart_requested");
+            }
+            _ => {}
+        }
+    }
+
+    /// 处理普通斜杠命令
     async fn maybe_handle_agent_command(
         &self,
         message: &InboundMessage,
@@ -466,76 +396,41 @@ impl AgentLoop {
         }
     }
 
-    async fn stream_provider_round(
+    /// 持久化 turn 到会话
+    async fn persist_turn(
         &self,
-        request_id: &str,
         session_id: &str,
-        system_prompt: &str,
-        messages: &[ChatMessage],
-        tool_schemas: &[crate::providers::ToolSchema],
-        cancel: CancellationToken,
-    ) -> Result<(String, Vec<ToolCall>, UsageStats), AppError> {
-        let mut stream = self
-            .provider
-            .chat_stream(ChatRequest {
-                model: self.provider.model_id(),
-                messages,
-                system: Some(system_prompt),
-                tools: tool_schemas,
-                tool_choice: ToolChoice::Auto,
-                max_tokens: None,
-                cancel,
-            })
+        user_content: &str,
+        result: &AgentRunResult,
+    ) -> Result<(), AppError> {
+        // 转换 tool_events 为 tool_traces
+        let tool_traces: Vec<ToolTrace> = result.tool_events.iter().map(|event| {
+            ToolTrace {
+                tool_name: event.name.clone(),
+                input_summary: event.input_summary.clone(),
+                output_summary: event.output_summary.clone(),
+                duration_ms: event.duration_ms,
+                success: event.status == crate::agent::spec::ToolStatus::Succeeded,
+                round: 0, // TODO: 从 context 获取
+            }
+        }).collect();
+
+        // 追加 turn - 使用实际的用户消息内容
+        self.session_mgr
+            .append_turn(
+                session_id,
+                ChatMessage::user(user_content),
+                Some(ChatMessage::assistant_text(&result.content)),
+                tool_traces,
+            )
             .await?;
 
-        let mut text_buffer = String::new();
-        let mut tool_calls = Vec::new();
-        let mut usage = UsageStats {
-            input_tokens: 0,
-            output_tokens: 0,
-        };
-        let mut streamed = false;
-
-        while let Some(event) = stream.next().await {
-            match event? {
-                ProviderEvent::TextDelta { text } => {
-                    if !streamed {
-                        self.emit_status(request_id, session_id, UserVisiblePhase::Streaming)
-                            .await?;
-                        streamed = true;
-                    }
-                    text_buffer.push_str(&text);
-                    self.emit_text(request_id, session_id, &text).await?;
-                    self.observer
-                        .on_event(&AgentEvent::ProviderTextDelta { len: text.len() })
-                        .await;
-                }
-                ProviderEvent::ToolCall {
-                    id,
-                    name,
-                    arguments_json,
-                } => {
-                    self.observer
-                        .on_event(&AgentEvent::ProviderToolCall { name: name.clone() })
-                        .await;
-                    tool_calls.push(ToolCall {
-                        id,
-                        name,
-                        arguments: arguments_json,
-                    });
-                }
-                ProviderEvent::Finished {
-                    usage: round_usage, ..
-                } => {
-                    usage = round_usage;
-                    break;
-                }
-            }
-        }
-
-        Ok((text_buffer, tool_calls, usage))
+        Ok(())
     }
 
+    // ── 发送方法 ─────────────────────────────────────────────────
+
+    #[allow(dead_code)]
     async fn emit_status(
         &self,
         request_id: &str,
@@ -587,28 +482,6 @@ impl AgentLoop {
             .await
     }
 
-    async fn emit_error(
-        &self,
-        request_id: &str,
-        session_id: &str,
-        message: &str,
-        retryable: bool,
-    ) -> Result<(), AppError> {
-        self.bus
-            .publish_outbound(crate::bus::events::OutboundMessage {
-                id: uuid::Uuid::new_v4().to_string(),
-                request_id: request_id.to_string(),
-                session_id: session_id.to_string(),
-                target_sender: "local_user".to_string(),
-                target_channel: "desktop".to_string(),
-                payload: OutboundPayload::Error {
-                    message: message.to_string(),
-                    retryable,
-                },
-            })
-            .await
-    }
-
     /// 取消指定 session 的活跃 run
     pub async fn cancel_session(&self, session_id: &str) -> Result<(), AppError> {
         if let Some(slot) = self.sessions.get(session_id) {
@@ -621,10 +494,66 @@ impl AgentLoop {
     }
 }
 
+// ============================================================================
+// BusPublisher - LoopHook 发布器实现
+// ============================================================================
+
+/// BusPublisher - 将 Hook 事件桥接到 MessageBus
+struct BusPublisher {
+    bus: Arc<MessageBus>,
+    request_id: String,
+    session_id: String,
+}
+
+impl BusPublisher {
+    fn new(bus: Arc<MessageBus>, request_id: String, session_id: String) -> Self {
+        Self { bus, request_id, session_id }
+    }
+}
+
+impl LoopHookPublisher for BusPublisher {
+    fn emit_status(&self, _request_id: &str, _session_id: &str, phase: UserVisiblePhase) {
+        let msg = crate::bus::events::OutboundMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            request_id: self.request_id.clone(),
+            session_id: self.session_id.clone(),
+            target_sender: "local_user".to_string(),
+            target_channel: "desktop".to_string(),
+            payload: OutboundPayload::Status { phase },
+        };
+        let bus = self.bus.clone();
+        tokio::spawn(async move {
+            let _ = bus.publish_outbound(msg).await;
+        });
+    }
+
+    fn emit_chunk(&self, _request_id: &str, _session_id: &str, _segment_id: u64, content: &str) {
+        let msg = crate::bus::events::OutboundMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            request_id: self.request_id.clone(),
+            session_id: self.session_id.clone(),
+            target_sender: "local_user".to_string(),
+            target_channel: "desktop".to_string(),
+            payload: OutboundPayload::Chunk {
+                content: content.to_string(),
+            },
+        };
+        let bus = self.bus.clone();
+        tokio::spawn(async move {
+            let _ = bus.publish_outbound(msg).await;
+        });
+    }
+
+    fn emit_segment_end(&self, _request_id: &str, _session_id: &str, _segment_id: u64, _resuming: bool) {
+        // 段结束信号（当前 UI 不需要，可扩展）
+    }
+}
+
+/// 截断字符串
+#[allow(dead_code)]
 fn truncate(input: &str, max_len: usize) -> String {
     if input.chars().count() <= max_len {
         return input.to_string();
     }
-
     input.chars().take(max_len).collect()
 }

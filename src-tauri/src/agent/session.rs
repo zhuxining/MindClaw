@@ -288,13 +288,15 @@ impl SessionManager {
     // ── DB 操作 ─────────────────────────────────────────────────
 
     async fn persist_session_meta(&self, session: &AgentSession) -> Result<(), AppError> {
+        let mode_str = serde_json::to_string(&session.mode)
+            .map_err(|e| AppError::Storage(format!("serialize session mode: {e}")))?;
         let db = self.db.lock().await;
         db.execute(
             "INSERT OR IGNORE INTO sessions (id, sender, mode, created, updated) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![
                 session.id,
                 session.sender,
-                serde_json::to_string(&session.mode).unwrap_or_default(),
+                mode_str,
                 session.created.to_rfc3339(),
                 session.updated.to_rfc3339(),
             ],
@@ -411,7 +413,7 @@ impl SessionManager {
                     let assistant_message: Option<ChatMessage> =
                         asst_json.and_then(|j| serde_json::from_str(&j).ok());
                     let tool_trace: Vec<ToolTrace> =
-                        serde_json::from_str(&trace_json).unwrap_or_default();
+                        serde_json::from_str(&trace_json).ok()?;
                     let run_status = run_status_from_string(&status_str);
                     let created = DateTime::parse_from_rfc3339(&created_str)
                         .map(|d| d.with_timezone(&Utc))

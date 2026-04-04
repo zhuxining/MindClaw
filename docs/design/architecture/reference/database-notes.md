@@ -40,7 +40,6 @@
 
 **索引**：
 
-
 - `idx_sessions_sender`：按发送者查询
 - `idx_sessions_updated`：按更新时间倒序查询
 
@@ -58,7 +57,6 @@
 | `run_status` | TEXT | NOT NULL DEFAULT 'success' | 执行状态：`success` / `failed:reason` / `cancelled` |
 | `created` | TEXT | NOT NULL | 创建时间（ISO 8601） |
 
-
 **索引**：
 
 - `idx_turns_session`：按会话 ID 查询回合列表
@@ -74,7 +72,6 @@
 | `role` | TEXT | NOT NULL | 消息角色：`user` / `assistant` / `system` |
 | `content` | TEXT | NOT NULL | 消息内容文本 |
 | `created` | TEXT | NOT NULL | 创建时间（ISO 8601） |
-
 
 **索引**：
 

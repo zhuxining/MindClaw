@@ -5,11 +5,12 @@
 use crate::agent::commands::AgentCommandRegistry;
 use crate::agent::context::ContextPipeline;
 use crate::agent::observer::{AgentObserver, TracingObserver};
-use crate::agent::tools::mcp_bridge::McpBridgeManager;
+use crate::agent::tools::mcp::{MCPManager, register_mcp_tools};
 use crate::agent::tools::traits::Tool;
 use crate::agent::tools::{
-    filesystem::FilesystemTool, find_files::FindFilesTool, path_guard::PathGuard,
-    search_content::SearchContentTool, shell::ShellTool, ToolRegistry,
+    file_edit::FileEditTool, file_read::FileReadTool, file_write::FileWriteTool,
+    find_files::FindFilesTool, path_guard::PathGuard, search_content::SearchContentTool,
+    shell::ShellTool, ToolRegistry,
 };
 use crate::agent::AgentLoop;
 use crate::bus::MessageBus;
@@ -85,6 +86,7 @@ impl AgentBuilder {
             tools,
             agent_commands,
             observer,
+            self.config,
         ))
     }
 }
@@ -124,20 +126,25 @@ async fn init_tools(
     config: &AppConfig,
     extra: Vec<Arc<dyn Tool + Send + Sync>>,
 ) -> AppResult<Arc<ToolRegistry>> {
-    let mut tools = ToolRegistry::new();
+    let mut tools = ToolRegistry::new().with_concurrency_limit(config.tool_concurrency);
 
     // 内置工具
     let guard = Arc::new(PathGuard::vault_only(config.vault_path.clone()).with_denied("private"));
     tools.register(Arc::new(ShellTool::new(config.data_dir.clone())));
-    tools.register(Arc::new(FilesystemTool::with_guard(Arc::clone(&guard))));
+    tools.register(Arc::new(FileReadTool::with_guard(Arc::clone(&guard))));
+    tools.register(Arc::new(FileWriteTool::with_guard(Arc::clone(&guard))));
+    tools.register(Arc::new(FileEditTool::with_guard(Arc::clone(&guard))));
     tools.register(Arc::new(FindFilesTool::new(Arc::clone(&guard))));
     tools.register(Arc::new(SearchContentTool::new(Arc::clone(&guard))));
 
     // MCP proxy tools：从 data_dir/mcp.toml 加载外部 server 配置
-    let bridge = McpBridgeManager::from_file(&config.data_dir).await;
-    if bridge.server_count() > 0 {
-        bridge.inject_tools(&mut tools).await?;
-        tracing::info!(servers = %bridge.server_count(), "MCP bridge initialized");
+    let mcp_manager = MCPManager::from_file(&config.data_dir);
+    if mcp_manager.server_count() > 0 {
+        if let Err(e) = register_mcp_tools(&mut tools, &mcp_manager).await {
+            tracing::warn!(error = %e, "MCP registration failed, continuing without MCP tools");
+        } else {
+            tracing::info!(servers = %mcp_manager.server_count(), "MCP bridge initialized");
+        }
     }
 
     // 额外工具

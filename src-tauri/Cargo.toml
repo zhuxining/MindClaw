@@ -41,8 +41,6 @@ tauri-plugin-process = "2"
 tauri-plugin-stronghold = "2"
 
 
-
-
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
 tauri-plugin-cli = "2"
@@ -75,11 +73,8 @@ tokio-stream = { version = "0.1.18", default-features = false, features = [
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 
 # HTTP client
-reqwest = { version = "0.13.2", default-features = false, features = [
-    "json",
-    "rustls",
-    "stream",
-] }
+http = "1.0"
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
 
 # Configuration
 directories = "6.0"
@@ -88,6 +83,7 @@ toml = "1.0"
 
 # Utilities
 base64 = "0.22.1"
+humantime = "2.1"
 image = { version = "0.25.10", default-features = false, features = [
     "jpeg",
     "png",
@@ -114,7 +110,13 @@ grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
 globset = "0.4"
-rmcp = { version = "0.16.0", features = ["server", "client", "transport-child-process"] }
+rmcp = { version = "0.16.0", features = [
+    "server",
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client",
+    "transport-streamable-http-client-reqwest",
+] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }

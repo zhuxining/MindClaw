@@ -22,6 +22,16 @@ pub struct AppConfig {
     pub context_token_limit: usize,
     /// Agent 系统提示词
     pub system_prompt: String,
+    /// Agent 采样温度（默认 None，使用 Provider 默认值）
+    pub agent_temperature: Option<f32>,
+    /// Agent 最大 token 数（默认 None，使用 Provider 默认值）
+    pub agent_max_tokens: Option<usize>,
+    /// Agent 最大迭代次数（默认 8）
+    pub agent_max_iterations: usize,
+    /// 工具并行执行限制（默认 4）
+    pub tool_concurrency: usize,
+    /// LLM 请求并发限制（默认 3）
+    pub llm_concurrency: usize,
 }
 
 impl AppConfig {
@@ -46,6 +56,11 @@ impl Default for AppConfig {
             bus_capacity: 100,
             context_token_limit: 128_000,
             system_prompt: "你是一个智能助手，可以帮助用户完成各种任务。".to_string(),
+            agent_temperature: None,
+            agent_max_tokens: None,
+            agent_max_iterations: 8,
+            tool_concurrency: 4,
+            llm_concurrency: 3,
         }
     }
 }

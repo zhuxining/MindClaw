@@ -1,11 +1,11 @@
-pub mod filesystem;
+pub mod file_edit;
+pub mod file_read;
+pub mod file_write;
 pub mod find_files;
-pub mod mcp_bridge;
-pub mod operations;
+pub mod mcp;
 pub mod path_guard;
 pub mod search_content;
 pub mod shell;
-pub mod skills;
 pub mod traits;
 
 use crate::error::{AppError, AppResult};
@@ -197,17 +197,21 @@ impl ToolRegistry {
     ///
     /// 包含以下内置工具：
     /// - ShellTool - Shell 命令执行
-    /// - FilesystemTool - 文件系统操作（受 PathGuard 保护）
+    /// - FileReadTool - 读取文件
+    /// - FileWriteTool - 写入文件
+    /// - FileEditTool - 编辑文件（内容匹配替换）
     /// - FindFilesTool - 文件搜索
     /// - SearchContentTool - 内容搜索
-    /// - McpBridge - MCP 桥接（如果 mcp.toml 存在）
+    /// - MCP - MCP 桥接（如果 mcp.toml 存在）
     pub async fn init_default(
         config: &crate::runtime::config::AppConfig,
         extra: Vec<Arc<dyn Tool + Send + Sync>>,
     ) -> AppResult<Arc<Self>> {
-        use crate::agent::tools::filesystem::FilesystemTool;
+        use crate::agent::tools::file_edit::FileEditTool;
+        use crate::agent::tools::file_read::FileReadTool;
+        use crate::agent::tools::file_write::FileWriteTool;
         use crate::agent::tools::find_files::FindFilesTool;
-        use crate::agent::tools::mcp_bridge::McpBridgeManager;
+        use crate::agent::tools::mcp::{register_mcp_tools, MCPManager};
         use crate::agent::tools::path_guard::PathGuard;
         use crate::agent::tools::search_content::SearchContentTool;
         use crate::agent::tools::shell::ShellTool;
@@ -218,15 +222,17 @@ impl ToolRegistry {
         let guard =
             Arc::new(PathGuard::vault_only(config.vault_path.clone()).with_denied("private"));
         tools.register(Arc::new(ShellTool::new(config.data_dir.clone())));
-        tools.register(Arc::new(FilesystemTool::with_guard(Arc::clone(&guard))));
+        tools.register(Arc::new(FileReadTool::with_guard(Arc::clone(&guard))));
+        tools.register(Arc::new(FileWriteTool::with_guard(Arc::clone(&guard))));
+        tools.register(Arc::new(FileEditTool::with_guard(Arc::clone(&guard))));
         tools.register(Arc::new(FindFilesTool::new(Arc::clone(&guard))));
         tools.register(Arc::new(SearchContentTool::new(Arc::clone(&guard))));
 
         // MCP proxy tools：从 data_dir/mcp.toml 加载外部 server 配置
-        let bridge = McpBridgeManager::from_file(&config.data_dir).await;
-        if bridge.server_count() > 0 {
-            bridge.inject_tools(&mut tools).await?;
-            tracing::info!(servers = %bridge.server_count(), "MCP bridge initialized");
+        let mcp_manager = MCPManager::from_file(&config.data_dir);
+        if mcp_manager.server_count() > 0 {
+            register_mcp_tools(&mut tools, &mcp_manager).await?;
+            tracing::info!(servers = %mcp_manager.server_count(), "MCP bridge initialized");
         }
 
         // 额外工具

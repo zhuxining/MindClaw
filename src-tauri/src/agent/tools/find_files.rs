@@ -25,7 +25,8 @@ impl Tool for FindFilesTool {
 
     fn description(&self) -> &str {
         "Find files or directories matching a glob pattern within the vault. \
-         Returns relative paths. Use filesystem.list for simple directory listing."
+         Returns relative paths. Use pattern='*' to list files in a directory. \
+         Examples: '*.md' for markdown files, 'src/**/*.rs' for Rust files in src/."
     }
 
     fn input_schema(&self) -> Value {

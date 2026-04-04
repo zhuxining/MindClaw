@@ -96,33 +96,40 @@ mod tests {
     #[tokio::test]
     async fn test_write_new_file() {
         let (tool, _temp) = setup_test_vault();
-        
+
         tool.write_file("test.txt", "hello world").await.unwrap();
-        
-        let content = tokio::fs::read_to_string(_temp.path().join("vault/test.txt")).await.unwrap();
+
+        let content = tokio::fs::read_to_string(_temp.path().join("vault/test.txt"))
+            .await
+            .unwrap();
         assert_eq!(content, "hello world");
     }
 
     #[tokio::test]
     async fn test_write_overwrite() {
         let (tool, _temp) = setup_test_vault();
-        
+
         tool.write_file("test.txt", "original").await.unwrap();
         tool.write_file("test.txt", "overwritten").await.unwrap();
-        
-        let content = tokio::fs::read_to_string(_temp.path().join("vault/test.txt")).await.unwrap();
+
+        let content = tokio::fs::read_to_string(_temp.path().join("vault/test.txt"))
+            .await
+            .unwrap();
         assert_eq!(content, "overwritten");
     }
 
     #[tokio::test]
     async fn test_write_creates_parent_dirs() {
         let (tool, _temp) = setup_test_vault();
-        
-        tool.write_file("deep/nested/path/file.txt", "content").await.unwrap();
-        
-        let content = tokio::fs::read_to_string(
-            _temp.path().join("vault/deep/nested/path/file.txt")
-        ).await.unwrap();
+
+        tool.write_file("deep/nested/path/file.txt", "content")
+            .await
+            .unwrap();
+
+        let content =
+            tokio::fs::read_to_string(_temp.path().join("vault/deep/nested/path/file.txt"))
+                .await
+                .unwrap();
         assert_eq!(content, "content");
     }
 

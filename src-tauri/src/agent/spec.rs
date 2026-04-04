@@ -121,7 +121,7 @@ impl AgentRunSpec {
             messages: vec![ChatMessage::user(&task_description)],
             tools,
             model,
-            max_iterations: 15, // SubAgent 允许更多迭代
+            max_iterations: 15,     // SubAgent 允许更多迭代
             temperature: Some(0.0), // 确定性输出
             max_tokens: Some(2000),
             parallel_tools: true,

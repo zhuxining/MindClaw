@@ -1,7 +1,7 @@
 //! AgentLoop：业务编排层
 //!
 //! Channel → MessageBus → AgentLoop → AgentRunner
-//! 
+//!
 //! 负责消息消费、会话管理、上下文构建、命令路由、结果持久化
 //! 不执行工具，也不维护复杂任务状态，只负责编排
 
@@ -123,7 +123,9 @@ impl AgentLoop {
 
         // 检查是否为优先级命令（如 /stop）
         if self_arc.is_priority_command(&message) {
-            self_arc.handle_priority_command(&session_key, message).await;
+            self_arc
+                .handle_priority_command(&session_key, message)
+                .await;
             return;
         }
 
@@ -268,22 +270,15 @@ impl AgentLoop {
         );
 
         // 6. 创建 Hook（桥接两层）
-        let publisher = BusPublisher::new(
-            self.bus.clone(),
-            request_id.clone(),
-            session_id.clone(),
-        );
-        let mut hook = LoopHook::new(
-            Box::new(publisher),
-            session_id.clone(),
-            request_id.clone(),
-        );
+        let publisher = BusPublisher::new(self.bus.clone(), request_id.clone(), session_id.clone());
+        let mut hook = LoopHook::new(Box::new(publisher), session_id.clone(), request_id.clone());
 
         // 7. 调用 AgentRunner
         let result = self.runner.run(spec, &mut hook, cancel.clone()).await?;
 
         // 8. 持久化 turn
-        self.persist_turn(&session_id, &message.content, &result).await?;
+        self.persist_turn(&session_id, &message.content, &result)
+            .await?;
 
         // 9. 发送完成信号
         self.emit_done(&request_id, &session_id).await?;
@@ -295,8 +290,7 @@ impl AgentLoop {
 
     /// 检查是否为优先级命令
     fn is_priority_command(&self, message: &InboundMessage) -> bool {
-        message.content.starts_with("/stop")
-            || message.content.starts_with("/restart")
+        message.content.starts_with("/stop") || message.content.starts_with("/restart")
     }
 
     /// 处理优先级命令（同步分发，绕过并发控制）
@@ -311,7 +305,9 @@ impl AgentLoop {
                     }
                 }
                 // 发送停止确认
-                let _ = self.emit_text(&message.request_id, session_key, "Stopped.").await;
+                let _ = self
+                    .emit_text(&message.request_id, session_key, "Stopped.")
+                    .await;
                 let _ = self.emit_done(&message.request_id, session_key).await;
             }
             "/restart" => {
@@ -404,16 +400,20 @@ impl AgentLoop {
         result: &AgentRunResult,
     ) -> Result<(), AppError> {
         // 转换 tool_events 为 tool_traces
-        let tool_traces: Vec<ToolTrace> = result.tool_events.iter().map(|event| {
-            ToolTrace {
-                tool_name: event.name.clone(),
-                input_summary: event.input_summary.clone(),
-                output_summary: event.output_summary.clone(),
-                duration_ms: event.duration_ms,
-                success: event.status == crate::agent::spec::ToolStatus::Succeeded,
-                round: 0, // TODO: 从 context 获取
-            }
-        }).collect();
+        let tool_traces: Vec<ToolTrace> = result
+            .tool_events
+            .iter()
+            .map(|event| {
+                ToolTrace {
+                    tool_name: event.name.clone(),
+                    input_summary: event.input_summary.clone(),
+                    output_summary: event.output_summary.clone(),
+                    duration_ms: event.duration_ms,
+                    success: event.status == crate::agent::spec::ToolStatus::Succeeded,
+                    round: 0, // TODO: 从 context 获取
+                }
+            })
+            .collect();
 
         // 追加 turn - 使用实际的用户消息内容
         self.session_mgr
@@ -507,7 +507,11 @@ struct BusPublisher {
 
 impl BusPublisher {
     fn new(bus: Arc<MessageBus>, request_id: String, session_id: String) -> Self {
-        Self { bus, request_id, session_id }
+        Self {
+            bus,
+            request_id,
+            session_id,
+        }
     }
 }
 
@@ -544,7 +548,13 @@ impl LoopHookPublisher for BusPublisher {
         });
     }
 
-    fn emit_segment_end(&self, _request_id: &str, _session_id: &str, _segment_id: u64, _resuming: bool) {
+    fn emit_segment_end(
+        &self,
+        _request_id: &str,
+        _session_id: &str,
+        _segment_id: u64,
+        _resuming: bool,
+    ) {
         // 段结束信号（当前 UI 不需要，可扩展）
     }
 }

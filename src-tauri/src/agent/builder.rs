@@ -5,7 +5,7 @@
 use crate::agent::commands::AgentCommandRegistry;
 use crate::agent::context::ContextPipeline;
 use crate::agent::observer::{AgentObserver, TracingObserver};
-use crate::agent::tools::mcp::{MCPManager, register_mcp_tools};
+use crate::agent::tools::mcp::{register_mcp_tools, MCPManager};
 use crate::agent::tools::traits::Tool;
 use crate::agent::tools::{
     file_edit::FileEditTool, file_read::FileReadTool, file_write::FileWriteTool,

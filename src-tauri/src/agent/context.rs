@@ -122,10 +122,7 @@ pub trait ContextSource: Send + Sync {
     }
 
     /// 注入上下文片段
-    async fn inject(
-        &self,
-        ctx: &ContextBuildContext,
-    ) -> Result<Vec<ContextFragment>, AppError>;
+    async fn inject(&self, ctx: &ContextBuildContext) -> Result<Vec<ContextFragment>, AppError>;
 }
 
 // ============================================================================
@@ -212,7 +209,9 @@ impl ContextPipeline {
         self.sources.push(source);
         // 按层级和优先级排序
         self.sources.sort_by(|a, b| {
-            a.layer().cmp(&b.layer()).then_with(|| a.priority().cmp(&b.priority()))
+            a.layer()
+                .cmp(&b.layer())
+                .then_with(|| a.priority().cmp(&b.priority()))
         });
     }
 
@@ -373,10 +372,7 @@ impl ContextSource for SystemPromptSource {
         0
     }
 
-    async fn inject(
-        &self,
-        _ctx: &ContextBuildContext,
-    ) -> Result<Vec<ContextFragment>, AppError> {
+    async fn inject(&self, _ctx: &ContextBuildContext) -> Result<Vec<ContextFragment>, AppError> {
         Ok(vec![ContextFragment::new(
             ContextLayer::Core,
             MessageRole::System,
@@ -405,10 +401,7 @@ impl ContextSource for UserMessageSource {
         100
     }
 
-    async fn inject(
-        &self,
-        ctx: &ContextBuildContext,
-    ) -> Result<Vec<ContextFragment>, AppError> {
+    async fn inject(&self, ctx: &ContextBuildContext) -> Result<Vec<ContextFragment>, AppError> {
         // 注入运行时上下文
         let runtime_context = format!(
             "[当前时间：{}，平台：{}]",
@@ -460,10 +453,7 @@ impl ContextSource for ConversationHistorySource {
         30
     }
 
-    async fn inject(
-        &self,
-        ctx: &ContextBuildContext,
-    ) -> Result<Vec<ContextFragment>, AppError> {
+    async fn inject(&self, ctx: &ContextBuildContext) -> Result<Vec<ContextFragment>, AppError> {
         let history = ctx.session.compressed_history(self.keep_recent);
         let mut fragments = Vec::new();
 

@@ -27,7 +27,10 @@ pub struct AgentRunner {
 impl AgentRunner {
     /// 创建新的 AgentRunner
     pub fn new(provider: Arc<dyn Provider>, tool_registry: Arc<ToolRegistry>) -> Self {
-        Self { provider, tool_registry }
+        Self {
+            provider,
+            tool_registry,
+        }
     }
 
     /// 获取 Provider 的模型 ID
@@ -66,7 +69,8 @@ impl AgentRunner {
 
             // 2. 调用 LLM（流式或非流式）
             let response = if hook.wants_streaming() {
-                self.chat_stream(&spec, &messages, hook, cancel.clone()).await?
+                self.chat_stream(&spec, &messages, hook, cancel.clone())
+                    .await?
             } else {
                 self.chat(&spec, &messages, cancel.clone()).await?
             };
@@ -80,23 +84,23 @@ impl AgentRunner {
                 hook.on_stream_end(true);
 
                 // 追加 assistant 消息（含 tool_calls）
-                let assistant_msg = self.build_assistant_message(&response.content, &response.tool_calls);
+                let assistant_msg =
+                    self.build_assistant_message(&response.content, &response.tool_calls);
                 messages.push(assistant_msg);
 
                 // 执行工具前钩子
                 hook.before_execute_tools(&response.tool_calls);
 
                 // 执行工具
-                let results = self.execute_tools(&spec, &response.tool_calls, cancel.clone()).await;
+                let results = self
+                    .execute_tools(&spec, &response.tool_calls, cancel.clone())
+                    .await;
 
                 // 检查致命错误
                 if spec.fail_on_tool_error {
                     let fatal_error = results.iter().find(|r| r.is_error);
                     if let Some(err) = fatal_error {
-                        return Ok(AgentRunResult::tool_error(
-                            err.content.clone(),
-                            messages,
-                        ));
+                        return Ok(AgentRunResult::tool_error(err.content.clone(), messages));
                     }
                 }
 
@@ -151,7 +155,8 @@ impl AgentRunner {
 
         // 达到最大迭代次数
         let max_msg = format!("Reached maximum iterations ({})", spec.max_iterations);
-        let mut result = AgentRunResult::max_iterations(max_msg.clone(), messages, spec.max_iterations);
+        let mut result =
+            AgentRunResult::max_iterations(max_msg.clone(), messages, spec.max_iterations);
         result.tools_used = tools_used;
         result.tool_events = tool_events;
         result.usage = usage;
@@ -166,18 +171,24 @@ impl AgentRunner {
         messages: &[ChatMessage],
         cancel: CancellationToken,
     ) -> Result<LLMResponse, AppError> {
-        let response = self.provider.chat(ChatRequest {
-            model: &spec.model,
-            messages,
-            system: Some(&spec.system_prompt),
-            tools: &spec.tools,
-            tool_choice: ToolChoice::Auto,
-            max_tokens: spec.max_tokens.map(|n| n as u32),
-            cancel,
-        }).await?;
+        let response = self
+            .provider
+            .chat(ChatRequest {
+                model: &spec.model,
+                messages,
+                system: Some(&spec.system_prompt),
+                tools: &spec.tools,
+                tool_choice: ToolChoice::Auto,
+                max_tokens: spec.max_tokens.map(|n| n as u32),
+                cancel,
+            })
+            .await?;
 
         // 解析工具调用
-        let tool_calls = response.message.content.iter()
+        let tool_calls = response
+            .message
+            .content
+            .iter()
             .filter_map(|part| match part {
                 MessageContent::ToolUse { id, name, input } => Some(ToolCall {
                     id: id.clone(),
@@ -210,15 +221,18 @@ impl AgentRunner {
         hook: &mut dyn AgentHook,
         cancel: CancellationToken,
     ) -> Result<LLMResponse, AppError> {
-        let mut stream = self.provider.chat_stream(ChatRequest {
-            model: &spec.model,
-            messages,
-            system: Some(&spec.system_prompt),
-            tools: &spec.tools,
-            tool_choice: ToolChoice::Auto,
-            max_tokens: spec.max_tokens.map(|n| n as u32),
-            cancel,
-        }).await?;
+        let mut stream = self
+            .provider
+            .chat_stream(ChatRequest {
+                model: &spec.model,
+                messages,
+                system: Some(&spec.system_prompt),
+                tools: &spec.tools,
+                tool_choice: ToolChoice::Auto,
+                max_tokens: spec.max_tokens.map(|n| n as u32),
+                cancel,
+            })
+            .await?;
 
         let mut content = String::new();
         let mut tool_calls = Vec::new();
@@ -231,15 +245,25 @@ impl AgentRunner {
                     content.push_str(&text);
                     hook.on_stream(&text);
                 }
-                ProviderEvent::ToolCall { id, name, arguments_json } => {
+                ProviderEvent::ToolCall {
+                    id,
+                    name,
+                    arguments_json,
+                } => {
                     tool_calls.push(ToolCall {
                         id,
                         name,
                         arguments: arguments_json,
                     });
                 }
-                ProviderEvent::Finished { usage: round_usage, stop_reason } => {
-                    usage = TokenUsage::new(round_usage.input_tokens as usize, round_usage.output_tokens as usize);
+                ProviderEvent::Finished {
+                    usage: round_usage,
+                    stop_reason,
+                } => {
+                    usage = TokenUsage::new(
+                        round_usage.input_tokens as usize,
+                        round_usage.output_tokens as usize,
+                    );
                     finish_reason = stop_reason;
                     break;
                 }
@@ -263,14 +287,19 @@ impl AgentRunner {
         cancel: CancellationToken,
     ) -> Vec<ToolResultMessage> {
         if spec.parallel_tools {
-            self.tool_registry.execute_calls(calls.to_vec(), cancel).await
+            self.tool_registry
+                .execute_calls(calls.to_vec(), cancel)
+                .await
                 .unwrap_or_else(|e| {
                     tracing::error!(error = %e, "tool_execution_failed");
-                    calls.iter().map(|c| ToolResultMessage {
-                        tool_call_id: c.id.clone(),
-                        content: format!("Error: {}", e),
-                        is_error: true,
-                    }).collect()
+                    calls
+                        .iter()
+                        .map(|c| ToolResultMessage {
+                            tool_call_id: c.id.clone(),
+                            content: format!("Error: {}", e),
+                            is_error: true,
+                        })
+                        .collect()
                 })
         } else {
             // 顺序执行
@@ -312,7 +341,9 @@ impl AgentRunner {
         let mut parts = Vec::new();
 
         if !text.is_empty() {
-            parts.push(MessageContent::Text { text: text.to_string() });
+            parts.push(MessageContent::Text {
+                text: text.to_string(),
+            });
         }
 
         for call in tool_calls {

@@ -412,8 +412,7 @@ impl SessionManager {
                     let user_message: ChatMessage = serde_json::from_str(&user_json).ok()?;
                     let assistant_message: Option<ChatMessage> =
                         asst_json.and_then(|j| serde_json::from_str(&j).ok());
-                    let tool_trace: Vec<ToolTrace> =
-                        serde_json::from_str(&trace_json).ok()?;
+                    let tool_trace: Vec<ToolTrace> = serde_json::from_str(&trace_json).ok()?;
                     let run_status = run_status_from_string(&status_str);
                     let created = DateTime::parse_from_rfc3339(&created_str)
                         .map(|d| d.with_timezone(&Utc))

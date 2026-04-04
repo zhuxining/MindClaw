@@ -87,7 +87,12 @@ pub struct LoopHook {
 
 /// LoopHook 发布器 trait（解耦 MessageBus）
 pub trait LoopHookPublisher: Send {
-    fn emit_status(&self, request_id: &str, session_id: &str, phase: crate::agent::events::UserVisiblePhase);
+    fn emit_status(
+        &self,
+        request_id: &str,
+        session_id: &str,
+        phase: crate::agent::events::UserVisiblePhase,
+    );
     fn emit_chunk(&self, request_id: &str, session_id: &str, segment_id: u64, content: &str);
     fn emit_segment_end(&self, request_id: &str, session_id: &str, segment_id: u64, resuming: bool);
 }
@@ -255,7 +260,8 @@ impl AgentHook for TestHook {
 
     fn on_stream(&mut self, delta: &str) {
         self.stream_deltas.push(delta.to_string());
-        self.events.push(HookEvent::StreamDelta { len: delta.len() });
+        self.events
+            .push(HookEvent::StreamDelta { len: delta.len() });
     }
 
     fn on_stream_end(&mut self, resuming: bool) {

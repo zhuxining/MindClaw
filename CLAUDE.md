@@ -23,7 +23,7 @@ bun run check-types     # TypeScript type-check
 
 ### Layer Principles
 
-> Details: `docs/design/architecture/08-dependencies.md`
+> Details: `docs/design/architecture/reference/dependencies.md`
 
 - **Web (React)** = thin client: render UI, collect input, call `invoke()`. No HTTP requests, no persistence, no business logic.
 - **Tauri (Plugins)** = glue: bridge OS capabilities only. Use Plugin JS API for clipboard/dialog/notification/fs. Never use plugins for HTTP, WebSocket, KV storage, or shell execution.

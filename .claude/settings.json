@@ -1,18 +1,5 @@
 {
-	"hooks": {
-		"PostToolUse": [
-			{
-				"matcher": "Write|Edit",
-				"hooks": [
-					{
-						"type": "command",
-						"command": "bun run check && bun run check-types && cargo fmt && cargo clippy -- -D warnings",
-						"timeout": 30
-					}
-				]
-			}
-		]
-	},
+	"hooks": {},
 	"enabledPlugins": {
 		"security-guidance@claude-plugins-official": true,
 		"feature-dev@claude-plugins-official": true,

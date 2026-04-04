@@ -89,7 +89,6 @@ Storage 层负责三类存储介质（SQLite、Markdown 文件、OS Keychain）�
 | 向量嵌入存储在哪里？ | SQLite BLOB 列（内嵌向量） | 独立向量数据库服务（如 Qdrant） | 本地桌面应用不适合依赖独立数据库服务；个人规模的笔记量不需要专业向量数据库的性能 |
 | 会话历史是否永久保留在 SQLite？ | 90 天后归档到 JSONL 冷存储 | 永久保留在 SQLite | SQLite 文件随会话历史增长影响查询性能；归档保留完整历史，主库保持快速 |
 | 私密内容如何与 Agent 隔离？ | PathGuard 在 Rust 层拒绝 `vault/private/` 路径 | 文件系统权限（chmod/ACL） | Rust 层强制比文件系统权限更可靠、更细粒度；用户不需要手动维护文件权限 |
-| 私密内容如何与 Agent 隔离？ | PathGuard 在 Rust 层拒绝 `vault/private/` 路径 | 文件系统权限（chmod/ACL） | Rust 层强制比文件系统权限更可靠、更细粒度；用户不需要手动维护文件权限 |
 | SQLite 并发访问如何处理？ | WAL 模式（Writer-Ahead Logging） + Arc 共享连接池 | 每个 Service 独立 SQLite 连接 | WAL 模式支持并发读；共享连接池减少文件句柄数量；独立连接需要应用层协调并发写 |
 | 向量嵌入如何存储？ | SQLite BLOB 列（与结构化数据同库） | 独立向量数据库 | 个人应用数据量小，SQLite BLOB 足够；独立数据库增加部署复杂度 |
 | Markdown 文件命名冲突如何处理？ | 标题 slugify + 序号后缀 | 覆盖或拒绝 | 保留用户意图（标题），同时避免覆盖；序号后缀明确标识不同版本 |

@@ -37,7 +37,7 @@ Agent Core 负责定义业务编排层与执行层的边界契约，不负责具
 │  MessageBus I/O · SessionManager · ContextPipeline  │
 │  MemoryStore · CommandRouter · 流式分发              │
 ├─────────────────────────────────────────────────────┤
-│           AgentHook（六个生命周期扩展点）              │
+│           AgentHook（七个生命周期扩展点）              │
 │  wants_streaming · before_iteration · on_stream      │
 │  on_stream_end · before_execute_tools · after_iteration │
 │  finalize_content                                    │
@@ -116,6 +116,6 @@ MessageBus ──► InboundMessage
 | 决策问题 | 选择 | 放弃的替代方案 | 理由 |
 |---------|------|--------------|------|
 | LLM 迭代逻辑放在哪一层？ | 独立 AgentRunner | AgentLoop 内部嵌入循环 | Runner 无状态，子代理、CLI、Cron 可直接复用，不需要 MessageBus |
-| 业务层如何向执行层注入行为？ | AgentHook trait（六个扩展点） | 回调闭包或事件总线 | trait 方法签名明确，编译期约束可注入的行为类型 |
+| 业务层如何向执行层注入行为？ | AgentHook trait（七个扩展点） | 回调闭包或事件总线 | trait 方法签名明确，编译期约束可注入的行为类型 |
 | AgentRunSpec 是否可变？ | 构建后不可变 | 允许执行中修改 | 不可变保证执行可预测，便于复现和测试 |
 | AgentHook 的实现数量？ | 三种（LoopHook / NoOpHook / TestHook） | 一种通用 Hook 含大量布尔配置 | 不同场景行为差异显著（流式/非流式），独立实现比条件分支更清晰，各实现职责单一 |

@@ -8,6 +8,33 @@
 
 ## Rust 后端（`src-tauri/src/`）
 
+### Agent 模块当前收敛范围
+
+`agent/` 当前采用“**单文件优先，tools 保持目录**”的组织方式。
+
+当前已经收敛为单文件的边界：
+
+- `agent.rs`：AgentProfile / AgentRegistry / ModelRouter
+- `loop_.rs`：AgentLoop 编排层，同时内聚 `/new /stop /restart /status` 等 loop 控制命令
+- `runner.rs`：AgentRunner 执行层
+- `hooks.rs`：RunHooks 与交互式 Hook 实现
+- `spawn.rs`：派生执行与后台代理调度
+- `session.rs`：会话管理
+- `context.rs`：上下文装配
+- `events.rs`：运行事件
+- `spec.rs`：run 契约
+- `memory.rs`：记忆数据结构与召回入口
+- `skills.rs`：技能清单、元数据与注册表
+- `observability.rs`：观测接口与 tracing 实现
+
+当前**仍保留目录**的范围：
+
+- `tools/`：按规划继续保留目录
+
+因此，这里的目录结构已经是最新现状。
+
+---
+
 ```
 src/
 ├── lib.rs                  Tauri App 入口，注册插件和命令
@@ -15,56 +42,36 @@ src/
 ├── error.rs                统一错误类型 AppError（实现 Serialize）
 │
 ├── runtime/                统一运行时
-│   ├── mod.rs              AppRuntime 核心结构
+│   ├── mod.rs              AppRuntime 核心结构（含 AgentLoop / AgentRegistry / ModelRouter 注入结果）
 │   ├── builder.rs          AppRuntimeBuilder
 │   ├── config.rs           AppConfig
 │   └── services.rs         ServiceContainer
 │
 ├── agent/                  Agent 核心系统
 │   ├── mod.rs              模块导出
-│   ├── agent_loop.rs       AgentLoop（业务编排层）
-│   ├── runner.rs           AgentRunner（纯执行层）
-│   ├── builder.rs          AgentBuilder
-│   ├── spec.rs             AgentRunSpec / AgentRunResult
-│   ├── context.rs          ContextPipeline / ContextSource
-│   ├── session.rs          SessionManager / AgentSession
-│   ├── events.rs           ProviderEvent / AgentEvent
-│   ├── hook.rs             AgentHook trait / LoopHook / NoOpHook
-│   ├── observer.rs         AgentObserver（日志/指标）
-│   │
-│   ├── commands/           Agent 控制指令
-│   │   ├── mod.rs          AgentCommandRegistry
-│   │   ├── new.rs          /new 新建会话
-│   │   ├── stop.rs         /stop 停止
-│   │   ├── restart.rs      /restart 重启
-│   │   ├── status.rs       /status 状态查询
-│   │   └── traits.rs       AgentCommand trait
-│   │
+│   ├── agent.rs            AgentProfile / AgentKind / AgentRegistry / ModelRouter
+│   ├── loop_.rs            AgentLoop（消息编排、命令路由、session 串行化、/new /stop /restart /status）
+│   ├── runner.rs           AgentRunner（LLM 迭代循环与工具执行驱动）
+│   ├── spec.rs             AgentRunSpec / AgentRunResult / StopReason / TokenUsage
+│   ├── context.rs          ContextPipeline / ContextSource / BuiltContext
+│   ├── session.rs          SessionManager / AgentSession / TurnRecord
+│   ├── events.rs           ProviderEvent / AgentEvent / UsageStats
+│   ├── hooks.rs            RunHooks / InteractiveRunHooks / NoopRunHooks / RecordingRunHooks
+│   ├── spawn.rs            AgentSpawnDispatcher / SubAgent 定义 / 后台派发
+│   ├── memory.rs           Memory / MemoryCategory / recall
+│   ├── skills.rs           SkillManifest / SkillMetadata / SkillsRegistry
+│   ├── observability.rs    AgentObserver / TracingObserver / CompositeObserver
 │   ├── tools/              工具系统
 │   │   ├── mod.rs          ToolRegistry
 │   │   ├── traits.rs       Tool trait
 │   │   ├── path_guard.rs   PathGuard 路径沙箱
 │   │   ├── shell.rs        Shell 工具
-│   │   ├── file_read.rs    文件读取
-│   │   ├── file_write.rs   文件写入
-│   │   ├── file_edit.rs    文件编辑（内容替换）
+│   │   ├── file_ops.rs     文件读取 + 写入 + 编辑
 │   │   ├── find_files.rs   文件搜索（Glob）
 │   │   ├── search_content.rs 内容搜索（正则）
-│   │   └── mcp.rs          MCP 工具代理
+│   │   ├── agent_spawn.rs  同步子代理入口 + 后台代理入口
+│   │   └── mcp.rs          MCP external tool bridge（当前仍注册为 Tool）
 │   │
-│   ├── skills/             技能扩展
-│   │   ├── mod.rs
-│   │   └── registry.rs     SkillsRegistry
-│   │
-│   ├── memory/             记忆系统
-│   │   ├── mod.rs
-│   │   ├── recall.rs       向量检索
-│   │   └── types.rs        Memory 类型定义
-│   │
-│   └── subagent/           后台子代理
-│       ├── mod.rs
-│       ├── manager.rs      SubAgentManager
-│       └── types.rs
 │
 ├── bus/                    消息总线
 │   ├── mod.rs              MessageBus

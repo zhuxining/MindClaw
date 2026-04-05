@@ -2,9 +2,12 @@
 //!
 //! 从 CliRuntime::new_with_agent() 提取的通用初始化逻辑
 
-use crate::agent::AgentBuilder;
+use crate::agent::{AgentLoop, AgentRegistry, ModelRouter};
 use crate::bus::MessageBus;
 use crate::error::AppResult;
+use crate::providers::config::builtin_configs;
+use crate::providers::openai_compat::OpenAICompatProvider;
+use crate::providers::Provider;
 use crate::runtime::config::AppConfig;
 use crate::runtime::services::ServiceContainer;
 use crate::runtime::AppRuntime;
@@ -105,9 +108,23 @@ impl AppRuntimeBuilder {
         // 5. 创建 MessageBus
         let bus = Arc::new(MessageBus::new(config.bus_capacity));
 
-        // 6. 使用 AgentBuilder 构建 AgentLoop
-        let agent_builder = AgentBuilder::new(config.clone(), bus.clone(), session_mgr.clone());
-        let agent = Arc::new(agent_builder.build().await?);
+        // 6. 初始化 Provider / AgentRegistry / ModelRouter
+        let provider = init_provider(&config)?;
+        let agent_registry = Arc::new(AgentRegistry::bootstrap(&config, provider.model_id()));
+        let model_router = Arc::new(ModelRouter::new());
+
+        // 7. 初始化 AgentLoop（含 AgentSpawnDispatcher 和 SpawnBackgroundAgentTool）
+        let agent = Arc::new(
+            AgentLoop::init(
+                config.clone(),
+                bus.clone(),
+                session_mgr.clone(),
+                provider,
+                agent_registry.clone(),
+                model_router.clone(),
+            )
+            .await?,
+        );
 
         let shutdown = CancellationToken::new();
 
@@ -116,6 +133,8 @@ impl AppRuntimeBuilder {
             services,
             bus,
             agent,
+            agent_registry,
+            model_router,
             session_mgr,
             config,
             shutdown,
@@ -128,4 +147,33 @@ impl Default for AppRuntimeBuilder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn init_provider(config: &AppConfig) -> AppResult<Arc<dyn Provider>> {
+    let configs = builtin_configs();
+    let provider_config = configs
+        .iter()
+        .find(|c| c.name == config.provider_id)
+        .ok_or_else(|| {
+            crate::error::AppError::Provider(format!(
+                "provider '{}' not found in builtin configs",
+                config.provider_id
+            ))
+        })?;
+
+    let provider = OpenAICompatProvider::from_env(provider_config, config.model_id.as_deref())
+        .map_err(|e| {
+            crate::error::AppError::Provider(format!(
+                "failed to initialize {} provider: {}",
+                config.provider_id, e
+            ))
+        })?;
+
+    tracing::info!(
+        provider = %config.provider_id,
+        model = %provider.model_id(),
+        "provider_initialized"
+    );
+
+    Ok(Arc::new(provider))
 }

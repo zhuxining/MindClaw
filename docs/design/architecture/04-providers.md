@@ -1,69 +1,87 @@
 > **Status**: `active`
 
-# Providers — LLM 适配层
+# Providers — LLM Provider Adapter 层
 
 ---
 
 ## § 职责定位
 
-Providers 层负责将 AgentRunner 的 LLM 调用请求适配到各服务商 API，不负责上下文构建、工具执行、会话管理或任何业务逻辑。
+Providers 层负责将 `AgentRunner` 的统一 `ChatRequest` 适配到各服务商 API，不负责上下文构建、Session 管理、工具执行或 Agent 路由。
 
 ---
 
-## § 边界与实体
+## § 核心原则
 
-**输入**：AgentRunner 传入的消息列表（`Vec<ChatMessage>`）、工具 Schema 列表（`Vec<ToolSchema>`）和模型参数（模型标识、采样参数）。
+**只做协议适配**：Provider Adapter 只处理传输、认证、重试、流式解析与 vendor-specific 请求映射。
 
-**输出**：LLM 响应内容，以两种形式提供：
+**能力声明集中**：模型支持的 streaming、tools、structured output 等能力由 Provider/Model Profile 声明，而不是散落在 AgentLoop 中硬编码。
 
-- `ChatResponse`（非流式）：包含完整响应文本、工具调用列表、停止原因、Token 用量。
-- `Stream<ProviderEvent>`（流式）：事件序列，涵盖文本增量、工具调用信息、用量统计。
+**请求语义统一**：上层只认识 `ChatRequest`、`ChatResponse` 与 `ProviderEvent`，不直接使用 Claude/OpenAI 原生消息格式。
 
-**核心实体**：
+---
 
-**Provider trait**：所有 LLM 服务商适配器的统一接口契约。
+## § 核心对象
 
-```
+**LLMProviderClient trait**
+
+所有 LLM 服务商适配器的统一接口。
+
+```rust
 async fn chat(&self, req: &ChatRequest) -> Result<ChatResponse>
 fn chat_stream(&self, req: &ChatRequest) -> impl Stream<Item = ProviderEvent>
-fn model_id(&self) -> &str
+fn supports_model(&self, model: &str) -> bool
 ```
 
-**ChatRequest**：单次 LLM 调用的完整请求参数，服务商无关的内部表示。
-关键属性：消息列表（`Vec<ChatMessage>`）、工具 Schema 列表、模型标识符、采样温度、最大 token 数。
-关系：由 AgentRunner 构建，传给 Provider；Provider 将其转换为服务商特定的 HTTP 请求体。
+**ChatRequest**
 
-**ChatMessage**：消息列表中的单条消息，与任何服务商 API 格式解耦。
-关键属性：角色（System / User / Assistant / ToolResult）、文本内容、工具调用列表（仅 Assistant）、媒体附件（仅 User）。
-关系：由 ContextPipeline 构建，通过 AgentRunSpec 传入 AgentRunner，再传给 Provider 进行格式转换。
+单次 LLM 调用的统一请求体。
+关键属性：消息列表、工具 schema、模型标识、采样参数、响应格式。
 
-**ProviderEvent**：流式响应中的单个事件，表示一段增量或状态变更。
-关键属性：事件类型（TextDelta / ToolCallStart / ToolCallArgsDelta / ToolCallEnd / StreamEnd）、事件内容。
-关系：由流式 Provider 持续产生，由 AgentRunner 处理并通过 `hook.on_stream()` 转发给 AgentHook。
+**ProviderEvent**
 
-**ProviderRegistry**：已配置 Provider 实例的路由表，根据模型标识符查找对应 Provider。
-关键属性：模型标识符前缀到 Provider 实例的映射。
-关系：由 AppRuntimeBuilder 初始化，注入 AgentRunner；AgentRunner 在每次 LLM 调用前通过 Registry 查找 Provider。
+流式响应的统一事件。
+关键属性：文本增量、工具调用、完成事件、用量统计。
+
+**ProviderRegistry**
+
+Provider Adapter 的注册表。
+关键属性：provider id、模型映射、默认模型、能力目录。
+关系：由 AppRuntimeBuilder 初始化，注入 AgentRunner；AgentRunner 根据 `AgentRunSpec.resolved_provider` 查找对应 Adapter。
 
 ---
 
-## § 已支持的 Provider
+## § 已支持的 Provider 类型
 
 | Provider 类型 | 覆盖模型 | 认证方式 |
 |-------------|---------|---------|
-| Anthropic（Claude） | claude-opus-4-6、claude-sonnet-4-6、claude-haiku-4-5 等 | `X-API-Key` 请求头 |
-| OpenAI 兼容 | OpenAI GPT 系列、Ollama 本地模型、DeepSeek 等 | `Authorization: Bearer` 请求头 |
+| Anthropic（Claude） | Claude 系列 | `X-API-Key` |
+| OpenAI 兼容 | OpenAI、DeepSeek、Ollama 等 | `Authorization: Bearer` |
 
 ---
 
 ## § 关键流程
 
-1. AppRuntimeBuilder 从 OS Keychain 读取各服务商的 API Key，构建 Provider 实例，注册到 ProviderRegistry。
-2. AgentRunner 从 AgentRunSpec 读取 `model` 字段，向 ProviderRegistry 查询对应 Provider。
-3. AgentRunner 根据 `hook.wants_streaming()` 选择调用 `provider.chat()` 或 `provider.chat_stream()`。
-4. Provider 将 `ChatRequest` 转换为服务商特定的 JSON 请求体，通过 HTTP 发送至 LLM API。
-5. 流式模式下，Provider 解析 SSE（Server-Sent Events）响应，将每个事件解析为 `ProviderEvent` 产出。
-6. AgentRunner 消费 `ProviderEvent` 流：TextDelta 事件转发给 `hook.on_stream()`，ToolCall 事件积累后传给工具执行，StreamEnd 事件触发 `hook.on_stream_end()`。
+1. AppRuntimeBuilder 读取 Provider 配置与密钥
+2. 构建 Provider Adapter，并注册到 ProviderRegistry
+3. AgentLoop 经由 ModelRouter 解析出本次 run 的 provider/model
+4. AgentRunner 根据 `resolved_provider` 选择 Adapter
+5. Adapter 将统一 `ChatRequest` 转为厂商请求体
+6. 流式模式下，Adapter 将 SSE/stream 解析为 `ProviderEvent`
+7. AgentRunner 消费事件并驱动迭代循环
+
+---
+
+## § Provider 与 Runtime 的边界
+
+Provider Adapter 不负责：
+
+- 选择用哪个 AgentProfile
+- 组装历史上下文
+- 过滤工具白名单
+- 执行工具调用
+- 处理 child/background invocation
+
+这些职责都属于 Agent Runtime。
 
 ---
 
@@ -71,12 +89,7 @@ fn model_id(&self) -> &str
 
 | 决策问题 | 选择 | 放弃的替代方案 | 理由 |
 |---------|------|--------------|------|
-| 如何支持多个 LLM 服务商？ | Provider trait + ProviderRegistry（工厂模式） | 单一硬编码实现 | trait 允许新增服务商时只增加新实现文件，不修改 AgentRunner；OpenAI 兼容 Provider 已覆盖大量兼容接口 |
-| 流式和非流式是否统一接口？ | 两个独立方法（`chat` / `chat_stream`） | 单一方法自动判断返回类型 | 两者返回类型不同（完整对象 vs 事件流），在 Rust 的类型系统中无法统一；分开方法意图更清晰 |
-| ChatMessage 格式是否依赖服务商？ | 服务商无关的内部格式，Provider 负责转换 | 直接使用 Anthropic 或 OpenAI 的消息格式 | 内部格式统一使 ContextPipeline 和 AgentRunner 不依赖任何服务商 SDK，切换服务商无需改动上层 |
-| API Key 如何传入 Provider？ | 初始化时从 OS Keychain 读取，注入构造函数 | 每次 LLM 调用前从 Keychain 读取 | 初始化时读取一次，避免频繁 Keychain I/O 系统调用；Provider 实例在内存中持有 Key（生命周期与 AppRuntime 绑定） |
-| 如何处理 API 调用失败？ | Provider 层重试（指数退避），超出上限返回错误 | AgentRunner 层重试 | Provider 最了解服务商的限速策略（rate limit 重试）；AgentRunner 层重试会重复执行 `before_iteration` 等 Hook 逻辑 |
-| 工具调用格式如何适配？ | Provider 层将内部格式转换为服务商特定格式（如 Claude 的 `tool_use` vs OpenAI 的 `function`） | 所有服务商使用统一格式 | 各服务商 API 格式差异客观存在，Provider 层屏蔽差异使上层无需感知 |
-| 多个模型如何选择 Provider？ | ProviderRegistry 按模型标识符前缀路由（如 `claude-*` → ClaudeProvider） | AgentLoop 硬编码模型到 Provider 映射 | Registry 集中管理路由规则，新增模型类型只需修改 Registry 映射，不改动业务代码 |
-| 如何处理模型不支持的特性？ | Provider 层返回错误（如不支持工具调用） | 上层检测模型标识符后跳过特性 | Provider 层最了解模型能力；返回错误使上层可以优雅降级（如提示用户切换模型） |
-| 流式和非流式 Token 统计是否一致？ | 是，两者均返回 TokenUsage | 流式不返回用量 | 用量统计对成本监控和预算控制重要；流式响应结束时汇总用量并返回 |
+| 如何支持多个 LLM 服务商？ | `LLMProviderClient + ProviderRegistry` | 单一硬编码实现 | 便于扩展新服务商且不污染 Agent Runtime |
+| 流式与非流式是否分开接口？ | 是 | 单一动态返回类型 | 两种调用返回形态不同，分开更清晰 |
+| Provider 是否持有业务状态？ | 否 | Provider 直接感知 Session/Agent | Provider 只应关心协议与能力，而不是业务编排 |
+| 模型能力由谁声明？ | Provider / Model Profile | AgentLoop 手写判断 | 能力声明集中后，模型替换和回退策略更稳定 |

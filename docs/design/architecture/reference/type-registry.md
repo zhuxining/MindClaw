@@ -10,7 +10,8 @@
 
 | Trait | 位置 | 关键约束 | 用途 |
 |-------|------|---------|------|
-| `AgentHook` | `src/agent/hook.rs` | 七个扩展点方法，`finalize_content` 返回处理后内容 | AgentRunner 与业务层之间的生命周期桥梁 |
+| `RunHooks` | `src/agent/hooks.rs` | 七个扩展点方法，`finalize_content` 返回处理后内容 | AgentRunner 与业务层之间的生命周期桥梁 |
+| `RunHookPublisher` | `src/agent/hooks.rs` | 发布状态、文本分段和段结束信号 | 将 `InteractiveRunHooks` 事件桥接到 MessageBus |
 | `Tool` | `src/agent/tools/traits.rs` | `execute(&self, input: Value) -> Result<Value, ToolError>`，必须声明 `name()` 和 `schema()` | 内置工具实现统一接口 |
 | `McpTransport` | `src/agent/tools/mcp.rs` | `start()` / `stop()` / `send_request()`，支持 stdio 和 streamable-http | MCP 客户端传输层抽象 |
 
@@ -18,7 +19,7 @@
 
 | Trait | 位置 | 关键约束 | 用途 |
 |-------|------|---------|------|
-| `LlmProvider` | `src/providers/traits.rs` | `chat()` / `chat_stream()` 两种调用模式，返回标准 `Message` 类型 | 统一 Claude / OpenAI 兼容 API 调用 |
+| `Provider` | `src/providers/traits.rs` | `chat()` / `chat_stream()` 两种调用模式，返回标准 `ProviderResponse` 或流事件 | 统一 Claude / OpenAI 兼容 API 调用 |
 
 ### Channel 契约
 
@@ -43,9 +44,16 @@
 |--------|------|------|---------|
 | `AgentRunSpec` | `src/agent/spec.rs` | 一次 Agent 执行的完整声明式配置 | 构建后不可变，Clone 实现 |
 | `AgentRunResult` | `src/agent/spec.rs` | 一次执行的完整结构化输出 | 包含完整消息链，用于 Turn 持久化 |
-| `Message` | `src/agent/spec.rs` | 单条对话消息 | System / User / Assistant / ToolResult 四种角色 |
-| `ToolCall` | `src/agent/spec.rs` | LLM 请求的工具调用 | 含 `tool_call_id`，用于结果匹配 |
+| `AgentProfile` | `src/agent/agent.rs` | Agent 静态定义 | 当前包含 model 与 execution 默认值，是定义层的最小可用形态 |
+| `AgentRegistry` | `src/agent/agent.rs` | AgentProfile 注册表 | 当前为轻量内存注册表，已接入 AppRuntime / AgentLoop / spawn |
+| `ModelRouter` | `src/agent/agent.rs` | 根据 profile 解析模型 | 当前为最小实现，直接返回 profile.model，已接入主执行链路 |
+| `ChatMessage` | `src/providers/traits.rs` | 单条对话消息 | System / User / Assistant / ToolResult 四种角色 |
+| `ToolCall` | `src/agent/tools/mod.rs` | LLM 请求的工具调用 | 含 `tool_call_id`，用于结果匹配 |
 | `IterationState` | `src/agent/runner.rs` | 单次迭代运行时快照 | 仅迭代期间存在，传给 Hook |
+| `AgentSpawnDispatcher` | `src/agent/spawn.rs` | 管理派生执行 | 当前已接通 inline `SubAgent` 与后台派发 |
+| `SubAgentDef` | `src/agent/spawn.rs` | 子代理静态定义 | 含 mode / model / capabilities / prompt |
+| `Memory` | `src/agent/memory.rs` | Agent 私有观察记录 | 含重要性权重和衰减系数 |
+| `SkillManifest` | `src/agent/skills.rs` | 技能完整清单 | 启动时只索引元数据，激活时加载完整内容 |
 
 ### 消息总线
 
@@ -60,7 +68,6 @@
 |--------|------|------|---------|
 | `Session` | `src/agent/session.rs` | 运行时会话状态 | 按 `session_key` 唯一标识 |
 | `Turn` | `src/models/conversation.rs` | 一次"用户输入 + Agent 响应"记录 | 持久化到 SQLite |
-| `Memory` | `src/agent/memory/types.rs` | Agent 私有观察记录 | 含重要性权重和衰减系数 |
 | `Note` | `src/models/note.rs` | 用户知识笔记 | 对应 Markdown 文件，SQLite 维护索引 |
 | `Task` | `src/models/task.rs` | 用户待办项 | 支持状态流转 |
 
@@ -76,12 +83,12 @@
 
 ## 关键类型签名
 
-### AgentHook
+### RunHooks
 
 ```rust
-pub trait AgentHook: Send + Sync {
+pub trait RunHooks: Send {
     fn wants_streaming(&self) -> bool;
-    fn before_iteration(&mut self, state: &IterationState);
+    fn before_iteration(&mut self, state: &mut IterationState);
     fn on_stream(&mut self, delta: &str);
     fn on_stream_end(&mut self, resuming: bool);
     fn before_execute_tools(&mut self, calls: &[ToolCall]);
@@ -90,17 +97,16 @@ pub trait AgentHook: Send + Sync {
 }
 ```
 
-### LlmProvider
+### Provider
 
 ```rust
 #[async_trait]
-pub trait LlmProvider: Send + Sync {
-    async fn chat(&self, messages: &[Message], tools: &[ToolSchema]) -> Result<Message, AppError>;
+pub trait Provider: Send + Sync {
+    fn name(&self) -> &str;
+    fn model_id(&self) -> &str;
     async fn chat_stream(
-        &self,
-        messages: &[Message],
-        tools: &[ToolSchema],
-    ) -> Result<BoxStream<'_, Result<String, AppError>>, AppError>;
+        &self, request: ChatRequest<'_>
+    ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ProviderEvent>> + Send>>>;
 }
 ```
 

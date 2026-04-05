@@ -12,10 +12,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Session 持久化策略
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionPersistence {
+    /// 主 Agent：写 SQLite，跨 turn 上下文延续
+    Persistent,
+    /// SubAgent / Background Agent：仅内存，不写 DB
+    Ephemeral,
+}
+
 /// Agent 层的 Session 结构（内部使用，与 models::Session 区分）
 #[derive(Debug, Clone)]
 pub struct AgentSession {
     pub id: String,
+    /// 归属哪个 Agent 实例
+    pub agent_id: String,
+    /// 父 Agent 的 session ID（用于隐性 team 可观测性链路）
+    pub parent_session_id: Option<String>,
+    /// 存储策略：主 Agent = Persistent，SubAgent = Ephemeral
+    pub persistence: SessionPersistence,
     pub sender: String,
     pub mode: ConversationMode,
     pub turns: Vec<TurnRecord>,
@@ -26,8 +41,12 @@ pub struct AgentSession {
 impl AgentSession {
     pub fn new(sender: String, mode: ConversationMode) -> Self {
         let now = Utc::now();
+        let id = uuid::Uuid::new_v4().to_string();
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: id.clone(),
+            id,
+            parent_session_id: None,
+            persistence: SessionPersistence::Persistent,
             sender,
             mode,
             turns: Vec::new(),
@@ -39,9 +58,28 @@ impl AgentSession {
     pub fn with_id(id: String, sender: String, mode: ConversationMode) -> Self {
         let now = Utc::now();
         Self {
+            agent_id: id.clone(),
             id,
+            parent_session_id: None,
+            persistence: SessionPersistence::Persistent,
             sender,
             mode,
+            turns: Vec::new(),
+            created: now,
+            updated: now,
+        }
+    }
+
+    /// 创建 Ephemeral session（SubAgent / Background Agent 使用，不写 DB）
+    pub fn ephemeral(agent_id: &str, parent_session_id: Option<&str>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            agent_id: agent_id.to_string(),
+            parent_session_id: parent_session_id.map(|s| s.to_string()),
+            persistence: SessionPersistence::Ephemeral,
+            sender: "system".to_string(),
+            mode: ConversationMode::Chat,
             turns: Vec::new(),
             created: now,
             updated: now,
@@ -216,6 +254,11 @@ impl SessionManager {
 
         if session.turns.len() > self.max_turns {
             session.turns = session.compressed_turns(self.keep_recent);
+        }
+
+        // Ephemeral session 不写 DB
+        if session.persistence == SessionPersistence::Ephemeral {
+            return Ok(());
         }
 
         let sid = session_id.to_string();
@@ -429,6 +472,9 @@ impl SessionManager {
             .collect();
 
         Ok(Some(AgentSession {
+            agent_id: id.clone(),
+            parent_session_id: None,
+            persistence: SessionPersistence::Persistent,
             id,
             sender,
             mode,

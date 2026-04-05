@@ -1,19 +1,18 @@
-//! SkillsRegistry - 技能注册表
+//! Skills 系统
 //!
+//! 基于 [Agent Skills](https://agentskills.io) 规范的能力扩展机制。
 //! 渐进式披露：
-//! - 启动阶段：扫描所有 SKILL.md，只解析 frontmatter（~100 tokens）
-//! - 激活阶段：根据用户消息匹配技能，加载完整 SKILL.md（< 5000 tokens）
+//! - 启动阶段：扫描所有 SKILL.md，只解析 frontmatter
+//! - 激活阶段：根据用户消息匹配技能，加载完整 SKILL.md
 //! - 按需加载：scripts/、references/、assets/ 资源文件
+//!
+//! 当前文件是从原 `skills/` 目录收敛而来的单文件版本。
 
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::RwLock;
-
-// ============================================================================
-// 核心类型
-// ============================================================================
 
 /// 技能清单（完整）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,10 +61,6 @@ impl From<&SkillManifest> for SkillMetadata {
     }
 }
 
-// ============================================================================
-// SkillsRegistry
-// ============================================================================
-
 /// 技能注册表
 pub struct SkillsRegistry {
     /// 搜索路径列表
@@ -105,10 +100,8 @@ impl SkillsRegistry {
                     continue;
                 }
 
-                // 只解析 frontmatter
                 match self.parse_metadata(&skill_file).await {
                     Ok(metadata) => {
-                        // 验证 name 与目录名匹配
                         let dir_name = path.file_name().unwrap().to_string_lossy();
                         if metadata.name != dir_name {
                             tracing::warn!(
@@ -134,8 +127,6 @@ impl SkillsRegistry {
     /// 解析技能元数据（仅 frontmatter）
     async fn parse_metadata(&self, path: &PathBuf) -> Result<SkillMetadata, AppError> {
         let content = tokio::fs::read_to_string(path).await?;
-
-        // 解析 YAML frontmatter
         let (frontmatter, _) = parse_frontmatter(&content)?;
 
         let name = frontmatter
@@ -167,7 +158,6 @@ impl SkillsRegistry {
 
     /// 激活技能（加载完整 SKILL.md）
     pub async fn activate(&self, name: &str) -> Result<SkillManifest, AppError> {
-        // 检查缓存
         {
             let manifests = self.manifests.read().await;
             if let Some(manifest) = manifests.get(name) {
@@ -175,17 +165,14 @@ impl SkillsRegistry {
             }
         }
 
-        // 从元数据索引获取路径
         let metadata = self
             .metadata_index
             .get(name)
             .ok_or_else(|| AppError::NotFound(format!("skill not found: {}", name)))?;
 
-        // 加载完整清单
         let skill_file = metadata.path.join("SKILL.md");
         let manifest = self.parse_manifest(&skill_file).await?;
 
-        // 缓存
         self.manifests
             .write()
             .await
@@ -197,7 +184,6 @@ impl SkillsRegistry {
     /// 解析完整技能清单
     async fn parse_manifest(&self, path: &PathBuf) -> Result<SkillManifest, AppError> {
         let content = tokio::fs::read_to_string(path).await?;
-
         let (frontmatter, body) = parse_frontmatter(&content)?;
 
         let name = frontmatter
@@ -317,10 +303,6 @@ impl SkillsRegistry {
     }
 }
 
-// ============================================================================
-// 辅助函数
-// ============================================================================
-
 /// 解析 YAML frontmatter（简化实现，不依赖 serde_yaml）
 fn parse_frontmatter(
     content: &str,
@@ -331,7 +313,6 @@ fn parse_frontmatter(
         return Ok((HashMap::new(), content));
     }
 
-    // 找到结束的 ---
     let rest = &content[3..];
     let end_pos = rest.find("---");
 
@@ -339,7 +320,6 @@ fn parse_frontmatter(
         let frontmatter_str = &rest[..pos];
         let body = &rest[pos + 3..];
 
-        // 简单解析 YAML frontmatter
         let mut frontmatter: HashMap<String, serde_json::Value> = HashMap::new();
         let mut current_key: Option<String> = None;
         let mut in_nested = false;
@@ -350,7 +330,6 @@ fn parse_frontmatter(
                 continue;
             }
 
-            // 检测嵌套对象开始
             if line.ends_with(':') && !line.starts_with(' ') && !line.starts_with('\t') {
                 current_key = Some(line[..line.len() - 1].to_string());
                 in_nested = true;
@@ -361,12 +340,10 @@ fn parse_frontmatter(
                 continue;
             }
 
-            // 解析键值对
             if let Some(colon_pos) = line.find(':') {
                 let key = line[..colon_pos].trim();
                 let value = line[colon_pos + 1..].trim();
 
-                // 处理嵌套对象内的属性
                 if in_nested && (line.starts_with(' ') || line.starts_with('\t')) {
                     if let Some(parent_key) = &current_key {
                         if let Some(serde_json::Value::Object(obj)) =
@@ -380,7 +357,6 @@ fn parse_frontmatter(
                     continue;
                 }
 
-                // 顶层属性
                 in_nested = false;
                 current_key = None;
                 frontmatter.insert(key.to_string(), parse_yaml_value(value));
@@ -393,18 +369,15 @@ fn parse_frontmatter(
     }
 }
 
-/// 解析 YAML 值为 JSON 值
 fn parse_yaml_value(value: &str) -> serde_json::Value {
     let value = value.trim();
 
-    // 去除引号
     if (value.starts_with('"') && value.ends_with('"'))
         || (value.starts_with('\'') && value.ends_with('\''))
     {
         return serde_json::Value::String(value[1..value.len() - 1].to_string());
     }
 
-    // 布尔值
     if value == "true" {
         return serde_json::Value::Bool(true);
     }
@@ -412,7 +385,6 @@ fn parse_yaml_value(value: &str) -> serde_json::Value {
         return serde_json::Value::Bool(false);
     }
 
-    // 数字
     if let Ok(n) = value.parse::<i64>() {
         return serde_json::Value::Number(n.into());
     }
@@ -422,7 +394,6 @@ fn parse_yaml_value(value: &str) -> serde_json::Value {
         }
     }
 
-    // 数组（简化处理）
     if value.starts_with('[') && value.ends_with(']') {
         let inner = &value[1..value.len() - 1];
         let items: Vec<serde_json::Value> = inner
@@ -432,6 +403,5 @@ fn parse_yaml_value(value: &str) -> serde_json::Value {
         return serde_json::Value::Array(items);
     }
 
-    // 默认为字符串
     serde_json::Value::String(value.to_string())
 }

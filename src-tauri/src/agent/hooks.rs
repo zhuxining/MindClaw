@@ -1,21 +1,32 @@
-//! AgentHook — 生命周期钩子
+//! RunHooks — 生命周期钩子
 //!
 //! 连接业务层与执行层的桥梁
 //! 提供六个扩展点，允许业务层将特定行为注入到 Runner 的迭代循环中
+//!
+//! 当前文件集中承接：
+//! - `RunHooks` trait
+//! - 面向 MessageBus 的 `InteractiveRunHooks`
+//! - 空实现 `NoopRunHooks`
+//! - 测试记录实现 `RecordingRunHooks`
+//!
+//! 边界说明：
+//! - hooks 只处理 Runner 生命周期节点
+//! - 不处理 AgentLoop 控制面命令
+//! - 不推进迭代，只观察并做副作用桥接
 
 use crate::agent::spec::IterationState;
 use crate::agent::tools::ToolCall;
 use std::time::Instant;
 
 // ============================================================================
-// AgentHook Trait
+// RunHooks Trait
 // ============================================================================
 
-/// Agent 生命周期钩子
+/// Run 生命周期钩子
 ///
 /// 提供六个扩展点，允许业务层将特定行为注入到 Runner 的迭代循环中。
 /// 默认实现对所有方法都是空操作，使得 Hook 完全可选。
-pub trait AgentHook: Send {
+pub trait RunHooks: Send {
     /// 决定本次迭代是否使用流式传输
     ///
     /// 返回 true：使用 chat_stream，逐 token 回调 on_stream
@@ -62,15 +73,15 @@ pub trait AgentHook: Send {
 }
 
 // ============================================================================
-// LoopHook - 业务层桥接实现
+// InteractiveRunHooks - 业务层桥接实现
 // ============================================================================
 
-/// LoopHook - AgentLoop 使用的内部 Hook
+/// InteractiveRunHooks - AgentLoop 使用的内部 Hook
 ///
 /// 将 Runner 事件桥接到 MessageBus
-pub struct LoopHook {
+pub struct InteractiveRunHooks {
     /// 消息总线发布器
-    publisher: Box<dyn LoopHookPublisher>,
+    publisher: Box<dyn RunHookPublisher>,
     /// 会话 ID
     session_id: String,
     /// 请求 ID
@@ -85,8 +96,8 @@ pub struct LoopHook {
     iteration_start: Option<Instant>,
 }
 
-/// LoopHook 发布器 trait（解耦 MessageBus）
-pub trait LoopHookPublisher: Send {
+/// RunHook 发布器 trait（解耦 MessageBus）
+pub trait RunHookPublisher: Send {
     fn emit_status(
         &self,
         request_id: &str,
@@ -97,10 +108,10 @@ pub trait LoopHookPublisher: Send {
     fn emit_segment_end(&self, request_id: &str, session_id: &str, segment_id: u64, resuming: bool);
 }
 
-impl LoopHook {
-    /// 创建新的 LoopHook
+impl InteractiveRunHooks {
+    /// 创建新的 InteractiveRunHooks
     pub fn new(
-        publisher: Box<dyn LoopHookPublisher>,
+        publisher: Box<dyn RunHookPublisher>,
         session_id: String,
         request_id: String,
     ) -> Self {
@@ -116,7 +127,7 @@ impl LoopHook {
     }
 }
 
-impl AgentHook for LoopHook {
+impl RunHooks for InteractiveRunHooks {
     fn wants_streaming(&self) -> bool {
         true
     }
@@ -203,25 +214,25 @@ impl AgentHook for LoopHook {
 }
 
 // ============================================================================
-// NoOpHook - 后台任务空实现
+// NoopRunHooks - 后台任务空实现
 // ============================================================================
 
-/// NoOpHook - 后台任务使用的空实现
-pub struct NoOpHook;
+/// NoopRunHooks - 后台任务使用的空实现
+pub struct NoopRunHooks;
 
-impl AgentHook for NoOpHook {
+impl RunHooks for NoopRunHooks {
     fn wants_streaming(&self) -> bool {
         false
     }
 }
 
 // ============================================================================
-// TestHook - 测试记录实现
+// RecordingRunHooks - 测试记录实现
 // ============================================================================
 
 /// Hook 事件记录
 #[derive(Debug, Clone)]
-pub enum HookEvent {
+pub enum RunHookEvent {
     BeforeIteration { iteration: usize },
     StreamDelta { len: usize },
     StreamEnd { resuming: bool },
@@ -230,14 +241,14 @@ pub enum HookEvent {
     FinalizeContent { input_len: usize, output_len: usize },
 }
 
-/// TestHook - 测试使用的记录型 Hook
-pub struct TestHook {
-    pub events: Vec<HookEvent>,
+/// RecordingRunHooks - 测试使用的记录型 Hook
+pub struct RecordingRunHooks {
+    pub events: Vec<RunHookEvent>,
     pub stream_deltas: Vec<String>,
     streaming: bool,
 }
 
-impl TestHook {
+impl RecordingRunHooks {
     pub fn new(streaming: bool) -> Self {
         Self {
             events: Vec::new(),
@@ -247,13 +258,13 @@ impl TestHook {
     }
 }
 
-impl AgentHook for TestHook {
+impl RunHooks for RecordingRunHooks {
     fn wants_streaming(&self) -> bool {
         self.streaming
     }
 
     fn before_iteration(&mut self, state: &mut IterationState) {
-        self.events.push(HookEvent::BeforeIteration {
+        self.events.push(RunHookEvent::BeforeIteration {
             iteration: state.iteration,
         });
     }
@@ -261,28 +272,28 @@ impl AgentHook for TestHook {
     fn on_stream(&mut self, delta: &str) {
         self.stream_deltas.push(delta.to_string());
         self.events
-            .push(HookEvent::StreamDelta { len: delta.len() });
+            .push(RunHookEvent::StreamDelta { len: delta.len() });
     }
 
     fn on_stream_end(&mut self, resuming: bool) {
-        self.events.push(HookEvent::StreamEnd { resuming });
+        self.events.push(RunHookEvent::StreamEnd { resuming });
     }
 
     fn before_execute_tools(&mut self, calls: &[ToolCall]) {
-        self.events.push(HookEvent::BeforeExecuteTools {
+        self.events.push(RunHookEvent::BeforeExecuteTools {
             tool_count: calls.len(),
         });
     }
 
     fn after_iteration(&mut self, state: &IterationState) {
-        self.events.push(HookEvent::AfterIteration {
+        self.events.push(RunHookEvent::AfterIteration {
             iteration: state.iteration,
         });
     }
 
     fn finalize_content(&mut self, content: &str) -> String {
         let output = strip_think_tags(content);
-        self.events.push(HookEvent::FinalizeContent {
+        self.events.push(RunHookEvent::FinalizeContent {
             input_len: content.len(),
             output_len: output.len(),
         });

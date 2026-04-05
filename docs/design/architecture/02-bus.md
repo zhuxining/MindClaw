@@ -19,7 +19,7 @@ MessageBus 负责解耦 Channel 层与 AgentLoop 的双向异步通信，不负�
 ## § 边界与实体
 
 **输入**（Inbound）：Channel 发布的用户消息，携带来源通道标识和用户身份。
-**输入**（Outbound）：AgentLoop 或 LoopHook 发布的 Agent 响应，携带目标会话标识和响应内容。
+**输入**（Outbound）：AgentLoop 或 `InteractiveRunHooks` 发布的 Agent 响应，携带目标会话标识和响应内容。
 **输出**（Inbound）：AgentLoop 消费，进入业务处理流程。
 **输出**（Outbound）：ChannelManager 消费，路由到对应 Channel 推送给用户。
 
@@ -31,7 +31,7 @@ MessageBus 负责解耦 Channel 层与 AgentLoop 的双向异步通信，不负�
 
 **OutboundMessage**：从 Agent 到用户的消息，承载不同阶段的响应内容。
 关键属性：`session_key`（与对应 InboundMessage 一致）、消息类型（流式文本增量 / 完整响应 / 工具执行进度 / 错误通知）、内容负载。
-关系：由 AgentLoop 的 LoopHook 在流式输出期间持续创建，由 ChannelManager 消费并路由到目标 Channel。
+关系：由 AgentLoop 使用的 `InteractiveRunHooks` 在流式输出期间持续创建，由 ChannelManager 消费并路由到目标 Channel。
 
 ---
 
@@ -63,9 +63,9 @@ sequenceDiagram
 
 1. Channel 将用户消息封装为 InboundMessage（填入 `session_key` 和内容），调用 `bus.publish_inbound()`。
 2. AgentLoop 主循环调用 `bus.consume_inbound()`（带超时），获取待处理消息。
-3. AgentLoop 处理消息期间，LoopHook 接收流式增量，调用 `bus.publish_outbound()` 持续发布流式 OutboundMessage。
+3. AgentLoop 处理消息期间，`InteractiveRunHooks` 接收流式增量，调用 `bus.publish_outbound()` 持续发布流式 OutboundMessage。
 4. ChannelManager 并行调用 `bus.consume_outbound()`，按 `session_key` 前缀匹配目标 Channel，调用 `channel.send()`。
-5. 流式输出完成时，LoopHook 发布 `OutboundMessage::Done`，ChannelManager 通知 Channel 流式结束。
+5. 流式输出完成时，`InteractiveRunHooks` 发布 `OutboundMessage::Done`，ChannelManager 通知 Channel 流式结束。
 
 ---
 

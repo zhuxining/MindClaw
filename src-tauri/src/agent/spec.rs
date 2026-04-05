@@ -68,6 +68,11 @@ impl Default for AgentRunSpec {
 }
 
 impl AgentRunSpec {
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
+        self
+    }
+
     /// 创建标准对话配置
     pub fn standard(
         system_prompt: String,
@@ -353,7 +358,7 @@ impl AgentRunResult {
 // IterationState - 迭代状态
 // ============================================================================
 
-/// 迭代状态（传递给 AgentHook）
+/// 迭代状态（传递给 RunHooks）
 #[derive(Debug, Clone)]
 pub struct IterationState {
     /// 当前迭代次数（0-based）

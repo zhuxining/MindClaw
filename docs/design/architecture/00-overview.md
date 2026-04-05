@@ -4,45 +4,41 @@
 
 # MindClaw 系统架构总览
 
-MindClaw 的核心命题是"记忆是 Agent 的，知识是共同的"，为个人用户提供本地 AI 知识管理应用，支持对话、笔记、任务三大核心场景，所有数据在设备本地处理，不经过第三方服务器。
+MindClaw 的核心命题是“记忆是 Agent 的，知识是共同的”。系统围绕本地 AI 知识管理构建，支持对话、笔记、任务三大场景，要求数据尽量留在本地、边界清晰、运行时可控。
 
 ---
 
 ## § 系统目标与约束
 
-**系统定位**：MindClaw 为个人用户提供一个跨通道（桌面、Telegram、飞书）的 AI 助手，助手通过自然语言帮助用户管理知识笔记和任务，保留对话记忆。
+**系统定位**：MindClaw 为个人用户提供跨通道的 AI 助手，帮助管理知识笔记、任务与长期记忆。
 
-**核心约束**（每条均可验证）：
+**核心约束**：
 
-1. 所有业务逻辑在 Rust Services 层执行，React 前端不持有业务逻辑，Tauri Plugin 仅桥接 OS 能力。
-2. API Key 等敏感信息存储在 OS Keychain，不以任何形式明文写入磁盘文件。
-3. Agent 对文件系统的写操作仅限 `vault_path` 范围，PathGuard 强制拒绝越界路径请求。
-4. 同一 `session_key` 的消息串行处理，Session Lock 保证同一会话无并发执行。
-5. AgentRunner 不持有 Session、MessageBus 或任何业务基础设施依赖，只通过 AgentRunSpec 接收输入。
+1. 所有业务逻辑在 Rust 侧执行，前端保持薄客户端。
+2. API Key 等敏感信息存储在 OS Keychain，不以明文落盘。
+3. Agent 文件写操作仅限受控工作区，路径沙箱强制生效。
+4. 同一 `session_key` 的消息串行处理。
+5. `AgentRunner` 不持有 Session、MessageBus 或持久化依赖。
+6. `AgentProfile` 是静态定义，不是运行时实体。
 
 ---
 
 ## § 核心设计原则
 
-**1. 业务层与执行层分离**
-AgentLoop 不嵌入 LLM 迭代逻辑，AgentRunner 不感知业务层；AgentHook 作为唯一桥梁。
-理由：AgentRunner 可被子代理、CLI 命令、定时任务无差别复用，无需携带业务基础设施。
+**1. Definition 与 Runtime 分离**
+`AgentProfile` 只描述身份、策略和边界；Session、上下文、取消状态和消息分发都属于 Runtime。
 
-**2. 数据所有权单一**
-每份数据只有一个 Module 拥有写权限；其他 Module 通过该 Module 的接口读取。
-理由：消除跨模块写竞争，统一一致性保证边界。
+**2. 外层编排与内层执行分离**
+`AgentLoop` 负责编排一条入站消息，`AgentRunner` 负责执行一次 run 的迭代循环。
 
-**3. 通道无关性**
-AgentLoop 通过 MessageBus 收发消息，不直接引用任何 Channel 实现。
-理由：Desktop、Telegram、Feishu 三个通道可独立启用/禁用，AgentLoop 无需感知差异。
+**3. Provider 仅作为 Adapter**
+LLM Provider 只处理模型协议差异，不参与 Agent 路由、上下文构建或工具执行。
 
-**4. 人类主权**
-知识笔记以 Markdown 文件为真相源，SQLite 仅存储索引。
-理由：用户可在工具之外直接编辑文件，数据不被应用锁定；工具重建索引即可恢复。
+**4. 概念层与实现层分离**
+`SubAgent` 与 `BackgroundAgent` 在概念层保持区分；实现层共用同一个 `AgentRunner` 与 spawn 机制。
 
-**5. 渐进式上下文**
-上下文按稳定性分层注入：Core 层缓存稳定，Dynamic 层每次请求重新组装，User 层每次请求唯一。
-理由：Core 层支持 LLM KV-cache 复用，降低 token 成本；Dynamic 层保持上下文相关性。
+**5. Markdown 为知识真相源**
+知识笔记保存在 vault 中，数据库只维护索引和辅助状态。
 
 ---
 
@@ -50,150 +46,102 @@ AgentLoop 通过 MessageBus 收发消息，不直接引用任何 Channel 实现�
 
 | 决策问题 | 选择 | 放弃的替代方案 | 理由 |
 |---------|------|--------------|------|
-| AgentLoop 是否直接包含 LLM 迭代逻辑？ | 抽取为独立 AgentRunner | 单层 Agent 内部嵌入循环 | Runner 无状态，子代理、CLI、Cron 可直接复用，无需携带 MessageBus 等依赖 |
-| Channel 如何与 Agent 通信？ | MessageBus 异步队列 | Channel 直接调用 Agent 方法 | 解耦两侧生命周期，支持背压控制，避免 Channel 阻塞 Agent 执行 |
-| 知识笔记的真相源是什么？ | Markdown 文件（`vault/`） | SQLite 为真相源，文件为导出 | Markdown 对用户透明，文本编辑器可直接操作，Agent 崩溃不丢数据 |
-| 密钥如何存储？ | OS Keychain | tauri-plugin-stronghold 文件加密 | OS Keychain 由操作系统管理，无需应用维护加密文件，生命周期更简单 |
-| Agent 文件访问如何限制？ | PathGuard 路径沙箱 | Tauri 文件系统权限 | PathGuard 在 Rust 层强制，细粒度到 vault_path，私有区无需 Tauri 权限参与 |
+| Agent 是否是运行时实体？ | 否，使用 `AgentProfile` | Agent 持有 provider/session/tools | 定义与状态分离更利于复用和权限控制 |
+| 编排与执行是否分层？ | 是，Loop / Runner 分离 | 单个大 Agent 对象包办全部 | turn 级和 run 级粒度不同，混在一起会导致职责失控 |
+| SubAgent 与 BackgroundAgent 是否统一成同一个概念？ | 否，概念层保留区分 | 统一叫 child agent | 保留发起语义和等待语义，避免把后台任务也误建模成父子关系 |
+| 派生执行是否单独一套 runtime？ | 否，统一 spawn 机制 | 各做一套执行链路 | 统一调度与观测语义，减少重复逻辑 |
+| Provider 在哪里选型？ | `ModelRouter + ProviderRegistry` | AgentLoop 直接硬编码 provider | Provider 选择应是声明式路由，不应散落在业务层 |
+| 工具权限在哪里决定？ | `AgentProfile.ToolPolicy` + Loop 过滤 | Tool 自己决定可不可用 | 权限统一收敛在定义层与编排层 |
 
 ---
 
-## § 边界划分
+## § 全局分层
 
-### 模块层级
-
-```
+```text
 ┌─────────────────────────────────────────────────────┐
-│  Channel 层                                          │
-│  Desktop（Tauri）· Telegram Bot · 飞书 Bot           │
-│  职责：接收用户输入，推送 Agent 响应                  │
+│ Channel 层                                           │
+│ Desktop · Telegram · 飞书                           │
 └───────────────────┬─────────────────────────────────┘
-                    ↕  InboundMessage / OutboundMessage
+                    ↕ Inbound / Outbound
 ┌───────────────────┴─────────────────────────────────┐
-│  MessageBus                                          │
-│  职责：解耦 Channel 与 AgentLoop 的双向异步队列       │
+│ MessageBus                                           │
 └───────────────────┬─────────────────────────────────┘
                     ↕
 ┌───────────────────┴─────────────────────────────────┐
-│  AgentLoop（业务编排层）                              │
-│  职责：会话管理、上下文构建、记忆整合、流式分发        │
-└───────────────────┬─────────────────────────────────┘
-                    ↕  AgentRunSpec / AgentRunResult
-┌───────────────────┴─────────────────────────────────┐
-│  AgentRunner（纯执行层）                              │
-│  职责：LLM 迭代循环、工具执行、无状态可复用           │
+│ Agent Runtime                                        │
+│ Definition: AgentProfile / AgentRegistry / ModelRouter│
+│ Orchestration: AgentLoop / Session / Context         │
+│ Execution: AgentRunner / ToolExecutor / RunHooks     │
+│ Adapter: Provider / MCP / Event / Storage adapters   │
 └────────┬──────────────────────────┬─────────────────┘
          ↕                          ↕
-┌────────┴───────┐       ┌──────────┴──────────────────┐
-│  Providers     │       │  Tools                       │
-│  职责：LLM API │       │  职责：文件、搜索、MCP、Skills│
-│  适配与调用    │       │                              │
-└────────────────┘       └──────────────────────────────┘
-         ↕                          ↕
-┌─────────────────────────────────────────────────────┐
-│  Services 层                                         │
-│  职责：Task、Knowledge、Daily 三大业务逻辑            │
-└───────────────────┬─────────────────────────────────┘
-                    ↕
-┌───────────────────┴─────────────────────────────────┐
-│  Storage 层                                          │
-│  SQLite（索引）· Markdown vault（真相源）             │
-│  OS Keychain（密钥）                                 │
-│  职责：数据持久化，不含业务逻辑                       │
-└─────────────────────────────────────────────────────┘
+┌────────┴────────┐       ┌─────────┴──────────────────┐
+│ Services        │       │ Storage                     │
+│ Task / Note ... │       │ SQLite / vault / Keychain   │
+└─────────────────┘       └─────────────────────────────┘
 ```
 
-### 跨切关注点
+---
 
-以下关注点跨越多个模块边界，通过组合方式实现：
+## § Runtime 主调用链
+
+```mermaid
+sequenceDiagram
+    participant User as User
+    participant Channel as Channel
+    participant Bus as MessageBus
+    participant Loop as AgentLoop
+    participant Profile as AgentProfile
+    participant Runner as AgentRunner
+    participant Provider as ProviderAdapter
+
+    User->>Channel: 输入
+    Channel->>Bus: InboundMessage
+    Bus->>Loop: consume
+    Loop->>Profile: resolve
+    Loop->>Loop: build context + run spec
+    Loop->>Runner: run(spec, hooks)
+    Runner->>Provider: chat / chat_stream
+    Provider-->>Runner: response
+    Runner-->>Loop: result
+    Loop->>Bus: OutboundMessage
+    Bus->>Channel: deliver
+    Channel->>User: 输出
+```
+
+---
+
+## § Main / Sub / Background 统一模型
+
+| 类型 | Profile.kind | InvocationMode | 结果去向 |
+|------|--------------|----------------|---------|
+| 主 Agent | `main` | `interactive` | 直接给用户 |
+| 子代理 | `sub` | `inline_child` | 返回给父 Agent |
+| 后台代理 | `background` | `detached` | 后续独立通知 |
+
+统一点：
+
+- 共用 `AgentRunner`
+- 共用 ToolExecutor
+- 共用 Provider Adapter
+
+差异点：
+
+- Profile 策略
+- RunHooks
+- 可见性与等待语义
+
+---
+
+## § 跨切关注点
 
 | 关注点 | 实现策略 | 说明 |
 |--------|---------|------|
-| **认证** | Provider 层统一处理 API Key | API Key 存储于 OS Keychain，Provider 在初始化时读取，不向其他层暴露 |
-| **日志** | Builder 模式注入 | AppRuntimeBuilder 初始化时配置日志级别，通过依赖注入传递给各组件 |
-| **指标** | AgentHook.after_iteration | Token 用量、迭代次数通过 Hook 回调收集，由 AgentLoop 写入指标存储 |
-| **错误翻译** | 模块边界处显式转换 | Storage 错误在 Service 层翻译为业务错误；Provider 错误在 AgentRunner 翻译为 StopReason |
-| **并发控制** | Session Lock + Concurrency Gate | Session 级别通过 DashMap Mutex 控制；全局级别通过 Semaphore 控制 |
-
-**依赖方向**：各层模块依赖构成有向无环图（DAG）：
-
-- Channel → MessageBus → AgentLoop → AgentRunner → Providers/Tools → Services → Storage
-- 反向引用禁止（Storage 不依赖 Services）
-
----
-
-## § 核心实体关系
-
-**Session**：代表用户与 Agent 的一次持续会话，与通道和用户身份绑定。
-关键属性：唯一会话标识、所属通道、活跃状态。
-关系：包含多个 Turn，关联多个 Memory。
-
-**Turn**：会话中一次完整的"用户输入 + Agent 响应"交互记录。
-关键属性：输入内容、响应内容、使用的工具列表。
-关系：属于一个 Session。
-
-**Memory**：Agent 私有的观察记录，捕获用户偏好、事件或模式，随时间衰减。
-关键属性：类别（Profile/Preferences/Events/Cases 等）、重要性权重、衰减系数。
-关系：关联一个 Session，高重要性 Memory 可升华为 Note。
-
-**Note**：用户管理的知识笔记，以 Markdown 文件存储，SQLite 维护三级索引。
-关键属性：标题、标签（用于 L0 快速检索）、内容摘要（L1）。
-关系：可被 Memory 引用（升华来源）。
-
-**Task**：用户的待办项，由 Agent 辅助创建或管理。
-关键属性：标题、状态、截止时间。
-关系：可在 Turn 中被创建或更新。
-
-```mermaid
-erDiagram
-    Session ||--o{ Turn : "包含"
-    Session ||--o{ Memory : "关联"
-    Memory }o--|| Note : "升华为"
-    Turn ||--o{ Task : "创建"
-```
-
----
-
-## § 整体流程
-
-**主路径：用户消息 → Agent 响应**
-
-```
-User ──► Channel ──► InboundMessage ──► MessageBus
-                                             │
-                                             ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ [AgentLoop]                                                             │
-│  Session Lock.acquire()                                                 │
-│       │                                                                 │
-│       ▼                                                                 │
-│  SessionManager.load() ──► Turn 历史                                    │
-│       │                                                                 │
-│       ▼                                                                 │
-│  ContextPipeline.build()                                                │
-│       ├── CoreLayer.load()        ──► 稳定上下文                        │
-│       ├── DynamicLayer.recall()   ──► Memory + Knowledge                │
-│       └── UserLayer.inject()      ──► 当前输入                          │
-│       │                                                                 │
-│       ▼                                                                 │
-│  AgentRunSpec { messages, tools, model }                                │
-│       │                                                                 │
-│       ▼                                                                 │
-│  LoopHook.new(bus) ──► AgentRunner.run(spec, hook)                      │
-│       │                                          │                      │
-│       ▼                                          │                      │
-│  LoopHook.on_stream(delta) ◄── stream ───────────┘                      │
-│       │                                                                 │
-│       ▼                                                                 │
-│  MessageBus.publish_outbound()                                          │
-│       │                                                                 │
-│       ▼                                                                 │
-│  SessionManager.append_turn() ──► Session Lock.release()                │
-└─────────────────────────────────────────────────────────────────────────┘
-       │
-       ▼
-OutboundMessage ──► Channel ──► User
-```
+| 认证 | Provider Adapter 统一处理 | API Key 只在 Adapter 层读取和持有 |
+| 并发控制 | Session Lock + Global Gate | Session 级串行、全局级限流 |
+| 指标 | Runtime Events | Loop / Runner / Tool / Child Dispatch 统一产生日志与指标 |
+| 错误翻译 | 模块边界显式转换 | Provider、Tool、Storage 错误分别在边界处翻译 |
+| 权限控制 | Profile + PathGuard + Tool filtering | 权限决策集中，不下放给单个工具实现 |
 
 ---
 
@@ -206,19 +154,19 @@ OutboundMessage ──► Channel ──► User
 | [00-overview.md](./00-overview.md) | 系统架构总览 |
 | [01-channels.md](./01-channels.md) | Channels：多通道架构 |
 | [02-bus.md](./02-bus.md) | MessageBus：异步消息队列 |
-| [03-agent-core.md](./03-agent-core.md) | Agent 核心：双层解耦架构概览 |
-| [03.01-agent-loop.md](./03.01-agent-loop.md) | AgentLoop：业务编排层 |
-| [03.02-agent-runner.md](./03.02-agent-runner.md) | AgentRunner：纯执行层 |
-| [03.03-agent-spec.md](./03.03-agent-spec.md) | AgentRunSpec / AgentRunResult 契约定义 |
-| [03.04-agent-hook.md](./03.04-agent-hook.md) | AgentHook：生命周期钩子 |
-| [03.05-agent-context.md](./03.05-agent-context.md) | Context Building：三层上下文组装 |
-| [03.06-subagent.md](./03.06-subagent.md) | SubAgent：后台任务派生 |
-| [03.07-tools.md](./03.07-tools.md) | Tools：内置工具系统 |
-| [03.08-mcp.md](./03.08-mcp.md) | MCP：外部工具协议集成 |
-| [03.09-skills.md](./03.09-skills.md) | Skills：能力扩展机制 |
-| [03.10-memory.md](./03.10-memory.md) | Memory：写入路径与升华机制 |
-| [03.11-observability.md](./03.11-observability.md) | Observability：可观测性架构 |
-| [04-providers.md](./04-providers.md) | Providers：LLM 适配层 |
+| [03-agent-runtime.md](./03-agent-runtime.md) | Agent Runtime：Definition / Orchestration / Execution 总览 |
+| [03.01-agent-profile.md](./03.01-agent-profile.md) | AgentProfile：静态定义与策略边界 |
+| [03.02-agent-loop.md](./03.02-agent-loop.md) | AgentLoop：turn 级编排层 |
+| [03.03-agent-runner.md](./03.03-agent-runner.md) | AgentRunner：run 级执行引擎 |
+| [03.04-run-contracts.md](./03.04-run-contracts.md) | Run 契约：Spec / Result / RunHooks / InvocationMode |
+| [03.05-agent-spawn.md](./03.05-agent-spawn.md) | Agent Spawn：SubAgent 与 BackgroundAgent |
+| [03.06-context-pipeline.md](./03.06-context-pipeline.md) | ContextPipeline：上下文装配 |
+| [03.07-tool-execution.md](./03.07-tool-execution.md) | Tool Execution：工具执行系统 |
+| [03.08-mcp.md](./03.08-mcp.md) | MCP：外部能力适配 |
+| [03.09-skills.md](./03.09-skills.md) | Skills：能力定义与按需注入 |
+| [03.10-memory.md](./03.10-memory.md) | Memory：后台提取与升华 |
+| [03.11-observability.md](./03.11-observability.md) | Observability：Runtime 可观测性 |
+| [04-providers.md](./04-providers.md) | Providers：LLM Provider Adapter 层 |
 | [05-services.md](./05-services.md) | Services：业务服务层 |
 | [06-storage.md](./06-storage.md) | Storage：存储层设计 |
 | [07-runtime.md](./07-runtime.md) | AppRuntime：统一运行时与依赖注入 |

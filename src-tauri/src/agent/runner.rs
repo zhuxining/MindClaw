@@ -1,10 +1,22 @@
 //! AgentRunner — 纯执行层
 //!
 //! 无状态的 LLM 迭代循环引擎，对基础设施一无所知
-//! 只依赖输入的 AgentRunSpec，通过 AgentHook 与业务层通信
+//! 只依赖输入的 AgentRunSpec，通过 RunHooks 与业务层通信
+//!
+//! 当前文件只负责：
+//! - 多轮 LLM 调用
+//! - 工具调用解析与执行
+//! - 停止条件判断
+//! - 结果聚合
+//!
+//! 它不负责：
+//! - session 管理
+//! - MessageBus 发布
+//! - slash 命令
+//! - 后台任务调度
 
 use crate::agent::events::ProviderEvent;
-use crate::agent::hook::AgentHook;
+use crate::agent::hooks::RunHooks;
 use crate::agent::spec::{AgentRunResult, AgentRunSpec, IterationState, TokenUsage, ToolEvent};
 use crate::agent::tools::{ToolCall, ToolRegistry, ToolResultMessage};
 use crate::error::AppError;
@@ -33,9 +45,9 @@ impl AgentRunner {
         }
     }
 
-    /// 获取 Provider 的模型 ID
-    pub fn provider_model(&self) -> String {
-        self.provider.model_id().to_string()
+    /// 获取 Provider 引用
+    pub fn provider(&self) -> Arc<dyn Provider> {
+        self.provider.clone()
     }
 
     /// 执行 Agent 迭代循环
@@ -49,7 +61,7 @@ impl AgentRunner {
     pub async fn run(
         &self,
         spec: AgentRunSpec,
-        hook: &mut dyn AgentHook,
+        hook: &mut dyn RunHooks,
         cancel: CancellationToken,
     ) -> Result<AgentRunResult, AppError> {
         let mut messages = spec.messages.clone();
@@ -218,7 +230,7 @@ impl AgentRunner {
         &self,
         spec: &AgentRunSpec,
         messages: &[ChatMessage],
-        hook: &mut dyn AgentHook,
+        hook: &mut dyn RunHooks,
         cancel: CancellationToken,
     ) -> Result<LLMResponse, AppError> {
         let mut stream = self

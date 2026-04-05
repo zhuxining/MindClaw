@@ -6,7 +6,7 @@ pub mod builder;
 pub mod config;
 pub mod services;
 
-use crate::agent::{AgentLoop, SessionManager};
+use crate::agent::{AgentLoop, AgentRegistry, ModelRouter, SessionManager};
 use crate::bus::events::InboundMessage;
 use crate::bus::MessageBus;
 use crate::error::AppResult;
@@ -31,6 +31,10 @@ pub struct AppRuntime {
     pub(crate) bus: Arc<MessageBus>,
     /// Agent 循环
     pub(crate) agent: Arc<AgentLoop>,
+    /// Agent profile 注册表
+    pub(crate) agent_registry: Arc<AgentRegistry>,
+    /// 模型路由
+    pub(crate) model_router: Arc<ModelRouter>,
     /// 会话管理器
     pub(crate) session_mgr: Arc<SessionManager>,
     /// 应用配置
@@ -99,6 +103,14 @@ impl AppRuntime {
 
     pub fn agent(&self) -> &Arc<AgentLoop> {
         &self.agent
+    }
+
+    pub fn agent_registry(&self) -> &Arc<AgentRegistry> {
+        &self.agent_registry
+    }
+
+    pub fn model_router(&self) -> &Arc<ModelRouter> {
+        &self.model_router
     }
 
     pub fn session_mgr(&self) -> &Arc<SessionManager> {

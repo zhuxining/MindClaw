@@ -1,6 +1,19 @@
-pub mod file_edit;
-pub mod file_read;
-pub mod file_write;
+//! Tools runtime support
+//!
+//! 当前 `tools/` 是 Runtime 中唯一保留目录的模块，原因有两点：
+//! - 具体工具实现数量已经明显多于其他 agent 子模块
+//! - MCP bridge 虽然语义上属于 external tool bridge，但最终仍注册为 `Tool`
+//!
+//! 当前目录内按语义大致分为三类：
+//! - builtin tools：`read_file`、`write_file`、`edit_file`、`find_files`、`search_content`、`shell`
+//! - orchestration tools：`delegate_to_agent`、`spawn_background_agent`
+//! - external tool bridge：`mcp__*`
+//!
+//! 未来如果三类工具继续增长，再考虑演进为 `builtin/`、`orchestration/`、`bridge/`
+//! 等子目录；在此之前保持扁平目录更有利于控制重构成本。
+
+pub mod agent_spawn;
+pub mod file_ops;
 pub mod find_files;
 pub mod mcp;
 pub mod path_guard;
@@ -207,9 +220,7 @@ impl ToolRegistry {
         config: &crate::runtime::config::AppConfig,
         extra: Vec<Arc<dyn Tool + Send + Sync>>,
     ) -> AppResult<Arc<Self>> {
-        use crate::agent::tools::file_edit::FileEditTool;
-        use crate::agent::tools::file_read::FileReadTool;
-        use crate::agent::tools::file_write::FileWriteTool;
+        use crate::agent::tools::file_ops::{FileEditTool, FileReadTool, FileWriteTool};
         use crate::agent::tools::find_files::FindFilesTool;
         use crate::agent::tools::mcp::{register_mcp_tools, MCPManager};
         use crate::agent::tools::path_guard::PathGuard;

@@ -52,10 +52,10 @@ Provider Adapter 的注册表。
 
 ## § 已支持的 Provider 类型
 
-| Provider 类型 | 覆盖模型 | 认证方式 |
-|-------------|---------|---------|
-| Anthropic（Claude） | Claude 系列 | `X-API-Key` |
-| OpenAI 兼容 | OpenAI、DeepSeek、Ollama 等 | `Authorization: Bearer` |
+| Provider 类型       | 覆盖模型                    | 认证方式                |
+| ------------------- | --------------------------- | ----------------------- |
+| Anthropic（Claude） | Claude 系列                 | `X-API-Key`             |
+| OpenAI 兼容         | OpenAI、DeepSeek、Ollama 等 | `Authorization: Bearer` |
 
 ---
 
@@ -87,9 +87,9 @@ Provider Adapter 不负责：
 
 ## § 设计决策与权衡
 
-| 决策问题 | 选择 | 放弃的替代方案 | 理由 |
-|---------|------|--------------|------|
-| 如何支持多个 LLM 服务商？ | `LLMProviderClient + ProviderRegistry` | 单一硬编码实现 | 便于扩展新服务商且不污染 Agent Runtime |
-| 流式与非流式是否分开接口？ | 是 | 单一动态返回类型 | 两种调用返回形态不同，分开更清晰 |
-| Provider 是否持有业务状态？ | 否 | Provider 直接感知 Session/Agent | Provider 只应关心协议与能力，而不是业务编排 |
-| 模型能力由谁声明？ | Provider / Model Profile | AgentLoop 手写判断 | 能力声明集中后，模型替换和回退策略更稳定 |
+| 决策问题                    | 选择                                   | 放弃的替代方案                  | 理由                                        |
+| --------------------------- | -------------------------------------- | ------------------------------- | ------------------------------------------- |
+| 如何支持多个 LLM 服务商？   | `LLMProviderClient + ProviderRegistry` | 单一硬编码实现                  | 便于扩展新服务商且不污染 Agent Runtime      |
+| 流式与非流式是否分开接口？  | 是                                     | 单一动态返回类型                | 两种调用返回形态不同，分开更清晰            |
+| Provider 是否持有业务状态？ | 否                                     | Provider 直接感知 Session/Agent | Provider 只应关心协议与能力，而不是业务编排 |
+| 模型能力由谁声明？          | Provider / Model Profile               | AgentLoop 手写判断              | 能力声明集中后，模型替换和回退策略更稳定    |

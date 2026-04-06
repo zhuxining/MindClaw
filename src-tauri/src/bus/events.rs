@@ -43,7 +43,7 @@ pub enum OutboundPayload {
     /// 错误
     Error { message: String, retryable: bool },
     /// 状态更新
-    Status { phase: UserVisiblePhase },
+    Status { status: UserVisiblePhase },
 }
 
 /// 消息来源

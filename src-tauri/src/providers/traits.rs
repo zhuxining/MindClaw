@@ -1,4 +1,4 @@
-use crate::agent::events::{ProviderEvent, UsageStats};
+use crate::agent::events::{ProviderEvent, ProviderUsage};
 use crate::error::AppResult;
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -112,7 +112,7 @@ impl ChatMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderResponse {
     pub message: ChatMessage,
-    pub usage: UsageStats,
+    pub usage: ProviderUsage,
     pub stop_reason: String,
 }
 

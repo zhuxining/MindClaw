@@ -274,7 +274,7 @@ impl AgentLoop {
         let built_context = self.context_pipeline.build(&ctx).await?;
 
         self.observer
-            .on_event(&AgentEvent::ContextBuilt {
+            .on_event(&AgentEvent::ContextPrepared {
                 fragments: built_context.fragments.len(),
             })
             .await;
@@ -363,7 +363,7 @@ impl AgentLoop {
         };
 
         self.observer
-            .on_event(&AgentEvent::CommandIntercepted {
+            .on_event(&AgentEvent::ControlCommandIntercepted {
                 name: cmd_name.to_string(),
             })
             .await;
@@ -495,7 +495,7 @@ impl AgentLoop {
         &self,
         request_id: &str,
         session_id: &str,
-        phase: UserVisiblePhase,
+        status: UserVisiblePhase,
     ) -> Result<(), AppError> {
         self.bus
             .publish_outbound(crate::bus::events::OutboundMessage {
@@ -504,7 +504,7 @@ impl AgentLoop {
                 session_id: session_id.to_string(),
                 target_sender: "local_user".to_string(),
                 target_channel: "desktop".to_string(),
-                payload: OutboundPayload::Status { phase },
+                payload: OutboundPayload::Status { status },
             })
             .await
     }
@@ -644,14 +644,14 @@ impl BusPublisher {
 }
 
 impl RunHookPublisher for BusPublisher {
-    fn emit_status(&self, _request_id: &str, _session_id: &str, phase: UserVisiblePhase) {
+    fn emit_status(&self, _request_id: &str, _session_id: &str, status: UserVisiblePhase) {
         let msg = crate::bus::events::OutboundMessage {
             id: uuid::Uuid::new_v4().to_string(),
             request_id: self.request_id.clone(),
             session_id: self.session_id.clone(),
             target_sender: "local_user".to_string(),
             target_channel: "desktop".to_string(),
-            payload: OutboundPayload::Status { phase },
+            payload: OutboundPayload::Status { status },
         };
         let bus = self.bus.clone();
         tokio::spawn(async move {

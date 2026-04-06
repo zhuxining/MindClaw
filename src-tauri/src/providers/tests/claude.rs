@@ -92,13 +92,13 @@ async fn test_claude_stream() {
                 chunk_count += 1;
                 text.push_str(&chunk);
             }
-            crate::agent::events::ProviderEvent::Finished { usage, .. } => {
+            crate::agent::events::ProviderEvent::StreamFinished { usage, .. } => {
                 assert!(usage.input_tokens > 0);
                 assert!(usage.output_tokens > 0);
                 got_finished = true;
                 break;
             }
-            crate::agent::events::ProviderEvent::ToolCall { .. } => {}
+            crate::agent::events::ProviderEvent::ToolCallReady { .. } => {}
         }
     }
 
@@ -158,7 +158,7 @@ async fn test_claude_tool_use() {
     while let Some(event) = stream.next().await {
         match event.expect("stream event should be ok") {
             crate::agent::events::ProviderEvent::TextDelta { .. } => {}
-            crate::agent::events::ProviderEvent::ToolCall {
+            crate::agent::events::ProviderEvent::ToolCallReady {
                 name,
                 arguments_json,
                 ..
@@ -167,7 +167,7 @@ async fn test_claude_tool_use() {
                 assert!(arguments_json.get("location").is_some());
                 got_tool_call = true;
             }
-            crate::agent::events::ProviderEvent::Finished { .. } => {
+            crate::agent::events::ProviderEvent::StreamFinished { .. } => {
                 got_finished = true;
                 break;
             }

@@ -31,7 +31,7 @@ pub use context::{
     BuiltContext, ContextBuildContext, ContextFragment, ContextLayer, ContextPipeline,
     ContextSource, ConversationHistorySource, MessageRole, SystemPromptSource, UserMessageSource,
 };
-pub use events::{AgentEvent, ProviderEvent, RunPhase, UsageStats, UserVisiblePhase};
+pub use events::{AgentEvent, ProviderEvent, ProviderUsage, UserVisiblePhase};
 pub use hooks::{
     InteractiveRunHooks, NoopRunHooks, RecordingRunHooks, RunHookEvent, RunHookPublisher, RunHooks,
 };

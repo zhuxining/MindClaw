@@ -154,8 +154,8 @@ async fn consume_outbound_messages(bus: Arc<MessageBus>, session_id: Arc<Mutex<O
                     OutboundPayload::Error { message, .. } => {
                         eprintln!("\n❌ 错误: {}", message);
                     }
-                    OutboundPayload::Status { phase } => {
-                        tracing::debug!(phase = ?phase, "status_update");
+                    OutboundPayload::Status { status } => {
+                        tracing::debug!(status = ?status, "status_update");
                     }
                 }
             }

@@ -257,7 +257,7 @@ impl AgentRunner {
                     content.push_str(&text);
                     hook.on_stream(&text);
                 }
-                ProviderEvent::ToolCall {
+                ProviderEvent::ToolCallReady {
                     id,
                     name,
                     arguments_json,
@@ -268,7 +268,7 @@ impl AgentRunner {
                         arguments: arguments_json,
                     });
                 }
-                ProviderEvent::Finished {
+                ProviderEvent::StreamFinished {
                     usage: round_usage,
                     stop_reason,
                 } => {

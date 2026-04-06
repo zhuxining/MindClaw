@@ -14,14 +14,14 @@
 
 当前已经收敛为单文件的边界：
 
-- `agent.rs`：AgentProfile / AgentRegistry / ModelRouter
+- `agents.rs`：AgentProfile / AgentRegistry / ModelRouter
 - `loop_.rs`：AgentLoop 编排层，同时内聚 `/new /stop /restart /status` 等 loop 控制命令
 - `runner.rs`：AgentRunner 执行层
 - `hooks.rs`：RunHooks 与交互式 Hook 实现
 - `spawn.rs`：派生执行与后台代理调度
 - `session.rs`：会话管理
 - `context.rs`：上下文装配
-- `events.rs`：运行事件
+- `events.rs`：共享运行事件协议（流事件 / 观测事件 / 内部阶段 / 对外状态）
 - `spec.rs`：run 契约
 - `memory.rs`：记忆数据结构与召回入口
 - `skills.rs`：技能清单、元数据与注册表
@@ -49,13 +49,13 @@ src/
 │
 ├── agent/                  Agent 核心系统
 │   ├── mod.rs              模块导出
-│   ├── agent.rs            AgentProfile / AgentKind / AgentRegistry / ModelRouter
+│   ├── agents.rs           AgentProfile / AgentKind / AgentRegistry / ModelRouter
 │   ├── loop_.rs            AgentLoop（消息编排、命令路由、session 串行化、/new /stop /restart /status）
 │   ├── runner.rs           AgentRunner（LLM 迭代循环与工具执行驱动）
 │   ├── spec.rs             AgentRunSpec / AgentRunResult / StopReason / TokenUsage
 │   ├── context.rs          ContextPipeline / ContextSource / BuiltContext
 │   ├── session.rs          SessionManager / AgentSession / TurnRecord
-│   ├── events.rs           ProviderEvent / AgentEvent / UsageStats
+│   ├── events.rs           ProviderEvent / ProviderUsage / AgentEvent / LoopPhase / UserVisiblePhase
 │   ├── hooks.rs            RunHooks / InteractiveRunHooks / NoopRunHooks / RecordingRunHooks
 │   ├── spawn.rs            AgentSpawnDispatcher / SubAgent 定义 / 后台派发
 │   ├── memory.rs           Memory / MemoryCategory / recall

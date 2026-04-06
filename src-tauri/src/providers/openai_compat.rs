@@ -2,7 +2,7 @@ use super::config::ProviderConfig;
 use super::traits::{
     ChatMessage, ChatRequest, MessageContent, MessageRole, ModelTier, Provider, ProviderResponse,
 };
-use crate::agent::events::{ProviderEvent, UsageStats};
+use crate::agent::events::{ProviderEvent, ProviderUsage};
 use crate::error::{AppError, AppResult};
 use async_openai::config::OpenAIConfig;
 use async_openai::types::chat::{
@@ -218,7 +218,7 @@ impl Provider for OpenAICompatProvider {
             message: ChatMessage::assistant_text(
                 choice.message.content.clone().unwrap_or_default(),
             ),
-            usage: UsageStats {
+            usage: ProviderUsage {
                 input_tokens: usage.map(|u| u.prompt_tokens).unwrap_or(0),
                 output_tokens: usage.map(|u| u.completion_tokens).unwrap_or(0),
             },
@@ -251,7 +251,7 @@ impl Provider for OpenAICompatProvider {
         let (tx, rx) = mpsc::channel(32);
 
         tokio::spawn(async move {
-            let mut usage = UsageStats {
+            let mut usage = ProviderUsage {
                 input_tokens: 0,
                 output_tokens: 0,
             };
@@ -292,7 +292,7 @@ impl Provider for OpenAICompatProvider {
                             }
                             None => {
                                 let _ = tx
-                                    .send(Ok(ProviderEvent::Finished {
+                                    .send(Ok(ProviderEvent::StreamFinished {
                                         stop_reason: finish_reason
                                             .unwrap_or_else(|| "complete".to_string()),
                                         usage,

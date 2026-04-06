@@ -3,7 +3,7 @@ use super::traits::{
     ChatMessage, ChatRequest, MessageContent, MessageRole, ModelTier, Provider, ProviderResponse,
     ToolChoice, ToolSchema,
 };
-use crate::agent::events::{ProviderEvent, UsageStats};
+use crate::agent::events::{ProviderEvent, ProviderUsage};
 use crate::error::{AppError, AppResult};
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -356,7 +356,7 @@ impl Provider for ClaudeProvider {
 
         Ok(ProviderResponse {
             message: ChatMessage::assistant_parts(content_parts),
-            usage: UsageStats {
+            usage: ProviderUsage {
                 input_tokens: api_resp.usage.input_tokens,
                 output_tokens: api_resp.usage.output_tokens,
             },
@@ -399,7 +399,7 @@ impl Provider for ClaudeProvider {
         let (tx, rx) = mpsc::channel(32);
 
         tokio::spawn(async move {
-            let mut usage = UsageStats {
+            let mut usage = ProviderUsage {
                 input_tokens: 0,
                 output_tokens: 0,
             };
@@ -421,11 +421,11 @@ impl Provider for ClaudeProvider {
                                 return;
                             }
                             None => {
-                                // Stream ended — emit any buffered tool calls + Finished
+                                // Stream ended — emit any buffered tool calls + StreamFinished
                                 for (id, name, json_buf) in &tool_blocks {
                                     let arguments_json = serde_json::from_str(json_buf)
                                         .unwrap_or(Value::Object(Default::default()));
-                                    if tx.send(Ok(ProviderEvent::ToolCall {
+                                    if tx.send(Ok(ProviderEvent::ToolCallReady {
                                         id: id.clone(),
                                         name: name.clone(),
                                         arguments_json,
@@ -433,7 +433,7 @@ impl Provider for ClaudeProvider {
                                         return;
                                     }
                                 }
-                                let _ = tx.send(Ok(ProviderEvent::Finished { stop_reason, usage })).await;
+                                let _ = tx.send(Ok(ProviderEvent::StreamFinished { stop_reason, usage })).await;
                                 return;
                             }
                         };
@@ -526,7 +526,7 @@ impl Provider for ClaudeProvider {
                                         if !tb.0.is_empty() {
                                             let arguments_json = serde_json::from_str(&tb.2)
                                                 .unwrap_or(Value::Object(Default::default()));
-                                            if tx.send(Ok(ProviderEvent::ToolCall {
+                                            if tx.send(Ok(ProviderEvent::ToolCallReady {
                                                 id: tb.0.clone(),
                                                 name: tb.1.clone(),
                                                 arguments_json,
@@ -547,8 +547,8 @@ impl Provider for ClaudeProvider {
                                     }
                                 }
                                 "message_stop" => {
-                                    // Finished — no more tool calls to buffer since we emit on content_block_stop
-                                    let _ = tx.send(Ok(ProviderEvent::Finished { stop_reason, usage })).await;
+                                    // StreamFinished — no more tool calls to buffer since we emit on content_block_stop
+                                    let _ = tx.send(Ok(ProviderEvent::StreamFinished { stop_reason, usage })).await;
                                     return;
                                 }
                                 "error" => {

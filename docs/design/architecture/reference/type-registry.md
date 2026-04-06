@@ -44,14 +44,19 @@
 |--------|------|------|---------|
 | `AgentRunSpec` | `src/agent/spec.rs` | 一次 Agent 执行的完整声明式配置 | 构建后不可变，Clone 实现 |
 | `AgentRunResult` | `src/agent/spec.rs` | 一次执行的完整结构化输出 | 包含完整消息链，用于 Turn 持久化 |
-| `AgentProfile` | `src/agent/agent.rs` | Agent 静态定义 | 当前包含 model 与 execution 默认值，是定义层的最小可用形态 |
-| `AgentRegistry` | `src/agent/agent.rs` | AgentProfile 注册表 | 当前为轻量内存注册表，已接入 AppRuntime / AgentLoop / spawn |
-| `ModelRouter` | `src/agent/agent.rs` | 根据 profile 解析模型 | 当前为最小实现，直接返回 profile.model，已接入主执行链路 |
+| `AgentProfile` | `src/agent/agents.rs` | Agent 静态定义 | 当前包含 model 与 execution 默认值，是定义层的最小可用形态 |
+| `AgentRegistry` | `src/agent/agents.rs` | AgentProfile 注册表 | 当前为轻量内存注册表，已接入 AppRuntime / AgentLoop / spawn |
+| `ModelRouter` | `src/agent/agents.rs` | 根据 profile 解析模型 | 当前为最小实现，直接返回 profile.model，已接入主执行链路 |
 | `ChatMessage` | `src/providers/traits.rs` | 单条对话消息 | System / User / Assistant / ToolResult 四种角色 |
 | `ToolCall` | `src/agent/tools/mod.rs` | LLM 请求的工具调用 | 含 `tool_call_id`，用于结果匹配 |
 | `IterationState` | `src/agent/runner.rs` | 单次迭代运行时快照 | 仅迭代期间存在，传给 Hook |
 | `AgentSpawnDispatcher` | `src/agent/spawn.rs` | 管理派生执行 | 当前已接通 inline `SubAgent` 与后台派发 |
 | `SubAgentDef` | `src/agent/spawn.rs` | 子代理静态定义 | 含 mode / model / capabilities / prompt |
+| `ProviderEvent` | `src/agent/events.rs` | Provider 到 Runner 的标准化流事件 | 只表达流式协议事件，不承载 runtime 观测语义 |
+| `ProviderUsage` | `src/agent/events.rs` | Provider 原始 token 使用量 | 与 `TokenUsage` 区分，前者是 provider 原始统计，后者是 run 聚合统计 |
+| `AgentEvent` | `src/agent/events.rs` | Runtime 内部观测事件 | 供 observability / tracing / metrics 消费 |
+| `LoopPhase` | `src/agent/events.rs` | Runtime 内部阶段机 | 不直接暴露给前端 |
+| `UserVisiblePhase` | `src/agent/events.rs` | 对外简化状态 | 通过 MessageBus / Channel 暴露给前端 |
 | `Memory` | `src/agent/memory.rs` | Agent 私有观察记录 | 含重要性权重和衰减系数 |
 | `SkillManifest` | `src/agent/skills.rs` | 技能完整清单 | 启动时只索引元数据，激活时加载完整内容 |
 

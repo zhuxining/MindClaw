@@ -102,7 +102,7 @@ pub trait RunHookPublisher: Send {
         &self,
         request_id: &str,
         session_id: &str,
-        phase: crate::agent::events::UserVisiblePhase,
+        status: crate::agent::events::UserVisiblePhase,
     );
     fn emit_chunk(&self, request_id: &str, session_id: &str, segment_id: u64, content: &str);
     fn emit_segment_end(&self, request_id: &str, session_id: &str, segment_id: u64, resuming: bool);

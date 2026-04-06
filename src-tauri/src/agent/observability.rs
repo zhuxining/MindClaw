@@ -4,7 +4,7 @@ use async_trait::async_trait;
 /// 内部观测接口（日志/审计/指标）
 #[async_trait]
 pub trait AgentObserver: Send + Sync {
-    /// 处理 Agent 事件
+    /// 处理 Runtime 事件
     async fn on_event(&self, event: &AgentEvent);
 }
 
@@ -37,29 +37,29 @@ impl AgentObserver for TracingObserver {
                     "agent_run_started"
                 );
             }
-            AgentEvent::SessionResolved { session_id } => {
-                tracing::debug!(session_id = %session_id, "agent_session_resolved");
+            AgentEvent::SessionLoaded { session_id } => {
+                tracing::debug!(session_id = %session_id, "agent_session_loaded");
             }
-            AgentEvent::CommandIntercepted { name } => {
-                tracing::info!(command = %name, "agent_command_intercepted");
+            AgentEvent::ControlCommandIntercepted { name } => {
+                tracing::info!(command = %name, "agent_control_command_intercepted");
             }
-            AgentEvent::ContextBuilt { fragments } => {
-                tracing::debug!(fragments = %fragments, "agent_context_built");
+            AgentEvent::ContextPrepared { fragments } => {
+                tracing::debug!(fragments = %fragments, "agent_context_prepared");
             }
-            AgentEvent::ProviderTextDelta { len } => {
-                tracing::trace!(len = %len, "agent_provider_text_delta");
+            AgentEvent::ModelTextDeltaObserved { len } => {
+                tracing::trace!(len = %len, "agent_model_text_delta_observed");
             }
-            AgentEvent::ProviderToolCall { name } => {
-                tracing::info!(tool_name = %name, "agent_provider_tool_call");
+            AgentEvent::ModelToolCallObserved { name } => {
+                tracing::info!(tool_name = %name, "agent_model_tool_call_observed");
             }
-            AgentEvent::ToolStarted { name } => {
-                tracing::info!(tool_name = %name, "agent_tool_started");
+            AgentEvent::ToolExecutionStarted { name } => {
+                tracing::info!(tool_name = %name, "agent_tool_execution_started");
             }
-            AgentEvent::ToolFinished { name, success } => {
+            AgentEvent::ToolExecutionFinished { name, success } => {
                 tracing::info!(
                     tool_name = %name,
                     success = %success,
-                    "agent_tool_finished"
+                    "agent_tool_execution_finished"
                 );
             }
             AgentEvent::RunCompleted => {
@@ -68,8 +68,8 @@ impl AgentObserver for TracingObserver {
             AgentEvent::RunCancelled => {
                 tracing::info!("agent_run_cancelled");
             }
-            AgentEvent::SteeringInjected { count } => {
-                tracing::info!(count = %count, "agent_steering_injected");
+            AgentEvent::SteeringMessageInjected { count } => {
+                tracing::info!(count = %count, "agent_steering_message_injected");
             }
             AgentEvent::RunFailed { message } => {
                 tracing::error!(error = %message, "agent_run_failed");

@@ -72,6 +72,17 @@ MindClaw 的 Agent Runtime 采用四段式边界：
 关键属性：ProviderRegistry、ToolExecutor。
 关系：消费 `AgentRunSpec`，输出 `AgentRunResult`；不感知 Session、Bus、Channel。
 
+**Runtime Events (`events.rs`)**：运行期共享事件契约。
+关键对象：`ProviderEvent`、`ProviderUsage`、`AgentEvent`、`UserVisiblePhase`、`LoopPhase`。
+关系：被 Provider、Runner、Loop、Observability、Bus 共同引用；负责定义过程中的标准化事件，而不是承载业务逻辑。
+命名分工：
+
+- `ProviderEvent`：Provider -> Runner 的标准化流事件
+- `ProviderUsage`：Provider 单次响应的原始 token 使用量
+- `AgentEvent`：Loop / Runner / Tool / Spawn 的内部观测事件
+- `LoopPhase`：runtime 内部阶段机
+- `UserVisiblePhase`：前端或 Channel 可见的简化状态
+
 **AgentSpawnDispatcher**：派生执行编排器。
 关键属性：spawn source 解析、权限校验、父子 run 链路、后台任务调度。
 关系：由 AgentLoop、Scheduler 或其他系统入口调用；支持同步 `SubAgent` 与异步 `BackgroundAgent`。
@@ -104,11 +115,11 @@ sequenceDiagram
 
 ## § Main / Sub / Background
 
-| 形态 | AgentProfile.kind | InvocationMode | 谁等待结果 | 用户是否直接可见 |
-|------|-------------------|----------------|-----------|-----------------|
-| 主对话 Agent | `main` | `interactive` | 用户 | 是 |
-| 子代理 | `sub` | `inline_child` | 父 Agent | 默认否 |
-| 后台 Agent | `background` | `detached` | 无人等待；若来自主 Agent 则同步返回 task id | 完成时单独通知 |
+| 形态         | AgentProfile.kind | InvocationMode | 谁等待结果                                  | 用户是否直接可见 |
+| ------------ | ----------------- | -------------- | ------------------------------------------- | ---------------- |
+| 主对话 Agent | `main`            | `interactive`  | 用户                                        | 是               |
+| 子代理       | `sub`             | `inline_child` | 父 Agent                                    | 默认否           |
+| 后台 Agent   | `background`      | `detached`     | 无人等待；若来自主 Agent 则同步返回 task id | 完成时单独通知   |
 
 三者不拥有三套 Runtime。它们共用：
 
@@ -120,28 +131,28 @@ sequenceDiagram
 
 ## § 第 3 章文档地图
 
-| 文件 | 内容 |
-|------|------|
-| [03.01-agent-profile.md](./03.01-agent-profile.md) | AgentProfile：静态定义与策略边界 |
-| [03.02-agent-loop.md](./03.02-agent-loop.md) | AgentLoop：turn 级编排 |
-| [03.03-agent-runner.md](./03.03-agent-runner.md) | AgentRunner：run 级迭代执行 |
-| [03.04-run-contracts.md](./03.04-run-contracts.md) | Run 契约：Spec / Result / RunHooks / InvocationMode |
-| [03.05-agent-spawn.md](./03.05-agent-spawn.md) | Agent Spawn：SubAgent 与 BackgroundAgent |
-| [03.06-context-pipeline.md](./03.06-context-pipeline.md) | ContextPipeline：上下文装配 |
-| [03.07-tool-execution.md](./03.07-tool-execution.md) | Tool Execution：工具注册、沙箱与执行 |
-| [03.08-mcp.md](./03.08-mcp.md) | MCP：外部能力适配 |
-| [03.09-skills.md](./03.09-skills.md) | Skills：能力定义与按需注入 |
-| [03.10-memory.md](./03.10-memory.md) | Memory：后台提取与升华 |
-| [03.11-observability.md](./03.11-observability.md) | Observability：运行时观测 |
+| 文件                                                     | 内容                                                |
+| -------------------------------------------------------- | --------------------------------------------------- |
+| [03.01-agent-profile.md](./03.01-agent-profile.md)       | AgentProfile：静态定义与策略边界                    |
+| [03.02-agent-loop.md](./03.02-agent-loop.md)             | AgentLoop：turn 级编排                              |
+| [03.03-agent-runner.md](./03.03-agent-runner.md)         | AgentRunner：run 级迭代执行                         |
+| [03.04-run-contracts.md](./03.04-run-contracts.md)       | Run 契约：Spec / Result / RunHooks / InvocationMode |
+| [03.05-agent-spawn.md](./03.05-agent-spawn.md)           | Agent Spawn：SubAgent 与 BackgroundAgent            |
+| [03.06-context-pipeline.md](./03.06-context-pipeline.md) | ContextPipeline：上下文装配                         |
+| [03.07-tool-execution.md](./03.07-tool-execution.md)     | Tool Execution：工具注册、沙箱与执行                |
+| [03.08-mcp.md](./03.08-mcp.md)                           | MCP：外部能力适配                                   |
+| [03.09-skills.md](./03.09-skills.md)                     | Skills：能力定义与按需注入                          |
+| [03.10-memory.md](./03.10-memory.md)                     | Memory：后台提取与升华                              |
+| [03.11-observability.md](./03.11-observability.md)       | Observability：运行时观测                           |
 
 ---
 
 ## § 设计决策与权衡
 
-| 决策问题 | 选择 | 放弃的替代方案 | 理由 |
-|---------|------|--------------|------|
-| Agent 是否是运行时实体？ | 否，`AgentProfile` 是静态定义 | Agent 持有 provider/session/tools | 定义与状态分离后，main/sub/background 共享执行引擎，边界稳定 |
-| 编排与执行是否分离？ | 是，Loop 与 Runner 分层 | AgentLoop 内嵌全部迭代逻辑 | turn 编排和 run 迭代是两个粒度，混在一起会导致对象过胖 |
-| SubAgent 与 BackgroundAgent 是否合并为单一概念？ | 否，概念层保留区分 | 统一叫 child agent | 保留谁发起、是否等待等语义差异，同时实现层仍可复用 |
-| 派生执行是否共用同一套实现？ | 是，统一走 AgentSpawnDispatcher + AgentRunner | 子代理、后台代理各做一套执行流程 | 执行链路与控制点高度重叠，复用更稳 |
-| Provider 在哪一层？ | Adapter Layer | 放进 AgentLoop 或 AgentProfile | Provider 只处理协议差异，不应携带业务语义 |
+| 决策问题                                         | 选择                                          | 放弃的替代方案                    | 理由                                                         |
+| ------------------------------------------------ | --------------------------------------------- | --------------------------------- | ------------------------------------------------------------ |
+| Agent 是否是运行时实体？                         | 否，`AgentProfile` 是静态定义                 | Agent 持有 provider/session/tools | 定义与状态分离后，main/sub/background 共享执行引擎，边界稳定 |
+| 编排与执行是否分离？                             | 是，Loop 与 Runner 分层                       | AgentLoop 内嵌全部迭代逻辑        | turn 编排和 run 迭代是两个粒度，混在一起会导致对象过胖       |
+| SubAgent 与 BackgroundAgent 是否合并为单一概念？ | 否，概念层保留区分                            | 统一叫 child agent                | 保留谁发起、是否等待等语义差异，同时实现层仍可复用           |
+| 派生执行是否共用同一套实现？                     | 是，统一走 AgentSpawnDispatcher + AgentRunner | 子代理、后台代理各做一套执行流程  | 执行链路与控制点高度重叠，复用更稳                           |
+| Provider 在哪一层？                              | Adapter Layer                                 | 放进 AgentLoop 或 AgentProfile    | Provider 只处理协议差异，不应携带业务语义                    |

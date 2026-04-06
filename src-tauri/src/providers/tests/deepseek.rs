@@ -103,8 +103,8 @@ async fn test_deepseek_stream() {
                 *count += 1;
                 text.push_str(&chunk);
             }
-            crate::agent::events::ProviderEvent::Finished { .. } => break,
-            crate::agent::events::ProviderEvent::ToolCall { .. } => {}
+            crate::agent::events::ProviderEvent::StreamFinished { .. } => break,
+            crate::agent::events::ProviderEvent::ToolCallReady { .. } => {}
         }
     }
 

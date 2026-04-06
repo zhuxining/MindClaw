@@ -1,10 +1,10 @@
 //! RunHooks — 生命周期钩子
 //!
 //! 连接业务层与执行层的桥梁
-//! 提供六个扩展点，允许业务层将特定行为注入到 Runner 的迭代循环中
+//! 提供 12 个执行节点扩展点，允许业务层将特定行为注入到 Runner 的生命周期
 //!
 //! 当前文件集中承接：
-//! - `RunHooks` trait
+//! - `RunHooks` trait（12 个 on_* 方法）
 //! - 面向 MessageBus 的 `InteractiveRunHooks`
 //! - 空实现 `NoopRunHooks`
 //! - 测试记录实现 `RecordingRunHooks`
@@ -14,9 +14,81 @@
 //! - 不处理 AgentLoop 控制面命令
 //! - 不推进迭代，只观察并做副作用桥接
 
-use crate::agent::spec::IterationState;
+use crate::agent::spec::{AgentRunResult, TokenUsage};
 use crate::agent::tools::ToolCall;
 use std::time::Instant;
+
+// ============================================================================
+// 上下文类型定义
+// ============================================================================
+
+/// Run 开始上下文
+#[derive(Debug, Clone)]
+pub struct RunStartContext {
+    pub run_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub message_count: usize,
+}
+
+/// 迭代开始上下文
+#[derive(Debug, Clone)]
+pub struct IterationStartContext {
+    pub run_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub iteration: usize,
+    pub message_count: usize,
+}
+
+/// 模型请求上下文
+#[derive(Debug, Clone)]
+pub struct ModelRequestContext {
+    pub run_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub iteration: usize,
+    pub model: String,
+    pub is_streaming: bool,
+}
+
+/// 模型响应上下文
+#[derive(Debug, Clone)]
+pub struct ModelResponseContext {
+    pub run_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub iteration: usize,
+    pub has_tool_calls: bool,
+    pub tool_call_count: usize,
+    pub usage: TokenUsage,
+}
+
+/// 迭代结束上下文
+#[derive(Debug, Clone)]
+pub struct IterationFinishContext {
+    pub run_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub iteration: usize,
+    pub message_count: usize,
+    pub usage: TokenUsage,
+}
+
+/// Run 中止原因
+#[derive(Debug, Clone)]
+pub enum RunAbortReason {
+    Cancelled,
+    Timeout { elapsed_ms: u64 },
+    Error { message: String },
+}
+
+/// 流式模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamingMode {
+    Disabled,
+    TextOnly,
+}
 
 // ============================================================================
 // RunHooks Trait
@@ -24,57 +96,69 @@ use std::time::Instant;
 
 /// Run 生命周期钩子
 ///
-/// 提供六个扩展点，允许业务层将特定行为注入到 Runner 的迭代循环中。
-/// 默认实现对所有方法都是空操作，使得 Hook 完全可选。
+/// 提供 12 个扩展点，对应 Runner 的关键执行节点。
+/// 所有方法都有默认空实现，使得 Hook 完全可选。
 pub trait RunHooks: Send {
-    /// 决定本次迭代是否使用流式传输
-    ///
-    /// 返回 true：使用 chat_stream，逐 token 回调 on_stream
-    /// 返回 false：使用 chat，一次性返回完整响应
-    fn wants_streaming(&self) -> bool {
-        true
+    /// 返回流式传输模式
+    fn streaming_mode(&self) -> StreamingMode {
+        StreamingMode::TextOnly
     }
+
+    /// Run 开始时调用
+    fn on_run_start(&mut self, _ctx: &RunStartContext) {}
 
     /// 每次迭代开始时调用
-    ///
-    /// 用途：观察/重置状态，为新的 LLM 调用做准备
-    fn before_iteration(&mut self, _state: &mut IterationState) {}
+    fn on_iteration_start(&mut self, _ctx: &IterationStartContext) {}
+
+    /// 模型请求开始时调用
+    fn on_model_request_start(&mut self, _ctx: &ModelRequestContext) {}
 
     /// 流式传输期间的每个内容增量
-    ///
-    /// 用途：将内容增量转发到 UI 层
-    fn on_stream(&mut self, _delta: &str) {}
+    fn on_model_text_delta(&mut self, _delta: &str) {}
 
-    /// 流式传输完成时调用
-    ///
-    /// # 参数
-    /// - `resuming`: true 表示后续还有工具调用，false 表示最终响应
-    ///
-    /// 用途：发出流结束信号，UI 层可据此调整状态
-    fn on_stream_end(&mut self, _resuming: bool) {}
+    /// 模型响应准备好时调用（无论是否流式）
+    fn on_model_response_ready(&mut self, _ctx: &ModelResponseContext) {}
 
-    /// 工具执行之前调用
-    ///
-    /// 用途：设置工具路由上下文，记录工具调用日志，发送进度事件
-    fn before_execute_tools(&mut self, _calls: &[ToolCall]) {}
+    /// 工具调用批次开始时调用
+    fn on_tool_batch_start(&mut self, _calls: &[ToolCall]) {}
+
+    /// 单个工具调用开始时调用
+    fn on_tool_call_start(&mut self, _call: &ToolCall) {}
+
+    /// 单个工具调用完成时调用
+    fn on_tool_call_finish(&mut self, _call: &ToolCall, _success: bool, _result_summary: &str) {}
 
     /// 每次迭代结束时调用
-    ///
-    /// 用途：持久化指标，完成状态定稿
-    fn after_iteration(&mut self, _state: &IterationState) {}
+    fn on_iteration_finish(&mut self, _ctx: &IterationFinishContext) {}
 
-    /// 最终响应时调用
-    ///
-    /// 用途：后处理内容（如剥离 think 标签）
-    /// 返回处理后的内容
-    fn finalize_content(&mut self, content: &str) -> String {
+    /// 最终响应定稿时调用
+    /// 返回处理后的内容（如剥离 think 标签）
+    fn finalize_response(&mut self, content: &str) -> String {
         content.to_string()
     }
+
+    /// Run 正常完成时调用
+    fn on_finish(&mut self, _result: &AgentRunResult) {}
+
+    /// Run 中止时调用
+    fn on_abort(&mut self, _reason: &RunAbortReason) {}
 }
 
 // ============================================================================
 // InteractiveRunHooks - 业务层桥接实现
 // ============================================================================
+
+/// RunHook 发布器 trait（解耦 MessageBus）
+pub trait RunHookPublisher: Send {
+    fn emit_status(
+        &self,
+        request_id: &str,
+        session_id: &str,
+        status: crate::agent::events::UserVisiblePhase,
+    );
+    fn emit_chunk(&self, request_id: &str, session_id: &str, segment_id: u64, content: &str);
+    fn emit_segment_end(&self, request_id: &str, session_id: &str, segment_id: u64, resuming: bool);
+}
 
 /// InteractiveRunHooks - AgentLoop 使用的内部 Hook
 ///
@@ -94,18 +178,8 @@ pub struct InteractiveRunHooks {
     last_stripped_len: usize,
     /// 迭代开始时间
     iteration_start: Option<Instant>,
-}
-
-/// RunHook 发布器 trait（解耦 MessageBus）
-pub trait RunHookPublisher: Send {
-    fn emit_status(
-        &self,
-        request_id: &str,
-        session_id: &str,
-        status: crate::agent::events::UserVisiblePhase,
-    );
-    fn emit_chunk(&self, request_id: &str, session_id: &str, segment_id: u64, content: &str);
-    fn emit_segment_end(&self, request_id: &str, session_id: &str, segment_id: u64, resuming: bool);
+    /// 当前迭代
+    current_iteration: usize,
 }
 
 impl InteractiveRunHooks {
@@ -123,17 +197,23 @@ impl InteractiveRunHooks {
             buffer: String::new(),
             last_stripped_len: 0,
             iteration_start: None,
+            current_iteration: 0,
         }
     }
 }
 
 impl RunHooks for InteractiveRunHooks {
-    fn wants_streaming(&self) -> bool {
-        true
+    fn streaming_mode(&self) -> StreamingMode {
+        StreamingMode::TextOnly
     }
 
-    fn before_iteration(&mut self, _state: &mut IterationState) {
-        // 重置缓冲区
+    fn on_run_start(&mut self, _ctx: &RunStartContext) {
+        self.segment_id = 0;
+        self.current_iteration = 0;
+    }
+
+    fn on_iteration_start(&mut self, ctx: &IterationStartContext) {
+        self.current_iteration = ctx.iteration;
         self.buffer.clear();
         self.last_stripped_len = 0;
         self.iteration_start = Some(Instant::now());
@@ -146,27 +226,33 @@ impl RunHooks for InteractiveRunHooks {
         );
     }
 
-    fn on_stream(&mut self, delta: &str) {
+    fn on_model_text_delta(&mut self, delta: &str) {
         // 1. 缓冲原始内容
         self.buffer.push_str(delta);
 
         // 2. 剥离 think 标签（差分剥离）
         let stripped = strip_think_tags(&self.buffer);
-        let new_chars = &stripped[self.last_stripped_len..];
+
+        // 安全切片：当 <think> 标签跨 delta 被补全时，stripped 长度可能小于
+        // last_stripped_len（部分标签内容从输出中消失），此时 get() 返回 None，
+        // 跳过本轮发送；last_stripped_len 同步更新，后续 delta 照常工作。
+        let new_content = stripped.get(self.last_stripped_len..).unwrap_or("");
 
         // 3. 只发送新增的清洁字符
-        if !new_chars.is_empty() {
+        if !new_content.is_empty() {
             self.publisher.emit_chunk(
                 &self.request_id,
                 &self.session_id,
                 self.segment_id,
-                new_chars,
+                new_content,
             );
-            self.last_stripped_len = stripped.len();
         }
+        self.last_stripped_len = stripped.len();
     }
 
-    fn on_stream_end(&mut self, resuming: bool) {
+    fn on_model_response_ready(&mut self, ctx: &ModelResponseContext) {
+        // 流结束信号
+        let resuming = ctx.has_tool_calls;
         self.publisher.emit_segment_end(
             &self.request_id,
             &self.session_id,
@@ -189,27 +275,45 @@ impl RunHooks for InteractiveRunHooks {
         }
     }
 
-    fn before_execute_tools(&mut self, calls: &[ToolCall]) {
-        // 发送工具提示
+    fn on_tool_batch_start(&mut self, calls: &[ToolCall]) {
         let tool_names: Vec<_> = calls.iter().map(|c| c.name.as_str()).collect();
         tracing::info!(tools = ?tool_names, "tool_calls_started");
     }
 
-    fn after_iteration(&mut self, state: &IterationState) {
+    fn on_iteration_finish(&mut self, _ctx: &IterationFinishContext) {
         // 记录迭代耗时
         if let Some(start) = self.iteration_start {
             let elapsed = start.elapsed();
             tracing::debug!(
-                iteration = state.iteration,
+                iteration = self.current_iteration,
                 elapsed_ms = elapsed.as_millis(),
                 "iteration_completed"
             );
         }
     }
 
-    fn finalize_content(&mut self, content: &str) -> String {
+    fn finalize_response(&mut self, content: &str) -> String {
         // 剥离 think 标签
         strip_think_tags(content)
+    }
+
+    fn on_finish(&mut self, _result: &AgentRunResult) {
+        // 发送完成状态
+        self.publisher.emit_status(
+            &self.request_id,
+            &self.session_id,
+            crate::agent::events::UserVisiblePhase::Completed,
+        );
+    }
+
+    fn on_abort(&mut self, reason: &RunAbortReason) {
+        let status = match reason {
+            RunAbortReason::Cancelled => crate::agent::events::UserVisiblePhase::Cancelled,
+            RunAbortReason::Timeout { .. } => crate::agent::events::UserVisiblePhase::Error,
+            RunAbortReason::Error { .. } => crate::agent::events::UserVisiblePhase::Error,
+        };
+        self.publisher
+            .emit_status(&self.request_id, &self.session_id, status);
     }
 }
 
@@ -221,8 +325,8 @@ impl RunHooks for InteractiveRunHooks {
 pub struct NoopRunHooks;
 
 impl RunHooks for NoopRunHooks {
-    fn wants_streaming(&self) -> bool {
-        false
+    fn streaming_mode(&self) -> StreamingMode {
+        StreamingMode::Disabled
     }
 }
 
@@ -233,12 +337,18 @@ impl RunHooks for NoopRunHooks {
 /// Hook 事件记录
 #[derive(Debug, Clone)]
 pub enum RunHookEvent {
-    BeforeIteration { iteration: usize },
-    StreamDelta { len: usize },
-    StreamEnd { resuming: bool },
-    BeforeExecuteTools { tool_count: usize },
-    AfterIteration { iteration: usize },
-    FinalizeContent { input_len: usize, output_len: usize },
+    RunStart { run_id: String },
+    IterationStart { iteration: usize },
+    ModelRequestStart { iteration: usize, model: String },
+    ModelTextDelta { len: usize },
+    ModelResponseReady { has_tool_calls: bool },
+    ToolBatchStart { tool_count: usize },
+    ToolCallStart { name: String },
+    ToolCallFinish { name: String, success: bool },
+    IterationFinish { iteration: usize },
+    FinalizeResponse { input_len: usize, output_len: usize },
+    Finish { stop_reason: String },
+    Abort { reason: String },
 }
 
 /// RecordingRunHooks - 测试使用的记录型 Hook
@@ -246,6 +356,7 @@ pub struct RecordingRunHooks {
     pub events: Vec<RunHookEvent>,
     pub stream_deltas: Vec<String>,
     streaming: bool,
+    current_iteration: usize,
 }
 
 impl RecordingRunHooks {
@@ -254,50 +365,96 @@ impl RecordingRunHooks {
             events: Vec::new(),
             stream_deltas: Vec::new(),
             streaming,
+            current_iteration: 0,
         }
     }
 }
 
 impl RunHooks for RecordingRunHooks {
-    fn wants_streaming(&self) -> bool {
-        self.streaming
+    fn streaming_mode(&self) -> StreamingMode {
+        if self.streaming {
+            StreamingMode::TextOnly
+        } else {
+            StreamingMode::Disabled
+        }
     }
 
-    fn before_iteration(&mut self, state: &mut IterationState) {
-        self.events.push(RunHookEvent::BeforeIteration {
-            iteration: state.iteration,
+    fn on_run_start(&mut self, ctx: &RunStartContext) {
+        self.events.push(RunHookEvent::RunStart {
+            run_id: ctx.run_id.clone(),
         });
     }
 
-    fn on_stream(&mut self, delta: &str) {
+    fn on_iteration_start(&mut self, ctx: &IterationStartContext) {
+        self.current_iteration = ctx.iteration;
+        self.events.push(RunHookEvent::IterationStart {
+            iteration: ctx.iteration,
+        });
+    }
+
+    fn on_model_request_start(&mut self, ctx: &ModelRequestContext) {
+        self.events.push(RunHookEvent::ModelRequestStart {
+            iteration: ctx.iteration,
+            model: ctx.model.clone(),
+        });
+    }
+
+    fn on_model_text_delta(&mut self, delta: &str) {
         self.stream_deltas.push(delta.to_string());
         self.events
-            .push(RunHookEvent::StreamDelta { len: delta.len() });
+            .push(RunHookEvent::ModelTextDelta { len: delta.len() });
     }
 
-    fn on_stream_end(&mut self, resuming: bool) {
-        self.events.push(RunHookEvent::StreamEnd { resuming });
+    fn on_model_response_ready(&mut self, ctx: &ModelResponseContext) {
+        self.events.push(RunHookEvent::ModelResponseReady {
+            has_tool_calls: ctx.has_tool_calls,
+        });
     }
 
-    fn before_execute_tools(&mut self, calls: &[ToolCall]) {
-        self.events.push(RunHookEvent::BeforeExecuteTools {
+    fn on_tool_batch_start(&mut self, calls: &[ToolCall]) {
+        self.events.push(RunHookEvent::ToolBatchStart {
             tool_count: calls.len(),
         });
     }
 
-    fn after_iteration(&mut self, state: &IterationState) {
-        self.events.push(RunHookEvent::AfterIteration {
-            iteration: state.iteration,
+    fn on_tool_call_start(&mut self, call: &ToolCall) {
+        self.events.push(RunHookEvent::ToolCallStart {
+            name: call.name.clone(),
         });
     }
 
-    fn finalize_content(&mut self, content: &str) -> String {
+    fn on_tool_call_finish(&mut self, call: &ToolCall, success: bool, _result_summary: &str) {
+        self.events.push(RunHookEvent::ToolCallFinish {
+            name: call.name.clone(),
+            success,
+        });
+    }
+
+    fn on_iteration_finish(&mut self, ctx: &IterationFinishContext) {
+        self.events.push(RunHookEvent::IterationFinish {
+            iteration: ctx.iteration,
+        });
+    }
+
+    fn finalize_response(&mut self, content: &str) -> String {
         let output = strip_think_tags(content);
-        self.events.push(RunHookEvent::FinalizeContent {
+        self.events.push(RunHookEvent::FinalizeResponse {
             input_len: content.len(),
             output_len: output.len(),
         });
         output
+    }
+
+    fn on_finish(&mut self, result: &AgentRunResult) {
+        self.events.push(RunHookEvent::Finish {
+            stop_reason: format!("{:?}", result.stop_reason),
+        });
+    }
+
+    fn on_abort(&mut self, reason: &RunAbortReason) {
+        self.events.push(RunHookEvent::Abort {
+            reason: format!("{:?}", reason),
+        });
     }
 }
 
@@ -320,12 +477,15 @@ pub fn strip_think_tags(content: &str) -> String {
             let mut tag_buffer = String::new();
             tag_buffer.push(ch);
 
-            // 收集可能的标签
-            while let Some(&next_ch) = chars.peek() {
-                if next_ch == '>' || tag_buffer.len() >= 7 {
-                    break;
+            // 收集可能的标签（最多到 '>' 或 buffer 满）
+            while tag_buffer.len() < 8 {
+                match chars.peek() {
+                    Some(&next_ch) if next_ch != '>' => {
+                        tag_buffer.push(next_ch);
+                        chars.next(); // consume the character
+                    }
+                    _ => break,
                 }
-                tag_buffer.push(chars.next().unwrap());
             }
 
             // 检查标签类型

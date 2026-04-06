@@ -75,7 +75,7 @@ impl Tool for DelegateToAgentTool {
             .delegate_to_agent(&task_description, label.as_deref())
             .await
         {
-            Ok(result) => Ok(ToolOutput::ok(result.content)),
+            Ok(result) => Ok(ToolOutput::ok(result.final_text)),
             Err(e) => Ok(ToolOutput::err(format!(
                 "Failed to delegate to sub-agent: {e}"
             ))),

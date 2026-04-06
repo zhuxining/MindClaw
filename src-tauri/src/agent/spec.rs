@@ -9,6 +9,25 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 // ============================================================================
+// InvocationMode - 调用语义
+// ============================================================================
+
+/// 本次 run 的调用语义
+///
+/// 影响流式输出策略、结果交付方式、Session 持久化策略和 Hooks 实现选择。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InvocationMode {
+    /// 用户前台对话
+    #[default]
+    Interactive,
+    /// 同步子代理，父 Agent 等待结果后回填为 ToolResult
+    InlineChild,
+    /// 后台代理，先返回 task_id，完成后单独通知
+    Detached,
+}
+
+// ============================================================================
 // AgentRunSpec - 声明式执行配置
 // ============================================================================
 
@@ -18,6 +37,15 @@ use std::time::Duration;
 /// 由于使用了不可变设计，该规范在构建后既节省内存又可预测。
 #[derive(Debug, Clone)]
 pub struct AgentRunSpec {
+    /// Run 唯一标识
+    pub run_id: String,
+    /// Session 标识
+    pub session_id: String,
+    /// Agent 标识
+    pub agent_id: String,
+    /// 调用语义（决定流式、结果交付、持久化策略）
+    pub invocation: InvocationMode,
+
     /// 预组装的消息历史记录
     pub messages: Vec<ChatMessage>,
 
@@ -54,6 +82,10 @@ pub struct AgentRunSpec {
 impl Default for AgentRunSpec {
     fn default() -> Self {
         Self {
+            run_id: uuid::Uuid::new_v4().to_string(),
+            session_id: "default".to_string(),
+            agent_id: "default".to_string(),
+            invocation: InvocationMode::Interactive,
             messages: Vec::new(),
             system_prompt: String::new(),
             tools: Vec::new(),
@@ -81,6 +113,10 @@ impl AgentRunSpec {
         model: String,
     ) -> Self {
         Self {
+            run_id: uuid::Uuid::new_v4().to_string(),
+            session_id: "default".to_string(),
+            agent_id: "default".to_string(),
+            invocation: InvocationMode::Interactive,
             system_prompt,
             messages,
             tools,
@@ -102,6 +138,10 @@ impl AgentRunSpec {
         config: &crate::runtime::config::AppConfig,
     ) -> Self {
         Self {
+            run_id: uuid::Uuid::new_v4().to_string(),
+            session_id: "default".to_string(),
+            agent_id: "default".to_string(),
+            invocation: InvocationMode::Interactive,
             system_prompt,
             messages,
             tools,
@@ -122,6 +162,10 @@ impl AgentRunSpec {
         model: String,
     ) -> Self {
         Self {
+            run_id: uuid::Uuid::new_v4().to_string(),
+            session_id: "background".to_string(),
+            agent_id: "background".to_string(),
+            invocation: InvocationMode::Detached,
             system_prompt,
             messages: vec![ChatMessage::user(&task_description)],
             tools,
@@ -137,6 +181,10 @@ impl AgentRunSpec {
     /// 创建测试配置
     pub fn test(messages: Vec<ChatMessage>, tools: Vec<ToolSchema>) -> Self {
         Self {
+            run_id: uuid::Uuid::new_v4().to_string(),
+            session_id: "test".to_string(),
+            agent_id: "test".to_string(),
+            invocation: InvocationMode::Interactive,
             system_prompt: "你是一个测试助手。".to_string(),
             messages,
             tools,
@@ -248,11 +296,11 @@ impl From<&ToolTrace> for ToolEvent {
 /// 包含执行期间所发生情况的完整记录
 #[derive(Debug, Clone)]
 pub struct AgentRunResult {
-    /// 清理并完成最终定稿的文本响应
-    pub content: String,
+    /// 清理并完成最终定稿的文本响应（设计文档：final_text）
+    pub final_text: String,
 
-    /// 包含所有中间工具调用轮次的完整消息列表
-    pub messages: Vec<ChatMessage>,
+    /// 包含所有中间工具调用轮次的完整消息列表（设计文档：full_message_chain）
+    pub full_message_chain: Vec<ChatMessage>,
 
     /// 执行期间调用的工具名称的有序列表
     pub tools_used: Vec<String>,
@@ -273,8 +321,8 @@ pub struct AgentRunResult {
 impl Default for AgentRunResult {
     fn default() -> Self {
         Self {
-            content: String::new(),
-            messages: Vec::new(),
+            final_text: String::new(),
+            full_message_chain: Vec::new(),
             tools_used: Vec::new(),
             usage: TokenUsage::default(),
             stop_reason: StopReason::Completed,
@@ -286,10 +334,14 @@ impl Default for AgentRunResult {
 
 impl AgentRunResult {
     /// 创建成功完成的结果
-    pub fn completed(content: String, messages: Vec<ChatMessage>, usage: TokenUsage) -> Self {
+    pub fn completed(
+        final_text: String,
+        full_message_chain: Vec<ChatMessage>,
+        usage: TokenUsage,
+    ) -> Self {
         Self {
-            content,
-            messages,
+            final_text,
+            full_message_chain,
             tools_used: Vec::new(),
             usage,
             stop_reason: StopReason::Completed,
@@ -299,10 +351,14 @@ impl AgentRunResult {
     }
 
     /// 创建达到最大迭代的结果
-    pub fn max_iterations(content: String, messages: Vec<ChatMessage>, max: usize) -> Self {
+    pub fn max_iterations(
+        final_text: String,
+        full_message_chain: Vec<ChatMessage>,
+        max: usize,
+    ) -> Self {
         Self {
-            content,
-            messages,
+            final_text,
+            full_message_chain,
             tools_used: Vec::new(),
             usage: TokenUsage::default(),
             stop_reason: StopReason::MaxIterations,
@@ -312,10 +368,10 @@ impl AgentRunResult {
     }
 
     /// 创建工具错误结果
-    pub fn tool_error(error: String, messages: Vec<ChatMessage>) -> Self {
+    pub fn tool_error(error: String, full_message_chain: Vec<ChatMessage>) -> Self {
         Self {
-            content: format!("Tool error: {}", error),
-            messages,
+            final_text: format!("Tool error: {}", error),
+            full_message_chain,
             tools_used: Vec::new(),
             usage: TokenUsage::default(),
             stop_reason: StopReason::ToolError,
@@ -327,8 +383,8 @@ impl AgentRunResult {
     /// 创建取消结果
     pub fn cancelled() -> Self {
         Self {
-            content: "Execution cancelled".to_string(),
-            messages: Vec::new(),
+            final_text: "Execution cancelled".to_string(),
+            full_message_chain: Vec::new(),
             tools_used: Vec::new(),
             usage: TokenUsage::default(),
             stop_reason: StopReason::Cancelled,

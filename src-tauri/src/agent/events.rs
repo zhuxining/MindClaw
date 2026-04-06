@@ -73,6 +73,25 @@ pub enum AgentEvent {
     RunFailed { message: String },
 }
 
+/// Runtime 内部阶段机（Loop 级状态，仅供 runtime 内部观测使用）
+///
+/// 粒度粗于 AgentEvent，用于调试状态机和可观测性 dashboard。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopPhase {
+    /// 收到入站消息，准备处理
+    MessageReceived,
+    /// 正在构建上下文
+    ContextBuilding,
+    /// Run 已提交给 AgentRunner
+    RunStarted,
+    /// 工具正在执行
+    ToolExecution,
+    /// 结果持久化中
+    Persisting,
+    /// 本次 Loop 轮次完成
+    Done,
+}
+
 /// 前端/Channel 可见的简化状态（由 OutboundPayload::Status 携带）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,6 +102,12 @@ pub enum UserVisiblePhase {
     UsingTools,
     /// 正在输出文本（前端收到首个 Chunk 时自动进入）
     Streaming,
+    /// Run 成功完成
+    Completed,
+    /// Run 被取消
+    Cancelled,
+    /// Run 出错
+    Error,
 }
 
 impl std::fmt::Display for UserVisiblePhase {
@@ -91,6 +116,9 @@ impl std::fmt::Display for UserVisiblePhase {
             UserVisiblePhase::Thinking => write!(f, "thinking"),
             UserVisiblePhase::UsingTools => write!(f, "using_tools"),
             UserVisiblePhase::Streaming => write!(f, "streaming"),
+            UserVisiblePhase::Completed => write!(f, "completed"),
+            UserVisiblePhase::Cancelled => write!(f, "cancelled"),
+            UserVisiblePhase::Error => write!(f, "error"),
         }
     }
 }

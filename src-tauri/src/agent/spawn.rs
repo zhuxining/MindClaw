@@ -17,7 +17,7 @@ use crate::agent::agents::{
 };
 use crate::agent::hooks::NoopRunHooks;
 use crate::agent::runner::AgentRunner;
-use crate::agent::spec::{AgentRunResult, ToolEvent};
+use crate::agent::spec::{AgentRunResult, InvocationMode, ToolEvent};
 use crate::agent::tools::ToolRegistry;
 use crate::bus::events::InboundMessage;
 use crate::bus::MessageBus;
@@ -31,13 +31,12 @@ use tokio::sync::{RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 /// SubAgent 执行模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SubAgentMode {
-    /// 后台异步，Run 完成后派发，持久化队列
+    /// 后台异步，Run 完成后派发，持久化队列 (对应 InvocationMode::Detached)
+    #[default]
     Background,
-    /// 并行执行，Run 内启动，与其他工具调用并发
-    Parallel,
 }
 
 /// 从 Markdown frontmatter + body 解析的 SubAgent 定义
@@ -142,6 +141,8 @@ pub struct SubAgentInfo {
 pub struct RoutingContext {
     pub session_key: String,
     pub channel: String,
+    /// 当前委托深度（inline_child 每层 +1，用于 max_child_depth 检查）
+    pub delegation_depth: usize,
 }
 
 /// 派生执行来源
@@ -176,9 +177,9 @@ pub struct AgentSpawnDispatcher {
     /// 模型路由
     model_router: Arc<ModelRouter>,
     /// 活跃任务
-    tasks_by_id: RwLock<HashMap<String, SpawnTask>>,
+    tasks_by_id: Arc<RwLock<HashMap<String, SpawnTask>>>,
     /// 会话任务索引
-    tasks_by_session: RwLock<HashMap<String, Vec<String>>>,
+    tasks_by_session: Arc<RwLock<HashMap<String, Vec<String>>>>,
     /// 路由上下文
     routing_context: RwLock<RoutingContext>,
     /// 并发闸（共享主 Agent 配额）
@@ -215,11 +216,12 @@ impl AgentSpawnDispatcher {
             agents: HashMap::new(),
             agent_registry,
             model_router,
-            tasks_by_id: RwLock::new(HashMap::new()),
-            tasks_by_session: RwLock::new(HashMap::new()),
+            tasks_by_id: Arc::new(RwLock::new(HashMap::new())),
+            tasks_by_session: Arc::new(RwLock::new(HashMap::new())),
             routing_context: RwLock::new(RoutingContext {
                 session_key: String::new(),
                 channel: "desktop".to_string(),
+                delegation_depth: 0,
             }),
             concurrency_gate,
         }
@@ -270,15 +272,33 @@ impl AgentSpawnDispatcher {
         let label = label
             .map(std::string::ToString::to_string)
             .unwrap_or_else(|| truncate(task_description, 30).to_string());
-        let session_key = self.routing_context.read().await.session_key.clone();
+        let (session_key, _delegation_depth) = {
+            let ctx = self.routing_context.read().await;
+            (ctx.session_key.clone(), ctx.delegation_depth)
+        };
 
-        let restricted_tools = self.build_restricted_registry();
+        // 检查主 Agent 是否允许派生后台代理
+        // Background agent (detached) 不计入 depth，始终传 0
+        let main_profile = self
+            .agent_registry
+            .get(crate::agent::agents::MAIN_AGENT_ID)
+            .ok_or_else(|| AppError::Internal("main agent profile not found".to_string()))?;
+        if !main_profile.can_delegate_to(BACKGROUND_AGENT_ID, 0) {
+            return Err(AppError::PermissionDenied(
+                "background agent spawn is not permitted by delegation policy".to_string(),
+            ));
+        }
+
+        let restricted_tools = self.clone_tool_registry();
         let runner = Arc::new(AgentRunner::new(
             self.provider.clone(),
             restricted_tools.clone(),
         ));
         let profile = self.resolved_profile(BACKGROUND_AGENT_ID)?;
         let spec = profile.build_run_spec(
+            task_id.clone(),
+            session_key.clone(),
+            InvocationMode::Detached,
             self.build_subagent_prompt(task_description),
             vec![ChatMessage::user(task_description)],
             restricted_tools.schemas(),
@@ -287,6 +307,8 @@ impl AgentSpawnDispatcher {
         let task_id_clone = task_id.clone();
         let session_key_clone = session_key.clone();
         let concurrency_gate = Arc::clone(&self.concurrency_gate);
+
+        let tasks_by_id_clone = Arc::clone(&self.tasks_by_id);
 
         let handle = tokio::spawn(async move {
             let _permit = concurrency_gate.acquire_owned().await;
@@ -308,6 +330,9 @@ impl AgentSpawnDispatcher {
                     );
                 }
             }
+
+            // 任务完成后清理 tasks_by_id
+            tasks_by_id_clone.write().await.remove(&task_id_clone);
         });
 
         let task = SpawnTask {
@@ -334,20 +359,57 @@ impl AgentSpawnDispatcher {
         task_description: &str,
         _label: Option<&str>,
     ) -> Result<AgentRunResult, AppError> {
-        let restricted_tools = self.build_restricted_registry();
-        let runner = AgentRunner::new(self.provider.clone(), restricted_tools.clone());
-        let profile = self.resolved_profile(SUBAGENT_AGENT_ID)?;
-        let spec = profile.build_run_spec(
-            self.build_subagent_prompt(task_description),
-            vec![ChatMessage::user(task_description)],
-            restricted_tools.schemas(),
-        );
+        // 使用写锁原子地完成检查和递增，避免竞态条件
+        let current_depth = {
+            let mut ctx = self.routing_context.write().await;
+            let current = ctx.delegation_depth;
+            let new_depth = current + 1;
 
-        // inline sub-agent 已经运行在主 run 语境内，不再次占用全局 LLM 并发闸，
-        // 否则在并发上限为 1 时会出现自锁。
-        let mut hook = NoopRunHooks;
-        let cancel = CancellationToken::new();
-        runner.run(spec, &mut hook, cancel).await
+            // 检查主 Agent 是否允许内联委托，并且未超过最大深度
+            let main_profile = self
+                .agent_registry
+                .get(crate::agent::agents::MAIN_AGENT_ID)
+                .ok_or_else(|| AppError::Internal("main agent profile not found".to_string()))?;
+            if !main_profile.can_delegate_to(SUBAGENT_AGENT_ID, current) {
+                return Err(AppError::PermissionDenied(format!(
+                    "inline delegation denied: depth={current} or policy disallows subagents"
+                )));
+            }
+
+            ctx.delegation_depth = new_depth;
+            current
+        };
+
+        // 执行子代理，无论成功失败都要恢复深度
+        let result = async {
+            let restricted_tools = self.clone_tool_registry();
+            let runner = AgentRunner::new(self.provider.clone(), restricted_tools.clone());
+            let profile = self.resolved_profile(SUBAGENT_AGENT_ID)?;
+            let run_id = uuid::Uuid::new_v4().to_string();
+            let session_id = format!("subagent-{}", &run_id[..8]);
+            let spec = profile.build_run_spec(
+                run_id,
+                session_id,
+                InvocationMode::InlineChild,
+                self.build_subagent_prompt(task_description),
+                vec![ChatMessage::user(task_description)],
+                restricted_tools.schemas(),
+            );
+
+            // inline sub-agent 已经运行在主 run 语境内，不再次占用全局 LLM 并发闸
+            let mut hook = NoopRunHooks;
+            let cancel = CancellationToken::new();
+            runner.run(spec, &mut hook, cancel).await
+        }
+        .await;
+
+        // 恢复委托深度
+        {
+            let mut ctx = self.routing_context.write().await;
+            ctx.delegation_depth = current_depth;
+        }
+
+        result
     }
 
     /// 取消会话的所有派生任务
@@ -372,7 +434,11 @@ impl AgentSpawnDispatcher {
         cancelled
     }
 
-    fn build_restricted_registry(&self) -> Arc<ToolRegistry> {
+    /// 克隆工具注册表
+    ///
+    /// TODO: 当前只是简单 clone，未来应实现真正的工具限制
+    ///（子代理不应继承 spawn 工具，避免无限递归委托）
+    fn clone_tool_registry(&self) -> Arc<ToolRegistry> {
         self.tool_registry.clone()
     }
 
@@ -466,7 +532,7 @@ fn format_subagent_success(_task_id: &str, result: &AgentRunResult) -> String {
          **最终结果**:\n{}\n\n\
          **Token 消耗**: {} (输入: {}, 输出: {})",
         tool_summary,
-        result.content,
+        result.final_text,
         result.usage.total_tokens,
         result.usage.prompt_tokens,
         result.usage.completion_tokens

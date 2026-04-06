@@ -31,9 +31,11 @@ pub use context::{
     BuiltContext, ContextBuildContext, ContextFragment, ContextLayer, ContextPipeline,
     ContextSource, ConversationHistorySource, MessageRole, SystemPromptSource, UserMessageSource,
 };
-pub use events::{AgentEvent, ProviderEvent, ProviderUsage, UserVisiblePhase};
+pub use events::{AgentEvent, LoopPhase, ProviderEvent, ProviderUsage, UserVisiblePhase};
 pub use hooks::{
-    InteractiveRunHooks, NoopRunHooks, RecordingRunHooks, RunHookEvent, RunHookPublisher, RunHooks,
+    strip_think_tags, InteractiveRunHooks, IterationFinishContext, IterationStartContext,
+    ModelRequestContext, ModelResponseContext, NoopRunHooks, RecordingRunHooks, RunAbortReason,
+    RunHookEvent, RunHookPublisher, RunHooks, RunStartContext, StreamingMode,
 };
 pub use loop_::AgentLoop;
 pub use memory::{recall, Memory, MemoryCategory};
@@ -45,4 +47,6 @@ pub use spawn::{
     AgentSpawnDispatcher, CapabilityProfile, RoutingContext, SpawnSource, SubAgentDef,
     SubAgentInfo, SubAgentMode, SubAgentResult,
 };
-pub use spec::{AgentRunResult, AgentRunSpec, IterationState, StopReason, TokenUsage, ToolEvent};
+pub use spec::{
+    AgentRunResult, AgentRunSpec, InvocationMode, IterationState, StopReason, TokenUsage, ToolEvent,
+};

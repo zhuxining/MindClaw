@@ -16,8 +16,11 @@
 //! - 后台任务调度
 
 use crate::agent::events::ProviderEvent;
-use crate::agent::hooks::RunHooks;
-use crate::agent::spec::{AgentRunResult, AgentRunSpec, IterationState, TokenUsage, ToolEvent};
+use crate::agent::hooks::{
+    IterationFinishContext, IterationStartContext, ModelRequestContext, ModelResponseContext,
+    RunAbortReason, RunHooks, RunStartContext, StreamingMode,
+};
+use crate::agent::spec::{AgentRunResult, AgentRunSpec, TokenUsage, ToolEvent};
 use crate::agent::tools::{ToolCall, ToolRegistry, ToolResultMessage};
 use crate::error::AppError;
 use crate::providers::{ChatMessage, ChatRequest, MessageContent, Provider, ToolChoice};
@@ -69,109 +72,180 @@ impl AgentRunner {
         let mut tool_events = Vec::new();
         let mut usage = TokenUsage::default();
 
+        // Run 开始钩子
+        hook.on_run_start(&RunStartContext {
+            run_id: spec.run_id.clone(),
+            session_id: spec.session_id.clone(),
+            agent_id: spec.agent_id.clone(),
+            message_count: messages.len(),
+        });
+
         for iteration in 0..spec.max_iterations {
             // 检查取消
             if cancel.is_cancelled() {
+                hook.on_abort(&RunAbortReason::Cancelled);
                 return Ok(AgentRunResult::cancelled());
             }
 
-            // 1. 迭代前钩子
-            let mut state = IterationState::new(iteration, messages.len());
-            hook.before_iteration(&mut state);
+            // 1. 迭代开始钩子
+            hook.on_iteration_start(&IterationStartContext {
+                run_id: spec.run_id.clone(),
+                session_id: spec.session_id.clone(),
+                agent_id: spec.agent_id.clone(),
+                iteration,
+                message_count: messages.len(),
+            });
 
-            // 2. 调用 LLM（流式或非流式）
-            let response = if hook.wants_streaming() {
+            // 2. 模型请求开始钩子
+            let is_streaming = matches!(hook.streaming_mode(), StreamingMode::TextOnly);
+            hook.on_model_request_start(&ModelRequestContext {
+                run_id: spec.run_id.clone(),
+                session_id: spec.session_id.clone(),
+                agent_id: spec.agent_id.clone(),
+                iteration,
+                model: spec.model.clone(),
+                is_streaming,
+            });
+
+            // 3. 调用 LLM（流式或非流式）
+            let response = if is_streaming {
                 self.chat_stream(&spec, &messages, hook, cancel.clone())
                     .await?
             } else {
                 self.chat(&spec, &messages, cancel.clone()).await?
             };
 
-            // 3. 更新使用量
+            // 4. 更新使用量
             usage.add(&response.usage);
 
-            // 4. 检查是否有工具调用
-            if response.has_tool_calls {
-                // 流结束信号（后续还有工具调用）
-                hook.on_stream_end(true);
+            // 5. 模型响应就绪钩子
+            hook.on_model_response_ready(&ModelResponseContext {
+                run_id: spec.run_id.clone(),
+                session_id: spec.session_id.clone(),
+                agent_id: spec.agent_id.clone(),
+                iteration,
+                has_tool_calls: response.has_tool_calls,
+                tool_call_count: response.tool_calls.len(),
+                usage: response.usage.clone(),
+            });
 
+            // 6. 检查是否有工具调用
+            if response.has_tool_calls {
                 // 追加 assistant 消息（含 tool_calls）
                 let assistant_msg =
                     self.build_assistant_message(&response.content, &response.tool_calls);
                 messages.push(assistant_msg);
 
-                // 执行工具前钩子
-                hook.before_execute_tools(&response.tool_calls);
+                // 工具批次开始钩子
+                hook.on_tool_batch_start(&response.tool_calls);
 
                 // 执行工具
+                for call in &response.tool_calls {
+                    hook.on_tool_call_start(call);
+                }
+
+                let tool_batch_start = std::time::Instant::now();
                 let results = self
                     .execute_tools(&spec, &response.tool_calls, cancel.clone())
                     .await;
+                let batch_ms = tool_batch_start.elapsed().as_millis() as u64;
+                // 注意：这是批次内工具的平均耗时，不是单个工具的实际执行时间
+                // 实际行为取决于 parallel_tools 配置：
+                // - 并行执行时：各工具实际耗时可能差异很大，这里取平均
+                // - 顺序执行时：总时间 = 各工具时间之和，平均 = 总时间 / 工具数
+                // 如需精确耗时，需在 ToolRegistry::execute_calls 内为每个工具单独计时
+                let per_tool_ms = batch_ms / (response.tool_calls.len() as u64).max(1);
 
                 // 检查致命错误
                 if spec.fail_on_tool_error {
                     let fatal_error = results.iter().find(|r| r.is_error);
                     if let Some(err) = fatal_error {
+                        // 先完成所有已启动的 tool call 钩子（避免生命周期不完整）
+                        for (call, tool_result) in response.tool_calls.iter().zip(results.iter()) {
+                            let success = !tool_result.is_error;
+                            hook.on_tool_call_finish(call, success, &tool_result.content);
+                        }
+                        hook.on_abort(&RunAbortReason::Error {
+                            message: err.content.clone(),
+                        });
                         return Ok(AgentRunResult::tool_error(err.content.clone(), messages));
                     }
                 }
 
                 // 追加工具结果和记录事件
-                for (call, result) in response.tool_calls.iter().zip(results.iter()) {
+                for (call, tool_result) in response.tool_calls.iter().zip(results.iter()) {
                     messages.push(ChatMessage::tool_result(
-                        truncate(&result.content, 4_000),
+                        truncate(&tool_result.content, 4_000),
                         call.id.clone(),
-                        result.is_error,
+                        tool_result.is_error,
                     ));
                     tools_used.push(call.name.clone());
+
+                    let success = !tool_result.is_error;
+                    hook.on_tool_call_finish(call, success, &tool_result.content);
 
                     tool_events.push(ToolEvent {
                         name: call.name.clone(),
                         tool_call_id: call.id.clone(),
-                        status: if result.is_error {
+                        status: if tool_result.is_error {
                             crate::agent::spec::ToolStatus::Failed {
-                                error: result.content.clone(),
+                                error: tool_result.content.clone(),
                             }
                         } else {
                             crate::agent::spec::ToolStatus::Succeeded
                         },
-                        duration_ms: 0, // TODO: 记录实际耗时
+                        duration_ms: per_tool_ms,
                         input_summary: truncate(&call.arguments.to_string(), 500),
-                        output_summary: truncate(&result.content, 1_000),
+                        output_summary: truncate(&tool_result.content, 1_000),
                     });
                 }
 
-                // 迭代后钩子
-                hook.after_iteration(&state);
+                // 迭代结束钩子
+                hook.on_iteration_finish(&IterationFinishContext {
+                    run_id: spec.run_id.clone(),
+                    session_id: spec.session_id.clone(),
+                    agent_id: spec.agent_id.clone(),
+                    iteration,
+                    message_count: messages.len(),
+                    usage: response.usage,
+                });
 
                 // 继续下一轮
                 continue;
             }
 
             // 无工具调用 - 最终响应
-            hook.on_stream_end(false);
-
             // 最终内容定稿
-            let final_content = hook.finalize_content(&response.content);
+            let final_text = hook.finalize_response(&response.content);
 
             // 追加最终 assistant 消息
-            messages.push(ChatMessage::assistant_text(&final_content));
+            messages.push(ChatMessage::assistant_text(&final_text));
 
-            // 构建结果
-            let mut result = AgentRunResult::completed(final_content, messages, usage);
+            // 构建结果（使用新的 final_text / full_message_chain 字段名）
+            let mut result = AgentRunResult::completed(final_text, messages, usage);
             result.tools_used = tools_used;
             result.tool_events = tool_events;
+
+            // Run 完成钩子
+            hook.on_finish(&result);
 
             return Ok(result);
         }
 
-        // 达到最大迭代次数
+        // 达到最大迭代次数 - 属于异常结束，先调 on_abort 再调 on_finish
         let max_msg = format!("Reached maximum iterations ({})", spec.max_iterations);
-        let mut result =
-            AgentRunResult::max_iterations(max_msg.clone(), messages, spec.max_iterations);
+        let full_message_chain = messages;
+        let mut result = AgentRunResult::max_iterations(
+            max_msg.clone(),
+            full_message_chain,
+            spec.max_iterations,
+        );
         result.tools_used = tools_used;
         result.tool_events = tool_events;
         result.usage = usage;
+
+        hook.on_abort(&RunAbortReason::Error { message: max_msg });
+        hook.on_finish(&result);
 
         Ok(result)
     }
@@ -255,7 +329,7 @@ impl AgentRunner {
             match event? {
                 ProviderEvent::TextDelta { text } => {
                     content.push_str(&text);
-                    hook.on_stream(&text);
+                    hook.on_model_text_delta(&text);
                 }
                 ProviderEvent::ToolCallReady {
                     id,

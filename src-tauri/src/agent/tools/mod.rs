@@ -199,6 +199,25 @@ impl ToolRegistry {
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.keys().cloned().collect()
     }
+
+    /// 基于现有注册表创建扩展版本
+    ///
+    /// 直接共享已有工具的 Arc，不重新初始化（避免 MCP 连接重复建立）。
+    /// 常见用途：主 Agent 工具集 = 基础工具集 + Spawn 工具。
+    pub fn extend_with(
+        &self,
+        extra: Vec<Arc<dyn Tool + Send + Sync>>,
+        concurrency_limit: usize,
+    ) -> Self {
+        let mut new_reg = Self {
+            tools: self.tools.clone(),
+            concurrency: Arc::new(Semaphore::new(concurrency_limit.max(1))),
+        };
+        for tool in extra {
+            new_reg.register(tool);
+        }
+        new_reg
+    }
 }
 
 // ============================================================================

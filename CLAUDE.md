@@ -57,6 +57,12 @@ bun run check-types     # TypeScript type-check
 | `src-tauri/capabilities/` | Tauri permission grants |
 | `docs/design/architecture/` | Full architecture design docs |
 
+### Directory Structure
+
+> Details: `docs/design/architecture/reference/directory-structure.md`
+
+Describes the current state of the codebase directory. Keep it in sync when adding or removing modules and files.
+
 ### Security / Permissions
 
 - Tauri 2.0 capabilities-based model. New plugins/APIs must be declared in `src-tauri/capabilities/`.

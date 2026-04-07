@@ -13,9 +13,9 @@ pub struct UserConfig {
     pub language: String,
     /// 主题："light" | "dark" | "system"
     pub theme: String,
-    /// 当前激活的 vault id
-    pub active_vault_id: Option<String>,
-    /// 已注册的 vault 列表
+    /// 当前激活的 vault 路径
+    pub active_vault_path: Option<PathBuf>,
+    /// 已注册的 vault 列表（最近打开过的 vault 记录）
     pub vaults: Vec<VaultEntry>,
     /// 当前激活的 provider id
     pub active_provider_id: String,
@@ -34,7 +34,7 @@ impl Default for UserConfig {
         Self {
             language: "zh-CN".to_string(),
             theme: "system".to_string(),
-            active_vault_id: None,
+            active_vault_path: None,
             vaults: Vec::new(),
             active_provider_id: "deepseek".to_string(),
             providers: vec![
@@ -81,11 +81,9 @@ impl Default for UserConfig {
 /// 已注册的 vault 条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultEntry {
-    /// UUID，stable identifier
-    pub id: String,
     /// 显示名称
     pub name: String,
-    /// vault 根目录绝对路径
+    /// vault 根目录绝对路径（作为唯一标识）
     pub path: PathBuf,
     /// 上次打开时间（ISO8601）
     pub last_opened: Option<String>,

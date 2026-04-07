@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 pub struct AppRuntimeBuilder {
     /// 可选覆盖：用户数据目录（默认 ~/.config/mindclaw）
     user_data_dir: Option<PathBuf>,
-    /// 可选覆盖：vault 路径（优先于 UserConfig.active_vault_id）
+    /// 可选覆盖：vault 路径（优先于 UserConfig.active_vault_path）
     vault_path: Option<PathBuf>,
     /// 可选覆盖：provider id
     provider_id: Option<String>,
@@ -84,14 +84,8 @@ impl AppRuntimeBuilder {
         let vault_path = self
             .vault_path
             .or_else(|| {
-                // 从 active_vault_id 查找
-                user_config.active_vault_id.as_ref().and_then(|vid| {
-                    user_config
-                        .vaults
-                        .iter()
-                        .find(|v| &v.id == vid)
-                        .map(|v| v.path.clone())
-                })
+                // 从 active_vault_path 直接获取
+                user_config.active_vault_path.clone()
             })
             .unwrap_or_else(|| user_data_dir.join("vault"));
 
@@ -100,7 +94,6 @@ impl AppRuntimeBuilder {
 
         // 6. 构造临时 VaultEntry 用于 merge
         let vault_entry = crate::runtime::config::VaultEntry {
-            id: "default".to_string(),
             name: vault_path
                 .file_name()
                 .and_then(|n| n.to_str())

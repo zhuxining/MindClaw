@@ -33,10 +33,9 @@ MindClaw 使用**两级配置**系统：
 {
   "language": "zh-CN",
   "theme": "system",
-  "active_vault_id": "uuid",
+  "active_vault_path": "/Users/foo/Documents/Obsidian/MyVault",
   "vaults": [
     {
-      "id": "uuid",
       "name": "我的知识库",
       "path": "/Users/foo/Documents/Obsidian/MyVault",
       "last_opened": "2026-04-07T14:30:00+08:00"
@@ -80,16 +79,15 @@ MindClaw 使用**两级配置**系统：
 
 | 名称 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `active_vault_id` | Option<String> | `None` | 当前打开的 vault ID |
-| `vaults` | Vec<VaultEntry> | `[]` | Vault 列表 |
+| `active_vault_path` | Option<PathBuf> | `None` | 当前打开的 vault 路径 |
+| `vaults` | Vec<VaultEntry> | `[]` | Vault 列表（最近打开过的记录） |
 
 **VaultEntry 结构**：
 
 | 名称 | 类型 | 说明 |
 |------|------|------|
-| `id` | String | Vault 唯一标识（UUID） |
 | `name` | String | 显示名称 |
-| `path` | PathBuf | Vault 根目录绝对路径 |
+| `path` | PathBuf | Vault 根目录绝对路径（作为唯一标识） |
 | `last_opened` | Option<String> | 最后打开时间（ISO 8601） |
 
 ### Provider 配置

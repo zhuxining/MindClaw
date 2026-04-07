@@ -191,7 +191,7 @@ MindClaw 使用**两级配置**系统：
 | 名称 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `folder_mappings.tasks` | String | `"tasks"` | 任务文件夹（相对 vault 根） |
-| `folder_mappings.memory` | String | `"memory"` | 记忆文件夹 |
+| `folder_mappings.memory` | String | `".mindclaw/memory"` | 记忆文件夹（Agent 内部数据） |
 | `folder_mappings.daily` | String | `"daily"` | 日记文件夹 |
 | `folder_mappings.index_exclude` | Vec<String> | 见示例 | 索引扫描排除目录 |
 

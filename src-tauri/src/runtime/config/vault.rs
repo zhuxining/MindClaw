@@ -92,7 +92,7 @@ impl Default for FolderMappings {
     fn default() -> Self {
         Self {
             tasks: "tasks".to_string(),
-            memory: "memory".to_string(),
+            memory: ".mindclaw/memory".to_string(),
             daily: "daily".to_string(),
             index_exclude: vec![
                 ".obsidian".to_string(),

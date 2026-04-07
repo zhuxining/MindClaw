@@ -30,15 +30,15 @@ Storage 层负责三类存储介质（SQLite、Markdown 文件、OS Keychain）�
 ```
 ~/.config/mindclaw/
 ├── config.json          ← UserConfig（providers、vault 列表）
-└── mindclaw.db          ← 全局 DB：sessions/turns/messages
+└── mindclaw.db          ← 全局 DB：sessions/turns
 
 {obsidian-vault}/
 ├── .obsidian/           ← Obsidian 配置（不动）
 ├── .mindclaw/
 │   ├── config.json      ← VaultConfig（agent 偏好、folder 映射）
-│   └── mindclaw.db      ← Vault DB：tasks/notes/memories 索引
+│   ├── mindclaw.db      ← Vault DB：tasks/notes/memories 索引
+│   └── memory/          ← Memory Markdown 文件（Agent 内部数据）
 ├── tasks/               ← Task Markdown 文件（YAML Frontmatter）
-├── memory/              ← Memory Markdown 文件
 └── daily/               ← 日记 Markdown 文件
 ```
 
@@ -79,7 +79,7 @@ Storage 层负责三类存储介质（SQLite、Markdown 文件、OS Keychain）�
 | 数据类型 | 存储位置 | 真相源 | 写入方 | 同步机制 |
 |---------|---------|--------|-------|---------|
 | 会话消息历史（Turn） | 全局 DB `sessions/turns` | SQLite | SessionManager | 单一写入方，无需同步 |
-| Agent 记忆（Memory） | `{vault}/memory/*.md` + Vault DB `memories_index` | **Markdown** | MemoryStore | 写文件后更新索引 |
+| Agent 记忆（Memory） | `{vault}/.mindclaw/memory/*.md` + Vault DB `memories_index` | **Markdown** | MemoryStore | 写文件后更新索引 |
 | 任务（Task） | `{vault}/tasks/*.md` + Vault DB `tasks_index` | **Markdown** | TaskService | 写文件后更新索引 |
 | 笔记索引 | `{vault}/**/*.md` + Vault DB `notes_index` | **Markdown** | NoteService | 启动时 sync，运行时增量更新 |
 | 日记 | `{vault}/daily/*.md` | Markdown | DailyService | 直接读写，无索引 |

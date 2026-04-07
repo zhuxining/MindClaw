@@ -1,12 +1,14 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Code Agents (claude.ai/code、codex、qwen) when working with code in this repository.
 
 ## Project Overview
 
 MindClaw is a Tauri 2.0 desktop application combining a React 19 + TypeScript frontend with a Rust backend. Package manager is **Bun**.
 
 > Full architecture docs: `docs/design/architecture/README.md`
+
+**NOTICE**: When editing code, refer to architecture documents and update them if needed.
 
 ## Commands
 

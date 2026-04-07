@@ -38,7 +38,7 @@ pub use hooks::{
     RunHookEvent, RunHookPublisher, RunHooks, RunStartContext, StreamingMode,
 };
 pub use loop_::AgentLoop;
-pub use memory::{recall, Memory, MemoryCategory};
+pub use memory::{Memory, MemoryCategory, MemoryStore, UpsertMemoryInput};
 pub use observability::{AgentObserver, CompositeObserver, TracingObserver};
 pub use runner::AgentRunner;
 pub use session::{AgentSession, RunStatus, SessionManager, ToolTrace, TurnRecord};

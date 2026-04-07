@@ -120,7 +120,7 @@ impl AgentLoop {
             Arc::clone(&provider),
             Arc::clone(&base_tools),
             Arc::clone(&bus),
-            config.data_dir.clone(),
+            config.data_dir().clone(),
             Arc::clone(&concurrency_gate),
             Arc::clone(&agent_registry),
             Arc::clone(&model_router),

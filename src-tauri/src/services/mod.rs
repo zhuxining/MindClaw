@@ -1,3 +1,3 @@
 pub mod daily;
-pub mod knowledge;
+pub mod note;
 pub mod task;

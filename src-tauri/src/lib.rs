@@ -60,6 +60,7 @@ pub fn run() {
             commands::tasks::list_tasks,
             commands::tasks::create_task,
             commands::tasks::update_task_status,
+            commands::tasks::rebuild_tasks_index,
             commands::knowledge::search_knowledge,
             commands::knowledge::get_knowledge,
             commands::settings::get_settings,

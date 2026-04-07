@@ -23,8 +23,10 @@ pub use services::ServiceContainer;
 
 /// 应用运行时：拥有所有共享基础设施
 pub struct AppRuntime {
-    /// SQLite 连接
-    pub(crate) db: Arc<Mutex<Connection>>,
+    /// 全局 SQLite 连接（sessions/turns/messages，跨 vault）
+    pub(crate) global_db: Arc<Mutex<Connection>>,
+    /// Vault SQLite 连接（tasks/notes/memories 索引，随 vault 变化）
+    pub(crate) vault_db: Arc<Mutex<Connection>>,
     /// 统一服务层
     pub(crate) services: Arc<ServiceContainer>,
     /// 消息总线
@@ -89,8 +91,14 @@ impl AppRuntime {
 
     // --- Accessors ---
 
-    pub fn db(&self) -> &Arc<Mutex<Connection>> {
-        &self.db
+    /// 全局 DB（sessions/turns）
+    pub fn global_db(&self) -> &Arc<Mutex<Connection>> {
+        &self.global_db
+    }
+
+    /// Vault DB（tasks/notes/memories 索引）
+    pub fn vault_db(&self) -> &Arc<Mutex<Connection>> {
+        &self.vault_db
     }
 
     pub fn services(&self) -> &Arc<ServiceContainer> {

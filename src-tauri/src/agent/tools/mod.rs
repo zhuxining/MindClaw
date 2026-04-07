@@ -251,7 +251,7 @@ impl ToolRegistry {
         // 内置工具
         let guard =
             Arc::new(PathGuard::vault_only(config.vault_path.clone()).with_denied("private"));
-        tools.register(Arc::new(ShellTool::new(config.data_dir.clone())));
+        tools.register(Arc::new(ShellTool::new(config.data_dir().clone())));
         tools.register(Arc::new(FileReadTool::with_guard(Arc::clone(&guard))));
         tools.register(Arc::new(FileWriteTool::with_guard(Arc::clone(&guard))));
         tools.register(Arc::new(FileEditTool::with_guard(Arc::clone(&guard))));
@@ -259,7 +259,7 @@ impl ToolRegistry {
         tools.register(Arc::new(SearchContentTool::new(Arc::clone(&guard))));
 
         // MCP proxy tools：从 data_dir/mcp.toml 加载外部 server 配置
-        let mcp_manager = MCPManager::from_file(&config.data_dir);
+        let mcp_manager = MCPManager::from_file(config.data_dir());
         if mcp_manager.server_count() > 0 {
             register_mcp_tools(&mut tools, &mcp_manager).await?;
             tracing::info!(servers = %mcp_manager.server_count(), "MCP bridge initialized");

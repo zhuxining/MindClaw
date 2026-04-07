@@ -508,7 +508,7 @@ fn run_status_from_string(s: &str) -> RunStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::database::open_memory;
+    use crate::storage::database::global::open_memory;
 
     #[tokio::test]
     async fn test_session_lifecycle() {

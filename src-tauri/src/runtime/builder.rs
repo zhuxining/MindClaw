@@ -6,9 +6,7 @@
 use crate::agent::{AgentLoop, AgentRegistry, ModelRouter};
 use crate::bus::MessageBus;
 use crate::error::AppResult;
-use crate::providers::config::builtin_configs;
-use crate::providers::openai_compat::OpenAICompatProvider;
-use crate::providers::Provider;
+use crate::providers::{Provider, ProviderRegistry};
 use crate::runtime::config::{AppConfig, ConfigLoader};
 use crate::runtime::services::ServiceContainer;
 use crate::runtime::AppRuntime;
@@ -170,18 +168,9 @@ impl Default for AppRuntimeBuilder {
 }
 
 fn init_provider(config: &AppConfig) -> AppResult<Arc<dyn Provider>> {
-    let configs = builtin_configs();
-    let provider_config = configs
-        .iter()
-        .find(|c| c.name == config.provider_id)
-        .ok_or_else(|| {
-            crate::error::AppError::Provider(format!(
-                "provider '{}' not found in builtin configs",
-                config.provider_id
-            ))
-        })?;
-
-    let provider = OpenAICompatProvider::from_env(provider_config, config.model_id.as_deref())
+    let registry = ProviderRegistry::new();
+    let provider = registry
+        .create_provider_from_env(&config.provider_id, config.model_id.as_deref())
         .map_err(|e| {
             crate::error::AppError::Provider(format!(
                 "failed to initialize {} provider: {}",
@@ -195,5 +184,5 @@ fn init_provider(config: &AppConfig) -> AppResult<Arc<dyn Provider>> {
         "provider_initialized"
     );
 
-    Ok(Arc::new(provider))
+    Ok(provider)
 }

@@ -1,6 +1,21 @@
 {
 	"version": 1,
 	"skills": {
+		"code-design-docs-spec": {
+			"source": "zhuxining/harness",
+			"sourceType": "github",
+			"computedHash": "e7e548e51d0d1d35e54fbe652ed0f4231addb5605e7aa3743a9dd830735f1e0e"
+		},
+		"code-principles": {
+			"source": "zhuxining/harness",
+			"sourceType": "github",
+			"computedHash": "140986925c07eaef7b8d0a68f9e93a4ef7850186a407b0dda2f4d376321dcd58"
+		},
+		"code-simplifier": {
+			"source": "zhuxining/harness",
+			"sourceType": "github",
+			"computedHash": "0fdc1b12186a1ea10ff290b81317934e88723d7f17bb38fffca94570e5ac3de0"
+		},
 		"rust-best-practices": {
 			"source": "apollographql/skills",
 			"sourceType": "github",

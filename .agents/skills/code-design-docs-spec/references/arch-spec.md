@@ -1,6 +1,6 @@
 ---
 paths:
-- "**/architecture/*.md"
+- "docs/design/arch/*.md"
 ---
 
 # 架构设计与文档规范
@@ -353,7 +353,7 @@ docs/design/architecture/
 
 ### 4.6 文档间关联与导航
 
-**REQUIRED** `README.md` 作为架构文档的导航入口，列出所有 `active` 文档的链接与一句话说明。`deprecated` 文档不出现在导航中。
+**REQUIRED** `README.md` 作为架构文档的导航入口，列出所有 `active` 文档的链接与一句话说明。`deprecated/` 文件夹中的文档不出现在导航中。
 
 **交叉引用规则：**
 
@@ -366,17 +366,22 @@ docs/design/architecture/
 
 ### 5.1 文档状态标注
 
-**REQUIRED** 每个文档（包括设计文档和参考文档）头部包含状态标注：
+**REQUIRED** 每个文档（active/draft）头部包含状态标注：
 
 ```markdown
-> **Status**: `active` | `deprecated` | `draft`
-> **Superseded by**: [链接]（仅 deprecated 文档填写）
+> **Status**: `draft` | `active`
+```
+
+废弃文档移入 `deprecated/` 文件夹，文件头部添加：
+
+```markdown
+> **Superseded by**: [链接]
 ```
 
 **状态规则：**
 
 - `draft → active`：自检清单（Part 6）全部通过后标记为 `active`
-- `active → deprecated`：**REQUIRED** 指向替代文档；30 天以上无替代文档则直接删除
+- 废弃文档：有替代文档则移入 `deprecated/` 文件夹并添加 `Superseded by` 链接；无替代文档则直接删除
 - Agent 修改涉及 ≥ 2 个模块的代码时，**REQUIRED** 检查受影响模块的架构文档是否仍然准确
 - 参考文档在对应代码变更时同步更新；无法保持同步则删除
 
@@ -457,7 +462,7 @@ Agent 在生成或审查架构文档后，**REQUIRED** 对照以下清单逐项�
 
 ### 6.3 通用质量
 
-- [ ] Status 标注存在？
+- [ ] Status 标注存在（`draft` 或 `active`）？
 - [ ] 无模糊词汇（可能、通常、大概等）？
 - [ ] 无实现细节（算法、代码、配置参数）？
 - [ ] 文档间引用使用相对链接，无大段内容复制？

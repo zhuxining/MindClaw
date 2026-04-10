@@ -1,32 +1,36 @@
 import { ChatOverlay } from "@/components/chat/ChatOverlay";
+import {
+	ResizableHandle,
+	ResizablePanel,
+	ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { CenterContent } from "./CenterContent";
 import { LeftSidebar } from "./LeftSidebar";
 import { RightPanels } from "./RightPanels";
 
-// TODO Phase 2: 使用 resizable.tsx 组件为左右侧边栏和右侧面板
-// 三个区块添加可拖拽分隔线功能。见 PRD 01-workspace-shell.md US-06, US-09, US-10
-
 export function AppShell() {
 	return (
-		<div className="fixed inset-0 flex overflow-hidden bg-background text-foreground">
-			{/* 左侧：Tab 导航 + 目录 22% */}
-			<div className="flex w-[22%] min-w-[200px] shrink-0 flex-col">
-				<LeftSidebar />
-			</div>
+		<div className="fixed inset-0 bg-background text-foreground">
+			<ResizablePanelGroup orientation="horizontal" className="h-full">
+				{/* 左侧：Tab 导航 + 目录 */}
+				<ResizablePanel defaultSize={22} minSize={15} maxSize={40}>
+					<LeftSidebar />
+				</ResizablePanel>
 
-			<div className="w-px shrink-0 bg-border" />
+				<ResizableHandle />
 
-			{/* 中央：内容区 */}
-			<div className="flex min-w-0 flex-1 flex-col">
-				<CenterContent />
-			</div>
+				{/* 中央：内容区 */}
+				<ResizablePanel defaultSize={52} minSize={30}>
+					<CenterContent />
+				</ResizablePanel>
 
-			<div className="w-px shrink-0 bg-border" />
+				<ResizableHandle />
 
-			{/* 右侧：Pin / Tasks / Relevance 26% */}
-			<div className="flex w-[26%] min-w-[240px] shrink-0 flex-col">
-				<RightPanels />
-			</div>
+				{/* 右侧：Pin / Tasks / Relevance */}
+				<ResizablePanel defaultSize={26} minSize={16} maxSize={45}>
+					<RightPanels />
+				</ResizablePanel>
+			</ResizablePanelGroup>
 
 			<ChatOverlay />
 		</div>

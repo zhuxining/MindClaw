@@ -114,11 +114,20 @@ pub async fn set_vault(path: String) -> AppResult<()> {
 #[tauri::command]
 pub async fn save_settings(
     _runtime: tauri::State<'_, Arc<AppRuntime>>,
-    _settings: AppSettings,
+    settings: AppSettings,
 ) -> AppResult<()> {
-    Err(AppError::NotFound(
-        "settings persistence not yet implemented".into(),
-    ))
+    let dir = user_data_dir()?;
+    let mut cfg = ConfigLoader::load_user_config(&dir)?;
+
+    if !settings.vault_path.is_empty() {
+        cfg.active_vault_path = Some(PathBuf::from(&settings.vault_path));
+    }
+    cfg.active_provider_id = settings.agent.provider;
+    cfg.language = settings.language;
+    cfg.agent_defaults.max_tokens = Some(settings.agent.max_tokens_per_turn as usize);
+    cfg.agent_defaults.enable_memory = settings.agent.enable_memory;
+
+    ConfigLoader::save_user_config(&dir, &cfg)
 }
 
 /// 设置 API Key（写入 Stronghold）

@@ -37,6 +37,15 @@ export const ipc = {
 
 	createTask: (params: CreateTaskParams) => call<Task>("create_task", params),
 
+	getTask: (id: string) => call<Task>("get_task", { id }),
+
+	updateTask: (
+		id: string,
+		params: Partial<CreateTaskParams & { status: string }>,
+	) => call<Task>("update_task", { id, ...params }),
+
+	deleteTask: (id: string) => call<void>("delete_task", { id }),
+
 	updateTaskStatus: (id: string, status: string) =>
 		call<void>("update_task_status", { id, status }),
 
@@ -59,8 +68,14 @@ export const ipc = {
 	listVaultDir: (path?: string) =>
 		call<VaultEntry[]>("list_vault_dir", { path }),
 
+	// ─── Knowledge ─────────────────────────────────────────────────────────────
+	getKnowledge: (id: string) => call<KnowledgeEntry>("get_knowledge", { id }),
+
 	// ─── Settings ──────────────────────────────────────────────────────────────
 	getSettings: () => call<AppSettings>("get_settings"),
+
+	saveSettings: (settings: AppSettings) =>
+		call<void>("save_settings", { settings }),
 
 	setVault: (path: string) => call<void>("set_vault", { path }),
 

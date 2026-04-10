@@ -55,6 +55,44 @@ pub async fn update_task_status(
     Ok(())
 }
 
+/// 获取单条任务（含正文）
+#[tauri::command]
+pub async fn get_task(runtime: tauri::State<'_, Arc<AppRuntime>>, id: String) -> AppResult<Task> {
+    runtime.services().task.get(&id).await
+}
+
+/// 更新任务（标题/正文/优先级/截止日/标签/状态）
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn update_task(
+    runtime: tauri::State<'_, Arc<AppRuntime>>,
+    id: String,
+    title: Option<String>,
+    body: Option<String>,
+    priority: Option<String>,
+    due_date: Option<String>,
+    tags: Option<Vec<String>>,
+    status: Option<String>,
+) -> AppResult<Task> {
+    let input = UpdateTaskInput {
+        title,
+        body: body.map(Some),
+        priority: priority
+            .as_deref()
+            .map(crate::services::task::parse_priority_pub),
+        due_date: due_date.map(Some),
+        tags,
+        status: status.as_deref().map(parse_status),
+    };
+    runtime.services().task.update(&id, input).await
+}
+
+/// 删除任务
+#[tauri::command]
+pub async fn delete_task(runtime: tauri::State<'_, Arc<AppRuntime>>, id: String) -> AppResult<()> {
+    runtime.services().task.delete(&id).await
+}
+
 /// 重建任务索引（vault 被外部编辑后调用）
 #[tauri::command]
 pub async fn rebuild_tasks_index(runtime: tauri::State<'_, Arc<AppRuntime>>) -> AppResult<usize> {

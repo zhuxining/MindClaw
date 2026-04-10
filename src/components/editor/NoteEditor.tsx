@@ -2,9 +2,11 @@ import { Crepe } from "@milkdown/crepe";
 import "@milkdown/crepe/theme/common/style.css";
 import "@milkdown/crepe/theme/frame.css";
 import { useQuery } from "@tanstack/react-query";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { ipc } from "@/lib/ipc";
 import { todayDate } from "@/queries/daily";
+import { useWorkspaceStore } from "@/stores/workspace";
 
 interface NoteEditorProps {
 	/** 日记模式：传 date（YYYY-MM-DD） */
@@ -64,8 +66,24 @@ function EditorInner({ defaultValue, onSave }: EditorInnerProps) {
 	return <div ref={containerRef} className="h-full" />;
 }
 
+function offsetDate(date: string, days: number): string {
+	const d = new Date(date);
+	d.setDate(d.getDate() + days);
+	return d.toISOString().slice(0, 10);
+}
+
 export function NoteEditor({ date, path }: NoteEditorProps) {
 	const effectiveDate = date ?? todayDate();
+	const openItem = useWorkspaceStore((s) => s.openItem);
+
+	function navigateDate(delta: number) {
+		const newDate = offsetDate(effectiveDate, delta);
+		openItem({
+			type: "daily",
+			date: newDate,
+			path: `daily/${newDate}.md`,
+		});
+	}
 
 	// 日记模式：gcTime=0 确保离开后缓存立即清除，重新打开时拿磁盘最新内容
 	const dailyQuery = useQuery({
@@ -109,13 +127,36 @@ export function NoteEditor({ date, path }: NoteEditorProps) {
 	}
 
 	return (
-		<div className="h-full overflow-y-auto px-8 py-6">
-			<div className="mx-auto min-h-full max-w-3xl">
-				<EditorInner
-					key={editorKey}
-					defaultValue={content ?? ""}
-					onSave={handleSave}
-				/>
+		<div className="flex h-full flex-col">
+			{date && (
+				<div className="flex items-center justify-between border-b border-border px-4 py-1.5 shrink-0">
+					<button
+						type="button"
+						onClick={() => navigateDate(-1)}
+						className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+						title="前一天"
+					>
+						<ChevronLeft className="h-4 w-4" />
+					</button>
+					<span className="text-sm font-medium">{effectiveDate}</span>
+					<button
+						type="button"
+						onClick={() => navigateDate(1)}
+						className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+						title="后一天"
+					>
+						<ChevronRight className="h-4 w-4" />
+					</button>
+				</div>
+			)}
+			<div className="flex-1 overflow-y-auto px-8 py-6">
+				<div className="mx-auto min-h-full max-w-3xl">
+					<EditorInner
+						key={editorKey}
+						defaultValue={content ?? ""}
+						onSave={handleSave}
+					/>
+				</div>
 			</div>
 		</div>
 	);

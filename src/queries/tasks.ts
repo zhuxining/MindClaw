@@ -3,6 +3,14 @@ import { ipc } from "@/lib/ipc";
 import type { CreateTaskParams, Task } from "@/lib/types";
 import { queryKeys } from "./keys";
 
+export function useTaskQuery(id: string) {
+	return useQuery({
+		queryKey: ["tasks", "detail", id],
+		queryFn: () => ipc.getTask(id),
+		enabled: !!id,
+	});
+}
+
 export function useTasksQuery(status?: string) {
 	return useQuery({
 		queryKey: queryKeys.tasks.list(status),
@@ -14,6 +22,30 @@ export function useCreateTaskMutation() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (params: CreateTaskParams) => ipc.createTask(params),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+		},
+	});
+}
+
+export function useUpdateTaskMutation() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			id,
+			...params
+		}: { id: string } & Partial<CreateTaskParams & { status: string }>) =>
+			ipc.updateTask(id, params),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
+		},
+	});
+}
+
+export function useDeleteTaskMutation() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (id: string) => ipc.deleteTask(id),
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: queryKeys.tasks.all });
 		},

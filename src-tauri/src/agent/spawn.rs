@@ -504,7 +504,7 @@ impl AgentSpawnDispatcher {
             session_id: Some(session_key.to_string()),
             sender: "system".to_string(),
             channel: "desktop".to_string(),
-            mode: crate::models::conversation::ConversationMode::Chat,
+            mode: crate::models::conversation::ConversationMode::Companion,
             content: format!(
                 "## 后台代理任务 [{}] 已完成\n\n{}\n\n\
                  请为用户自然地总结此内容——保持简短，\

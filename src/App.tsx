@@ -1,51 +1,29 @@
-import { invoke } from "@tauri-apps/api/core";
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import "./App.css";
+import { useQuery } from "@tanstack/react-query";
+import { AppShell } from "@/components/layout/AppShell";
+import { VaultSetup } from "@/components/layout/VaultSetup";
+import { useAgentEvents } from "@/hooks/useAgentEvents";
+import { ipc } from "@/lib/ipc";
 
-function App() {
-	const [greetMsg, setGreetMsg] = useState("");
-	const [name, setName] = useState("");
+export default function App() {
+	useAgentEvents();
 
-	async function greet() {
-		// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-		setGreetMsg(await invoke("greet", { name }));
+	const { data: settings, isLoading } = useQuery({
+		queryKey: ["settings"],
+		queryFn: () => ipc.getSettings(),
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+
+	if (isLoading) {
+		return (
+			<div className="flex h-screen w-screen items-center justify-center bg-background text-muted-foreground text-sm">
+				加载中…
+			</div>
+		);
 	}
 
-	return (
-		<main className="container">
-			<h1>Welcome to Tauri + React</h1>
+	if (!settings?.vault_path) {
+		return <VaultSetup />;
+	}
 
-			<div className="row">
-				<a href="https://vite.dev" target="_blank" rel="noopener">
-					<img src="/vite.svg" className="logo vite" alt="Vite logo" />
-				</a>
-				<a href="https://tauri.app" target="_blank" rel="noopener">
-					<img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-				</a>
-				<a href="https://react.dev" target="_blank" rel="noopener">
-					<img src={reactLogo} className="logo react" alt="React logo" />
-				</a>
-			</div>
-			<p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-			<form
-				className="row"
-				onSubmit={(e) => {
-					e.preventDefault();
-					greet();
-				}}
-			>
-				<input
-					id="greet-input"
-					onChange={(e) => setName(e.currentTarget.value)}
-					placeholder="Enter a name..."
-				/>
-				<button type="submit">Greet</button>
-			</form>
-			<p>{greetMsg}</p>
-		</main>
-	);
+	return <AppShell />;
 }
-
-export default App;

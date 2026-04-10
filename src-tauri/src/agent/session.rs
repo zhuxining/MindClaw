@@ -79,7 +79,7 @@ impl AgentSession {
             parent_session_id: parent_session_id.map(|s| s.to_string()),
             persistence: SessionPersistence::Ephemeral,
             sender: "system".to_string(),
-            mode: ConversationMode::Chat,
+            mode: ConversationMode::Companion,
             turns: Vec::new(),
             created: now,
             updated: now,
@@ -426,7 +426,7 @@ impl SessionManager {
         };
 
         let mode: ConversationMode =
-            serde_json::from_str(&mode_str).unwrap_or(ConversationMode::Chat);
+            serde_json::from_str(&mode_str).unwrap_or(ConversationMode::Companion);
         let created = DateTime::parse_from_rfc3339(&created_str)
             .map(|d| d.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
@@ -517,7 +517,7 @@ mod tests {
 
         // 创建会话
         let session = mgr
-            .get_or_create("test_user", &ConversationMode::Chat, None)
+            .get_or_create("test_user", &ConversationMode::Companion, None)
             .await
             .unwrap();
         let sid = session.id.clone();
@@ -540,7 +540,7 @@ mod tests {
         // 清除缓存后从 DB 恢复
         mgr.sessions.lock().await.clear();
         let restored = mgr
-            .get_or_create("test_user", &ConversationMode::Chat, Some(&sid))
+            .get_or_create("test_user", &ConversationMode::Companion, Some(&sid))
             .await
             .unwrap();
         assert_eq!(restored.turns.len(), 1);
@@ -553,7 +553,7 @@ mod tests {
         let mgr = SessionManager::new(db);
 
         let session = mgr
-            .get_or_create("user", &ConversationMode::Chat, None)
+            .get_or_create("user", &ConversationMode::Companion, None)
             .await
             .unwrap();
 

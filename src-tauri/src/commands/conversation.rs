@@ -11,8 +11,18 @@ pub async fn send_message(
     runtime: tauri::State<'_, Arc<AppRuntime>>,
     session_id: Option<String>,
     content: String,
+    mode: Option<String>,
 ) -> AppResult<String> {
     let request_id = uuid::Uuid::new_v4().to_string();
+
+    let conversation_mode = match mode.as_deref() {
+        Some("companion") => ConversationMode::Companion,
+        Some("reflection") => ConversationMode::Reflection,
+        Some("challenge") => ConversationMode::Challenge,
+        Some("knowledge") => ConversationMode::Knowledge,
+        Some("vault") => ConversationMode::Vault,
+        _ => ConversationMode::Companion, // 默认陪伴模式
+    };
 
     let message = InboundMessage {
         id: uuid::Uuid::new_v4().to_string(),
@@ -20,7 +30,7 @@ pub async fn send_message(
         session_id,
         sender: "desktop_user".to_string(),
         channel: "desktop".to_string(),
-        mode: ConversationMode::Chat,
+        mode: conversation_mode,
         content,
         timestamp: chrono::Utc::now().timestamp_millis(),
     };

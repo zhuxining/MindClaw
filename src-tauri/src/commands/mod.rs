@@ -4,3 +4,4 @@ pub mod knowledge;
 pub mod settings;
 pub mod system;
 pub mod tasks;
+pub mod vault;

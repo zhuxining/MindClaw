@@ -60,6 +60,12 @@
 |------|------|
 | [07-runtime.md](./07-runtime.md) | AppRuntime：统一运行时与依赖注入 |
 
+#### 桌面端前端
+
+| 文件 | 内容 |
+|------|------|
+| [08-desktop-frontend.md](./08-desktop-frontend.md) | 桌面端前端架构：组件层次、状态管理、IPC 层、事件订阅设计 |
+
 ### 参考文档
 
 参考文档回答"当前是什么样"，在代码/配置变更时同步更新。
@@ -85,6 +91,8 @@
 **添加新工具**：`03.07-tool-execution.md` → `03.08-mcp.md`
 
 **添加新通道**：`01-channels.md` → `02-bus.md`
+
+**理解前端架构**：`08-desktop-frontend.md` → `01-channels.md`（IPC 通道部分）
 
 ---
 

@@ -15,13 +15,20 @@ pub mod storage;
 
 use runtime::AppRuntime;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::new().build())
-        .plugin(tauri_plugin_stronghold::Builder::new(|_pass| todo!()).build())
+        // TODO: Stronghold key derivation — placeholder hash until API key management is implemented
+        // TODO: Stronghold key derivation — placeholder hash until API key management is implemented
+        .plugin(tauri_plugin_stronghold::Builder::new(|pass| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            pass.hash(&mut h);
+            h.finish().to_le_bytes().to_vec()
+        }).build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
@@ -42,6 +49,23 @@ pub fn run() {
                             tracing::error!(error = %e, "failed_to_start_runtime");
                             return;
                         }
+                        // 桥接出站消息总线 → Tauri 事件（驱动前端流式输出）
+                        let bus = rt.bus().clone();
+                        let emit_handle = handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            match bus.take_outbound_rx().await {
+                                Ok(mut rx) => {
+                                    while let Some(msg) = rx.recv().await {
+                                        if let Err(e) = emit_handle.emit("mindclaw://agent-event", &msg) {
+                                            tracing::warn!(error = %e, "failed_to_emit_agent_event");
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(error = %e, "outbound_rx_unavailable");
+                                }
+                            }
+                        });
                         handle.manage(rt);
                         tracing::info!("app_runtime_injected");
                     }
@@ -57,6 +81,8 @@ pub fn run() {
             commands::conversation::get_session_history,
             commands::daily::get_daily,
             commands::daily::save_daily,
+            commands::daily::read_note,
+            commands::daily::save_note,
             commands::tasks::list_tasks,
             commands::tasks::create_task,
             commands::tasks::update_task_status,
@@ -64,9 +90,12 @@ pub fn run() {
             commands::knowledge::search_knowledge,
             commands::knowledge::get_knowledge,
             commands::settings::get_settings,
+            commands::settings::set_vault,
             commands::settings::save_settings,
             commands::settings::set_api_key,
             commands::system::get_system_status,
+            commands::vault::list_vault_dir,
+            commands::vault::list_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

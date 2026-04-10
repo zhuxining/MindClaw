@@ -147,7 +147,7 @@ impl AppRuntime {
             session_id,
             sender: sender.to_string(),
             channel: channel.to_string(),
-            mode: ConversationMode::Chat,
+            mode: ConversationMode::Companion,
             content: content.to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
         };

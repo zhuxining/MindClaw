@@ -11,11 +11,11 @@ pub enum Role {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationMode {
-    Chat,
-    DailyReview,
-    KnowledgeCapture,
-    TaskBreakdown,
-    DeepResearch,
+    Companion,
+    Reflection,
+    Challenge,
+    Knowledge,
+    Vault,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

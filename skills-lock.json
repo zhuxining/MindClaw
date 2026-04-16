@@ -30,6 +30,11 @@
 			"source": "nodnarbnitram/claude-code-extensions",
 			"sourceType": "github",
 			"computedHash": "72248dbe36769a12c38c07437063cc5a1ad2d182fee87fb72d92a8fa37ce4a0f"
+		},
+		"ui-ux-pro-max": {
+			"source": "nextlevelbuilder/ui-ux-pro-max-skill",
+			"sourceType": "github",
+			"computedHash": "0a413bf988d06481f69bb81df2070741c3ba12dd9f1be2706d57f259c905992d"
 		}
 	}
 }

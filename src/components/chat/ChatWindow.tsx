@@ -9,35 +9,39 @@ interface ChatWindowProps {
 }
 
 export function ChatWindow({ onClose }: ChatWindowProps) {
-	const mode = useChatStore((s) => s.mode);
-	const setMode = useChatStore((s) => s.setMode);
+	const mode = useChatStore((state) => state.mode);
+	const setMode = useChatStore((state) => state.setMode);
 
 	return (
-		<div className="flex h-full flex-col">
-			{/* 标题栏 */}
-			<div className="flex items-center justify-between border-b border-border px-4 py-2">
-				<span className="text-sm font-semibold">对话</span>
-				<button
-					type="button"
-					onClick={onClose}
-					className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-				>
-					收起
-				</button>
+		<div className="flex h-full flex-col overflow-hidden rounded-[28px] border border-white/80 bg-background/98 shadow-[0_24px_64px_rgba(15,23,42,0.24)] backdrop-blur-xl">
+			<div className="border-b border-border/70 px-5 py-4">
+				<div className="flex items-center justify-between">
+					<div>
+						<p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+							Companion Chat
+						</p>
+						<h2 className="mt-1 text-base font-semibold text-foreground">
+							对话
+						</h2>
+					</div>
+					<button
+						type="button"
+						onClick={onClose}
+						className="rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+					>
+						收起
+					</button>
+				</div>
+
+				<div className="mt-4">
+					<ModeSelector
+						mode={mode}
+						onChange={(nextMode: ConversationMode) => setMode(nextMode)}
+					/>
+				</div>
 			</div>
 
-			{/* 模式选择 */}
-			<div className="px-3 py-2 border-b border-border">
-				<ModeSelector
-					mode={mode}
-					onChange={(m: ConversationMode) => setMode(m)}
-				/>
-			</div>
-
-			{/* 消息列表 */}
 			<MessageList />
-
-			{/* 输入框 */}
 			<ChatInput />
 		</div>
 	);

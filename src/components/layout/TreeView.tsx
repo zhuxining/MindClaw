@@ -1,39 +1,71 @@
 import { ChevronDown, ChevronRight, FileText, Folder, Pin } from "lucide-react";
 import { useState } from "react";
+import {
+	ContextMenu,
+	ContextMenuContent,
+	ContextMenuItem,
+	ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import type { VaultEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useVaultDirQuery } from "@/queries/vault";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { buildOpenedItemFromEntry, isPinnableEntry } from "./opened-item";
 
 interface TreeViewProps {
 	path: string;
+	query?: string;
 }
 
-export function TreeView({ path }: TreeViewProps) {
+export function TreeView({ path, query = "" }: TreeViewProps) {
 	const { data: entries = [], isLoading } = useVaultDirQuery(path || undefined);
 
 	if (isLoading) {
-		return <div className="p-3 text-xs text-muted-foreground">加载中…</div>;
+		return <div className="p-4 text-sm text-muted-foreground">加载目录…</div>;
 	}
 
 	return (
-		<div className="py-1">
+		<div className="h-full overflow-y-auto px-2 py-3">
 			{entries.map((entry) => (
-				<TreeNode key={entry.path} entry={entry} depth={0} />
+				<TreeNode key={entry.path} entry={entry} depth={0} query={query} />
 			))}
 		</div>
 	);
 }
 
-function TreeNode({ entry, depth }: { entry: VaultEntry; depth: number }) {
+function TreeNode({
+	entry,
+	depth,
+	query,
+}: {
+	entry: VaultEntry;
+	depth: number;
+	query: string;
+}) {
+	const shouldInspectChildren =
+		entry.is_dir && (depth === 0 || query.trim().length > 0);
 	const [expanded, setExpanded] = useState(depth === 0 && entry.is_dir);
 	const { data: children = [] } = useVaultDirQuery(
-		expanded ? entry.path : undefined,
+		shouldInspectChildren || expanded ? entry.path : undefined,
 	);
-	const openItem = useWorkspaceStore((s) => s.openItem);
-	const openedItem = useWorkspaceStore((s) => s.openedItem);
-	const pinnedNote = useWorkspaceStore((s) => s.pinnedNote);
-	const setPinnedNote = useWorkspaceStore((s) => s.setPinnedNote);
+	const openItem = useWorkspaceStore((state) => state.openItem);
+	const openedItem = useWorkspaceStore((state) => state.openedItem);
+	const pinnedNote = useWorkspaceStore((state) => state.pinnedNote);
+	const setPinnedNote = useWorkspaceStore((state) => state.setPinnedNote);
+	const pinDirTab = useWorkspaceStore((state) => state.pinDirTab);
+	const normalizedQuery = query.trim().toLowerCase();
+
+	const childMatches =
+		normalizedQuery.length > 0 &&
+		children.some((child) =>
+			child.name.toLowerCase().includes(normalizedQuery),
+		);
+	const selfMatches =
+		normalizedQuery.length === 0 ||
+		entry.name.toLowerCase().includes(normalizedQuery) ||
+		childMatches;
+
+	if (!selfMatches) return null;
 
 	const isActive =
 		openedItem !== null &&
@@ -41,31 +73,22 @@ function TreeNode({ entry, depth }: { entry: VaultEntry; depth: number }) {
 		openedItem.path === entry.path;
 	const isPinned = pinnedNote?.path === entry.path;
 
-	function handleClick() {
+	async function handleClick() {
 		if (entry.is_dir) {
-			setExpanded((v) => !v);
-		} else {
-			const isDaily =
-				entry.path.startsWith("daily/") && entry.name.endsWith(".md");
-			if (isDaily) {
-				const date = entry.name.replace(".md", "");
-				openItem({ type: "daily", date, path: entry.path });
-			} else if (entry.name.endsWith(".md")) {
-				openItem({
-					type: "note",
-					path: entry.path,
-					title: entry.name.replace(".md", ""),
-				});
-			} else if (entry.name.endsWith(".pdf")) {
-				openItem({ type: "source", path: entry.path, sourceType: "pdf" });
-			} else {
-				openItem({ type: "note", path: entry.path, title: entry.name });
-			}
+			setExpanded((value) => !value);
+			return;
+		}
+
+		try {
+			const item = await buildOpenedItemFromEntry(entry);
+			openItem(item);
+		} catch (error) {
+			console.error("[TreeView] open failed", error);
 		}
 	}
 
-	function handlePin(e: React.MouseEvent) {
-		e.stopPropagation();
+	function handlePin(event: React.MouseEvent) {
+		event.stopPropagation();
 		const title = entry.name.endsWith(".md")
 			? entry.name.slice(0, -3)
 			: entry.name;
@@ -76,60 +99,89 @@ function TreeNode({ entry, depth }: { entry: VaultEntry; depth: number }) {
 		}
 	}
 
-	return (
-		<>
-			<div
-				className={cn(
-					"group flex items-center rounded text-xs transition-colors hover:bg-accent/50",
-					isActive && "bg-accent text-accent-foreground",
-				)}
+	const row = (
+		<div
+			className={cn(
+				"group flex items-center rounded-xl px-1.5 py-0.5",
+				isActive && "bg-accent/70 text-accent-foreground",
+			)}
+		>
+			<button
+				type="button"
+				onClick={handleClick}
+				title={entry.name}
+				className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-muted/70"
+				style={{ paddingLeft: `${10 + depth * 16}px` } as React.CSSProperties}
 			>
+				{entry.is_dir ? (
+					<>
+						{expanded || normalizedQuery.length > 0 ? (
+							<ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+						) : (
+							<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+						)}
+						<Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+					</>
+				) : (
+					<>
+						<span className="w-4 shrink-0" />
+						<FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+					</>
+				)}
+				<span className="truncate">{entry.name}</span>
+			</button>
+
+			{isPinnableEntry(entry) ? (
 				<button
 					type="button"
-					onClick={handleClick}
-					title={entry.name}
-					className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-1 truncate"
-					style={{ paddingLeft: `${8 + depth * 16}px` } as React.CSSProperties}
-				>
-					{entry.is_dir ? (
-						<>
-							{expanded ? (
-								<ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-							) : (
-								<ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-							)}
-							<Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-						</>
-					) : (
-						<FileText className="ml-5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+					onClick={handlePin}
+					title={isPinned ? "取消固定" : "固定笔记"}
+					className={cn(
+						"mr-1 shrink-0 rounded-lg p-1.5 transition-colors",
+						isPinned
+							? "text-primary"
+							: "text-transparent group-hover:text-muted-foreground hover:text-foreground",
 					)}
-					<span className="truncate">{entry.name}</span>
+				>
+					<Pin className="h-3.5 w-3.5" />
 				</button>
+			) : null}
+		</div>
+	);
 
-				{!entry.is_dir && entry.name.endsWith(".md") && (
-					<button
-						type="button"
-						onClick={handlePin}
-						title={isPinned ? "取消固定" : "固定笔记"}
-						className={cn(
-							"shrink-0 rounded p-0.5 mr-1 transition-colors",
-							isPinned
-								? "text-primary"
-								: "text-transparent group-hover:text-muted-foreground hover:text-foreground",
-						)}
-					>
-						<Pin className="h-3 w-3" />
-					</button>
-				)}
-			</div>
-
-			{entry.is_dir && expanded && (
-				<div>
-					{children.map((child) => (
-						<TreeNode key={child.path} entry={child} depth={depth + 1} />
-					))}
-				</div>
+	return (
+		<>
+			{entry.is_dir ? (
+				<ContextMenu>
+					<ContextMenuTrigger>{row}</ContextMenuTrigger>
+					<ContextMenuContent>
+						<ContextMenuItem
+							onClick={() =>
+								pinDirTab({
+									id: `dir:${entry.path}`,
+									dirPath: entry.path,
+									label: entry.name,
+								})
+							}
+						>
+							固定为 Tab
+						</ContextMenuItem>
+					</ContextMenuContent>
+				</ContextMenu>
+			) : (
+				row
 			)}
+
+			{entry.is_dir && (expanded || normalizedQuery.length > 0)
+				? children.map((child) => (
+						<TreeNode
+							key={child.path}
+							entry={child}
+							depth={depth + 1}
+							query={query}
+						/>
+					))
+				: null}
 		</>
 	);
 }

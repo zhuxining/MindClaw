@@ -1,79 +1,80 @@
 import { useQuery } from "@tanstack/react-query";
+import { ArrowUpRight, Sparkles } from "lucide-react";
 import { ipc } from "@/lib/ipc";
-import type { KnowledgeEntry, NoteItem } from "@/lib/types";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { EmptyState, PanelFrame, SectionHeader } from "./workspace-chrome";
 
 export function RelevancePanel() {
-	const openedItem = useWorkspaceStore((s) => s.openedItem);
-	const openItem = useWorkspaceStore((s) => s.openItem);
+	const openedItem = useWorkspaceStore((state) => state.openedItem);
+	const openItem = useWorkspaceStore((state) => state.openItem);
+	const supportedPath =
+		openedItem && (openedItem.type === "daily" || openedItem.type === "note")
+			? openedItem.path
+			: null;
 
-	// 用当前打开文件的文件名（去掉扩展名）作为搜索词
-	const keyword =
-		openedItem !== null && openedItem.type !== "source"
-			? (openedItem.path.split("/").pop()?.replace(/\.md$/i, "") ?? "")
-			: "";
-
-	const { data: results = [] } = useQuery({
-		queryKey: ["relevance", keyword],
-		queryFn: () => ipc.searchKnowledge(keyword),
-		enabled: keyword.length > 0,
+	const { data: results = [], isLoading } = useQuery({
+		queryKey: ["relevance", supportedPath],
+		queryFn: () => ipc.getRelevantNotes(supportedPath ?? ""),
+		enabled: Boolean(supportedPath),
 	});
 
-	// 排除当前打开的文件本身
-	const filtered = results.filter(
-		(r) =>
-			openedItem === null ||
-			openedItem.type === "source" ||
-			r.topic !== openedItem.path,
-	);
-
-	function handleOpen(entry: KnowledgeEntry) {
-		const note: NoteItem = {
-			type: "note",
-			path: entry.topic,
-			title: entry.title,
-		};
-		openItem(note);
-	}
-
 	return (
-		<div className="flex h-full flex-col">
-			<div className="flex items-center border-b border-border px-3 py-2">
-				<span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-					关联
-				</span>
-			</div>
+		<PanelFrame className="overflow-hidden">
+			<SectionHeader title="Relevance" description="围绕当前内容的关联笔记" />
 
-			<div className="flex-1 overflow-y-auto px-3 py-2">
-				{openedItem === null ? (
-					<p className="text-xs text-muted-foreground">
-						打开笔记后查看关联内容
-					</p>
-				) : filtered.length === 0 ? (
-					<p className="text-xs text-muted-foreground">暂无相关笔记</p>
+			<div className="min-h-0 flex-1 overflow-y-auto p-3">
+				{!supportedPath ? (
+					<EmptyState
+						title="打开一条笔记后再看关联"
+						description="右侧会根据当前内容的标题、标签和上下文给出更贴近的参考笔记。"
+					/>
+				) : isLoading ? (
+					<div className="px-1 py-2 text-sm text-muted-foreground">
+						正在整理关联笔记…
+					</div>
+				) : results.length === 0 ? (
+					<EmptyState
+						title="暂无关联内容"
+						description="这条内容还没有足够明确的关联线索，继续积累后会在这里出现。"
+					/>
 				) : (
-					<ul className="space-y-1">
-						{filtered.map((entry) => (
+					<ul className="space-y-2">
+						{results.map((entry) => (
 							<li key={entry.id}>
 								<button
 									type="button"
-									onClick={() => handleOpen(entry)}
-									className="w-full text-left rounded px-1.5 py-1 text-xs hover:bg-accent transition-colors"
+									onClick={() =>
+										openItem({
+											type: "note",
+											path: entry.topic,
+											title: entry.title,
+										})
+									}
+									className="flex w-full items-start gap-3 rounded-2xl border border-transparent px-3 py-3 text-left transition-colors hover:border-border hover:bg-muted/60"
 								>
-									<span className="font-medium truncate block">
-										{entry.title}
-									</span>
-									{entry.tags.length > 0 && (
-										<span className="text-muted-foreground">
-											{entry.tags.slice(0, 3).join(" · ")}
-										</span>
-									)}
+									<div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border/70 bg-muted/60">
+										<Sparkles className="h-4 w-4 text-muted-foreground" />
+									</div>
+									<div className="min-w-0 flex-1">
+										<p className="truncate text-sm font-medium text-foreground">
+											{entry.title}
+										</p>
+										<p className="truncate text-xs text-muted-foreground">
+											{entry.topic}
+										</p>
+										{entry.tags.length > 0 ? (
+											<p className="mt-1 truncate text-[11px] text-muted-foreground">
+												{entry.tags.slice(0, 3).join(" · ")}
+											</p>
+										) : null}
+									</div>
+									<ArrowUpRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
 								</button>
 							</li>
 						))}
 					</ul>
 				)}
 			</div>
-		</div>
+		</PanelFrame>
 	);
 }

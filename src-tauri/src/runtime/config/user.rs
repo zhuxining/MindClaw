@@ -2,6 +2,7 @@
 //!
 //! 跨 vault 的全局偏好，随用户账号存在。
 
+use crate::models::settings::WorkspacePrefs;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -27,6 +28,8 @@ pub struct UserConfig {
     pub bus_capacity: usize,
     /// 启动行为配置
     pub startup: StartupConfig,
+    /// 桌面工作区偏好
+    pub workspace: WorkspacePrefs,
 }
 
 impl Default for UserConfig {
@@ -74,6 +77,7 @@ impl Default for UserConfig {
             agent_defaults: GlobalAgentDefaults::default(),
             bus_capacity: 100,
             startup: StartupConfig::default(),
+            workspace: WorkspacePrefs::default(),
         }
     }
 }

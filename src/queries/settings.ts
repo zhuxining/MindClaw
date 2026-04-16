@@ -9,3 +9,11 @@ export function useSettingsQuery() {
 		staleTime: 60_000,
 	});
 }
+
+export function useWorkspacePrefsQuery() {
+	return useQuery({
+		queryKey: queryKeys.settings.workspace,
+		queryFn: () => ipc.getWorkspacePrefs(),
+		staleTime: 60_000,
+	});
+}

@@ -1,4 +1,6 @@
+use crate::models::conversation::ConversationMode;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,6 +40,123 @@ pub struct AppSettings {
     pub user_role: Option<UserRole>,
     pub agent: AgentPreference,
     pub language: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DirectoryViewMode {
+    Tree,
+    #[default]
+    Flat,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinnedDirTab {
+    pub id: String,
+    #[serde(rename = "dirPath")]
+    pub dir_path: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinnedNote {
+    pub path: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspacePanelSizes {
+    pub left: f32,
+    pub center: f32,
+    pub right: f32,
+}
+
+impl Default for WorkspacePanelSizes {
+    /// NOTE: These defaults are duplicated in TypeScript (src/stores/workspace.ts).
+    /// When changing values, update BOTH locations to maintain consistency.
+    fn default() -> Self {
+        Self {
+            left: 22.0,
+            center: 52.0,
+            right: 26.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRightPanelHeights {
+    pub pin: f32,
+    pub tasks: f32,
+    pub relevance: f32,
+}
+
+impl Default for WorkspaceRightPanelHeights {
+    /// NOTE: These defaults are duplicated in TypeScript (src/stores/workspace.ts).
+    /// When changing values, update BOTH locations to maintain consistency.
+    fn default() -> Self {
+        Self {
+            pin: 20.0,
+            tasks: 50.0,
+            relevance: 30.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum WorkspaceOpenedItem {
+    Daily {
+        date: String,
+        path: String,
+    },
+    Note {
+        path: String,
+        title: String,
+    },
+    SourceWeb {
+        path: String,
+        title: String,
+        url: String,
+    },
+    SourcePdf {
+        path: String,
+        title: String,
+    },
+    SourceImage {
+        path: String,
+        title: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkspacePrefs {
+    pub active_tab_id: String,
+    pub pinned_dir_tabs: Vec<PinnedDirTab>,
+    pub dir_view_mode: HashMap<String, DirectoryViewMode>,
+    pub panel_sizes: WorkspacePanelSizes,
+    pub right_panel_heights: WorkspaceRightPanelHeights,
+    pub last_opened_item: Option<WorkspaceOpenedItem>,
+    pub pinned_note: Option<PinnedNote>,
+    pub chat_mode: ConversationMode,
+}
+
+impl Default for WorkspacePrefs {
+    fn default() -> Self {
+        Self {
+            active_tab_id: "daily".to_string(),
+            pinned_dir_tabs: Vec::new(),
+            dir_view_mode: HashMap::new(),
+            panel_sizes: WorkspacePanelSizes::default(),
+            right_panel_heights: WorkspaceRightPanelHeights::default(),
+            last_opened_item: Some(WorkspaceOpenedItem::Daily {
+                date: chrono::Local::now().date_naive().to_string(),
+                path: format!("daily/{}.md", chrono::Local::now().date_naive()),
+            }),
+            pinned_note: None,
+            chat_mode: ConversationMode::Companion,
+        }
+    }
 }
 
 impl Default for AppSettings {

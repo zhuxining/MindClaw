@@ -1,28 +1,84 @@
+import { useEffect, useRef, useState } from "react";
 import { TasksPanel } from "@/components/tasks/TasksPanel";
+import {
+	ResizableHandle,
+	ResizablePanel,
+	ResizablePanelGroup,
+} from "@/components/ui/resizable";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { PinPanel } from "./PinPanel";
 import { RelevancePanel } from "./RelevancePanel";
 
 export function RightPanels() {
+	const rightPanelHeights = useWorkspaceStore(
+		(state) => state.rightPanelHeights,
+	);
+	const collapseRelevanceRef = useRef(false);
+	const [collapseRelevance, setCollapseRelevance] = useState(false);
+
+	useEffect(() => {
+		function syncViewport() {
+			const shouldCollapse = window.innerHeight < 600;
+			collapseRelevanceRef.current = shouldCollapse;
+			setCollapseRelevance(shouldCollapse);
+		}
+
+		syncViewport();
+		window.addEventListener("resize", syncViewport);
+		return () => window.removeEventListener("resize", syncViewport);
+	}, []);
+
 	return (
-		<div className="flex h-full flex-col overflow-hidden">
-			{/* Pin：20% */}
-			<div className="h-[20%] overflow-hidden">
-				<PinPanel />
-			</div>
+		<div className="h-full p-3 pl-1.5">
+			<ResizablePanelGroup
+				orientation="vertical"
+				className="h-full"
+				onLayoutChanged={(layout: { [id: string]: number }) => {
+					const state = useWorkspaceStore.getState();
+					const heights = state.rightPanelHeights;
+					state.setRightPanelHeights({
+						pin: layout.pin ?? heights.pin,
+						tasks: layout.tasks ?? heights.tasks,
+						relevance: collapseRelevanceRef.current
+							? heights.relevance
+							: (layout.relevance ?? heights.relevance),
+					});
+				}}
+			>
+				<ResizablePanel
+					id="pin"
+					defaultSize={`${rightPanelHeights.pin}`}
+					minSize="16"
+					className="min-h-[120px]"
+				>
+					<PinPanel />
+				</ResizablePanel>
 
-			<div className="h-px shrink-0 bg-border" />
+				<ResizableHandle withHandle className="bg-transparent py-1" />
 
-			{/* Tasks：50% */}
-			<div className="flex-1 overflow-hidden">
-				<TasksPanel />
-			</div>
+				<ResizablePanel
+					id="tasks"
+					defaultSize={`${collapseRelevance ? 80 : rightPanelHeights.tasks}`}
+					minSize="28"
+					className="min-h-[220px]"
+				>
+					<TasksPanel />
+				</ResizablePanel>
 
-			<div className="h-px shrink-0 bg-border" />
-
-			{/* Relevance：30% */}
-			<div className="h-[30%] overflow-hidden">
-				<RelevancePanel />
-			</div>
+				{collapseRelevance ? null : (
+					<>
+						<ResizableHandle withHandle className="bg-transparent py-1" />
+						<ResizablePanel
+							id="relevance"
+							defaultSize={`${rightPanelHeights.relevance}`}
+							minSize="18"
+							className="min-h-[140px]"
+						>
+							<RelevancePanel />
+						</ResizablePanel>
+					</>
+				)}
+			</ResizablePanelGroup>
 		</div>
 	);
 }

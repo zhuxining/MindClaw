@@ -10,3 +10,11 @@ export function useVaultDirQuery(path?: string) {
 		staleTime: 30_000,
 	});
 }
+
+export function useVaultFlatQuery(path?: string) {
+	return useQuery({
+		queryKey: queryKeys.vault.flat(path),
+		queryFn: () => ipc.listVaultFilesRecursive(path),
+		staleTime: 30_000,
+	});
+}

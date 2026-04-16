@@ -91,13 +91,18 @@ pub fn run() {
             commands::tasks::update_task_status,
             commands::tasks::rebuild_tasks_index,
             commands::knowledge::search_knowledge,
+            commands::knowledge::get_relevant_notes,
             commands::knowledge::get_knowledge,
             commands::settings::get_settings,
+            commands::settings::get_workspace_prefs,
             commands::settings::set_vault,
             commands::settings::save_settings,
+            commands::settings::save_workspace_prefs,
             commands::settings::set_api_key,
             commands::system::get_system_status,
             commands::vault::list_vault_dir,
+            commands::vault::list_vault_files_recursive,
+            commands::vault::resolve_source_item,
             commands::vault::list_dir,
         ])
         .run(tauri::generate_context!())

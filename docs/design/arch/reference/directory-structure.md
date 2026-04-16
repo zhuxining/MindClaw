@@ -119,7 +119,8 @@ src/
 │   ├── tasks.rs            list / create / update
 │   ├── knowledge.rs        search / get
 │   ├── daily.rs            get / save
-│   ├── settings.rs         get / save / set_api_key
+│   ├── settings.rs         get / save / set_api_key / workspace_prefs
+│   ├── vault.rs            目录浏览 / 递归文件列表 / 资源类型解析
 │   └── system.rs           get_system_status
 │
 ├── gateway/                HTTP/WebSocket 网关
@@ -147,13 +148,20 @@ src/
 
 ```
 src/
-├── App.tsx                 根组件，路由配置
+├── App.tsx                 根组件，设置与工作区偏好水合
+├── App.css                 保留为空，占位说明全局样式已迁入 index.css
+├── index.css               全局 design token、基础层和编辑器样式
 ├── main.tsx                Vite 入口
 ├── components/
+│   ├── chat/               Chat 覆盖层、模式切换、消息列表、输入区
+│   ├── editor/             Milkdown 编辑器封装
+│   ├── layout/             三栏工作区、工作台基础壳层、资源预览
+│   ├── tasks/              任务列表、详情、创建对话框
 │   └── ui/                 shadcn/ui 生成的组件
-├── routes/                 TanStack Router 页面
-├── stores/                 Zustand 状态
-└── hooks/                  自定义 Hooks
+├── hooks/                  Tauri 事件订阅、工作区偏好同步
+├── lib/                    IPC、事件、类型、日期工具、通用工具
+├── queries/                TanStack Query 查询封装
+└── stores/                 Zustand 运行时状态（workspace/chat）
 ```
 
 ---

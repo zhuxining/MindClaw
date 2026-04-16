@@ -1,5 +1,5 @@
 use crate::error::{AppError, AppResult};
-use crate::models::settings::AppSettings;
+use crate::models::settings::{AppSettings, WorkspacePrefs};
 use crate::runtime::config::{ConfigLoader, VaultEntry};
 use crate::runtime::AppRuntime;
 use std::path::PathBuf;
@@ -33,6 +33,14 @@ pub async fn get_settings(_runtime: tauri::State<'_, Arc<AppRuntime>>) -> AppRes
         },
         language: cfg.language,
     })
+}
+
+/// 获取工作区偏好（从 UserConfig 读取）
+#[tauri::command]
+pub async fn get_workspace_prefs() -> AppResult<WorkspacePrefs> {
+    let dir = user_data_dir()?;
+    let cfg = ConfigLoader::load_user_config(&dir)?;
+    Ok(cfg.workspace)
 }
 
 /// 设置当前 vault 路径，创建必要目录结构，保存到 UserConfig
@@ -127,6 +135,15 @@ pub async fn save_settings(
     cfg.agent_defaults.max_tokens = Some(settings.agent.max_tokens_per_turn as usize);
     cfg.agent_defaults.enable_memory = settings.agent.enable_memory;
 
+    ConfigLoader::save_user_config(&dir, &cfg)
+}
+
+/// 保存工作区偏好
+#[tauri::command]
+pub async fn save_workspace_prefs(prefs: WorkspacePrefs) -> AppResult<()> {
+    let dir = user_data_dir()?;
+    let mut cfg = ConfigLoader::load_user_config(&dir)?;
+    cfg.workspace = prefs;
     ConfigLoader::save_user_config(&dir, &cfg)
 }
 

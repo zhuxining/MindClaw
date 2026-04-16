@@ -1,5 +1,5 @@
 import { Send } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ipc } from "@/lib/ipc";
 import { useChatStore } from "@/stores/chat";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -9,15 +9,19 @@ export function ChatInput() {
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isSendingRef = useRef(false);
 
-	const streamingRequestId = useChatStore((s) => s.streamingRequestId);
-	const currentSessionId = useChatStore((s) => s.currentSessionId);
-	const mode = useChatStore((s) => s.mode);
-	const addUserMessage = useChatStore((s) => s.addUserMessage);
-	const startStreaming = useChatStore((s) => s.startStreaming);
-	const setError = useChatStore((s) => s.setError);
-	const openChat = useWorkspaceStore((s) => s.openChat);
+	const streamingRequestId = useChatStore((state) => state.streamingRequestId);
+	const currentSessionId = useChatStore((state) => state.currentSessionId);
+	const mode = useChatStore((state) => state.mode);
+	const addUserMessage = useChatStore((state) => state.addUserMessage);
+	const startStreaming = useChatStore((state) => state.startStreaming);
+	const setError = useChatStore((state) => state.setError);
+	const openChat = useWorkspaceStore((state) => state.openChat);
 
 	const isStreaming = streamingRequestId !== null;
+
+	useEffect(() => {
+		textareaRef.current?.focus();
+	}, []);
 
 	async function handleSend() {
 		const text = content.trim();
@@ -25,70 +29,84 @@ export function ChatInput() {
 
 		isSendingRef.current = true;
 		setContent("");
-		// 重置 textarea 高度
 		if (textareaRef.current) textareaRef.current.style.height = "auto";
 
-		const msgId = crypto.randomUUID();
-		addUserMessage(text, msgId);
+		const messageId = crypto.randomUUID();
+		addUserMessage(text, messageId);
 		openChat();
 
 		try {
-			// 传递当前 mode 给后端
 			const requestId = await ipc.sendMessage(
 				text,
 				currentSessionId ?? undefined,
 				mode,
 			);
 			startStreaming(requestId);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			// 用一个占位 requestId 展示错误 bubble，而不是修改用户消息
-			const errId = crypto.randomUUID();
-			startStreaming(errId);
-			setError(errId, `发送失败：${message}`);
-			// 把用户输入还回输入框
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const errorId = crypto.randomUUID();
+			startStreaming(errorId);
+			setError(errorId, `发送失败：${message}`);
 			setContent(text);
 		} finally {
 			isSendingRef.current = false;
 		}
 	}
 
-	function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-		if (e.key === "Enter" && !e.shiftKey) {
-			e.preventDefault();
-			handleSend();
+	function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+		if (event.key === "Enter" && !event.shiftKey) {
+			event.preventDefault();
+			void handleSend();
 		}
 	}
 
-	function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-		setContent(e.target.value);
-		const el = e.target;
-		el.style.height = "auto";
-		el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+	function handleChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
+		setContent(event.target.value);
+		const element = event.target;
+		element.style.height = "auto";
+		element.style.height = `${Math.min(element.scrollHeight, 140)}px`;
 	}
 
 	return (
-		<div className="border-t border-border px-3 py-2">
-			<div className="flex items-end gap-2 rounded-lg border border-border bg-background px-3 py-2 focus-within:ring-1 focus-within:ring-ring">
-				<textarea
-					ref={textareaRef}
-					value={content}
-					onChange={handleChange}
-					onKeyDown={handleKeyDown}
-					placeholder="输入消息（Enter 发送，Shift+Enter 换行）"
-					rows={1}
-					disabled={isStreaming}
-					className="max-h-[120px] flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:opacity-50"
-				/>
-				<button
-					type="button"
-					onClick={handleSend}
-					disabled={!content.trim() || isStreaming}
-					className="shrink-0 rounded-md p-1.5 text-primary disabled:opacity-40 hover:bg-accent transition-colors"
-					title="发送"
-				>
-					<Send className="h-4 w-4" />
-				</button>
+		<div className="border-t border-border/70 bg-background px-4 py-4">
+			<div
+				className={`rounded-2xl border px-3 py-3 transition-colors ${
+					mode === "vault"
+						? "border-amber-200 bg-amber-50/70"
+						: "border-border/70 bg-background"
+				}`}
+			>
+				{mode === "vault" ? (
+					<p className="mb-2 text-[11px] text-amber-700">
+						树洞模式：内容不会进入知识库。
+					</p>
+				) : null}
+				<div className="flex items-end gap-3">
+					<textarea
+						ref={textareaRef}
+						value={content}
+						onChange={handleChange}
+						onKeyDown={handleKeyDown}
+						placeholder={
+							mode === "vault"
+								? "把不想沉淀进知识库的内容放在这里…"
+								: "输入消息，Enter 发送，Shift+Enter 换行"
+						}
+						rows={1}
+						disabled={isStreaming}
+						className="max-h-35 flex-1 resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50"
+					/>
+					<button
+						type="button"
+						onClick={() => void handleSend()}
+						disabled={!content.trim() || isStreaming}
+						className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-40"
+						title="发送"
+						aria-label="发送"
+					>
+						<Send className="h-4 w-4" />
+					</button>
+				</div>
 			</div>
 		</div>
 	);

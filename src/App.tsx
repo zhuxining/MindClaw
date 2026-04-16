@@ -1,17 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { VaultSetup } from "@/components/layout/VaultSetup";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
-import { ipc } from "@/lib/ipc";
+import { useWorkspacePrefsSync } from "@/hooks/useWorkspacePrefsSync";
+import { useSettingsQuery } from "@/queries/settings";
 
 export default function App() {
 	useAgentEvents();
-
-	const { data: settings, isLoading } = useQuery({
-		queryKey: ["settings"],
-		queryFn: () => ipc.getSettings(),
-		staleTime: Number.POSITIVE_INFINITY,
-	});
+	const { data: settings, isLoading } = useSettingsQuery();
+	useWorkspacePrefsSync(Boolean(settings?.vault_path));
 
 	if (isLoading) {
 		return (

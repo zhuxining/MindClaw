@@ -8,9 +8,10 @@ pub enum Role {
     System,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationMode {
+    #[default]
     Companion,
     Reflection,
     Challenge,

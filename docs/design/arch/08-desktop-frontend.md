@@ -16,9 +16,11 @@
 
 1. **IPC 是唯一数据通道**：前端不直接读写文件系统，不持有业务数据的权威副本；所有数据来自 `invoke` 响应或后端 `emit` 事件。
 
-2. **UI 状态与服务器状态分离**：Zustand 管理纯 UI 状态（当前 Tab、Chat 是否打开、流式消息缓冲），TanStack Query 管理服务器状态（任务列表、日记内容、设置项）并负责缓存和失效。
+2. **UI 状态与服务器状态分离**：Zustand 管理运行时 UI 状态（当前 Tab、Chat 是否打开、流式消息缓冲），TanStack Query 管理服务器状态（任务列表、日记内容、设置项）并负责缓存和失效。
 
-3. **流式消息不进查询缓存**：Agent 回复的流式 chunk 实时追加到 Zustand chatStore，不经过 TanStack Query；会话历史通过独立的 `get_session_history` 查询加载。
+3. **工作区偏好走后端配置**：面板尺寸、固定目录、视图模式、最近打开内容、Chat 模式等工作区偏好通过 `WorkspacePrefs` 存到 UserConfig，不再写 localStorage。
+
+4. **流式消息不进查询缓存**：Agent 回复的流式 chunk 实时追加到 Zustand chatStore，不经过 TanStack Query；会话历史通过独立的 `get_session_history` 查询加载。
 
 ## 边界与实体
 
@@ -35,9 +37,9 @@
 
 **核心实体**（前端视角）：
 
-- **OpenedItem** — 当前中央区域显示的内容，可以是 `daily/` 中某日期的日记、Vault 中某路径的笔记、或 `source/` 中某个资源
+- **OpenedItem** — 当前中央区域显示的内容，使用判别联合：`daily | note | source-web | source-pdf | source-image`
 - **StreamingMessage** — 正在流式输出的 Agent 消息，包含累积的 chunk 内容和当前阶段（thinking / using_tools / streaming）
-- **WorkspaceLayout** — 工作区的当前布局状态：激活的 Tab、Pin 的笔记、Chat 是否打开
+- **WorkspacePrefs** — 工作区持久化偏好：Tab、目录视图模式、三栏尺寸、右侧区块高度、最近打开内容、Chat 模式
 
 **错误边界**：前端捕获 `invoke` 返回的 AppError（序列化的 Rust 错误），翻译为用户可读的错误提示；流式事件中的 Error payload 由 chatStore 处理并显示在消息气泡中。
 
@@ -86,27 +88,30 @@ AppShell
 │   ├── TabNav                    # Daily / Private / Vault / Source + 自定义固定 Tab
 │   │   └── TabItem               # 右键菜单：固定为 Tab / 取消固定
 │   └── DirectoryPanel            # 根据 activeTab 渲染目录内容
+│       ├── SearchField           # Vault 标题/标签搜索，其他 Tab 文件名过滤
 │       ├── ViewModeToggle        # Tree / Flat 切换按钮
 │       ├── TreeView              # 树状模式：层级缩进，文件夹可折叠
-│       └── FlatView              # 平铺模式：所有文件按修改时间倒序排列
+│       └── FlatView              # 平铺模式：目录范围内所有文件递归平铺，按修改时间倒序排列
 │
 ├── CenterContent                 # 根据 openedItem 选择渲染
+│   ├── ContentHeader             # 标题、路径、保存状态、Pin/外部打开动作
 │   ├── NoteEditor                # Milkdown Crepe，所有 .md 文件统一使用，点击即编辑，防抖自动保存
 │   ├── WebPreview                # Tauri WebView，用于 source/ 中的链接资源
 │   ├── PdfViewer                 # PDF 渲染，用于 source/ 中的 PDF 资源
+│   ├── ImagePreview              # 图片预览
 │   └── EmptyState                # 未打开内容时的占位
 │
-├── RightPanels                   # 三个垂直堆叠的可调整高度区块
+├── RightPanels                   # 三个垂直堆叠、可拖拽调整高度的区块
 │   ├── PinPanel                  # 单个固定笔记的标题 + 快速打开
-│   ├── TasksPanel                # 任务分组列表 + 状态切换 + 创建入口
+│   ├── TasksPanel                # 任务分组列表 / 任务详情 + 状态切换 + 创建入口
 │   └── RelevancePanel            # 自动关联笔记列表
 │
-└── ChatOverlay                   # Portal 渲染，fixed 定位
+└── ChatOverlay                   # Portal 渲染，带 backdrop 的 fixed 覆盖层
     ├── ChatButton                # 右上角固定按钮
     └── ChatWindow                # 悬浮卡片
-        ├── ModeSelector          # 5 种模式 ToggleGroup
+        ├── ModeSelector          # 5 种模式切换
         ├── MessageList           # 用户/Agent 消息列表
-        │   └── MessageBubble     # 含 StreamingIndicator
+        │   └── MessageBubble     # 含阶段提示和流式状态
         └── ChatInput             # Textarea + 发送按钮
 ```
 
@@ -130,13 +135,18 @@ PinnedDirTab = {
 DirectoryViewMode = 'tree' | 'flat'
 
 WorkspaceStore
-  activeTabId: string                           // BuiltinTab id 或 PinnedDirTab.id
-  pinnedDirTabs: PinnedDirTab[]                 // 自定义固定目录 Tab 列表（持久化）
-  dirViewMode: Record<string, DirectoryViewMode> // 按 tabId 记录视图模式（持久化）
-  openedItem: DailyItem | NoteItem | SourceItem | null
+  activeTabId: string
+  pinnedDirTabs: PinnedDirTab[]
+  dirViewMode: Record<string, DirectoryViewMode>
+  panelSizes: { left, center, right }
+  rightPanelHeights: { pin, tasks, relevance }
+  openedItem: OpenedItem | null
   pinnedNote: { path, title } | null
   chatOpen: boolean
+  isHydrated: boolean
 ```
+
+`WorkspacePrefs` 通过 `get_workspace_prefs / save_workspace_prefs` 从后端配置水合到 `WorkspaceStore`，`WorkspaceStore` 自身只保留运行时状态，不负责本地持久化。
 
 ### ChatStore（Zustand）
 
@@ -156,7 +166,10 @@ ChatStore
 queryKeys.tasks.list(status?)          → invoke('list_tasks')
 queryKeys.daily.byDate(date)           → invoke('get_daily')
 queryKeys.knowledge.search(query)      → invoke('search_knowledge')
+queryKeys.knowledge.relevant(path)     → invoke('get_relevant_notes')
 queryKeys.settings.all                 → invoke('get_settings')
+queryKeys.settings.workspace           → invoke('get_workspace_prefs')
+queryKeys.vault.flat(path)             → invoke('list_vault_files_recursive')
 ```
 
 ## IPC 层
@@ -171,6 +184,11 @@ ipc.updateTaskStatus(id, status)     → call<void>('update_task_status', ...)
 ipc.getDaily(date)                   → call<string>('get_daily', ...)
 ipc.saveDaily(date, content)         → call<void>('save_daily', ...)
 ipc.searchKnowledge(query)           → call<KnowledgeEntry[]>('search_knowledge', ...)
+ipc.getRelevantNotes(path)           → call<KnowledgeEntry[]>('get_relevant_notes', ...)
+ipc.getWorkspacePrefs()              → call<WorkspacePrefs>('get_workspace_prefs')
+ipc.saveWorkspacePrefs(prefs)        → call<void>('save_workspace_prefs', ...)
+ipc.listVaultFilesRecursive(path?)   → call<VaultEntry[]>('list_vault_files_recursive', ...)
+ipc.resolveSourceItem(path)          → call<OpenedItem>('resolve_source_item', ...)
 ipc.getSettings()                    → call<AppSettings>('get_settings', ...)
 ipc.setApiKey(key)                   → call<void>('set_api_key', ...)
 ```
@@ -197,5 +215,5 @@ listenAgentEvents(callback) → listen('mindclaw://agent-event', ...)
 | 流式消息是否进入 TanStack Query 缓存？ | 不进缓存，由 chatStore 管理 | 用 useQuery + streaming | 流式消息是实时增量数据，不是标准的请求-响应模型；强行适配 TanStack Query 会引入不必要的复杂度 |
 | 任务状态更新是否使用乐观更新？ | 使用乐观更新 + 失败回滚 | 等待服务器确认后更新 | 任务状态切换是高频操作，等待 I/O 会造成明显延迟感；本地文件操作失败率低，回滚情况罕见 |
 | 编辑器保存策略 | 防抖 1 秒自动保存 + Cmd+S 手动强制保存 | 每次输入立即保存 | 每次 keystroke 触发文件 I/O 会产生过高的写入频率；1 秒防抖在用户感知上接近实时，且大幅减少写入次数 |
-| 自定义 Tab 数据存储位置 | 持久化到 `AppSettings`（后端配置文件）| 前端 localStorage | Tab 配置是用户设置的一部分，与 Vault 路径等设置共同管理；localStorage 在应用重装后丢失且对后端 CLI 入口不可见 |
-| 目录视图模式存储 | WorkspaceStore 持久化，按 tabId 独立记录 | 全局单一模式 | 不同 Tab 的使用场景不同（Daily 适合平铺按时间浏览，Vault 适合树状导航），按 Tab 独立记忆符合实际使用习惯 |
+| 工作区偏好存储位置 | 独立 `WorkspacePrefs`（UserConfig）| 前端 localStorage | 工作区尺寸、Tab、最近打开内容与 Chat 模式需要跨重启保留，且应该被桌面端其它入口共享 |
+| 目录视图模式存储 | `WorkspacePrefs.dir_view_mode`，按 tabId 独立记录 | 全局单一模式 | 不同 Tab 的使用场景不同（Daily 适合平铺，Vault 适合树状导航），按 Tab 独立记忆符合实际使用习惯 |

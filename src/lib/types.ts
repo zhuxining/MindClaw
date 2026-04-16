@@ -68,6 +68,18 @@ export interface PinnedDirTab {
 
 export type DirectoryViewMode = "tree" | "flat";
 
+export interface WorkspacePanelSizes {
+	left: number;
+	center: number;
+	right: number;
+}
+
+export interface WorkspaceRightPanelHeights {
+	pin: number;
+	tasks: number;
+	relevance: number;
+}
+
 export interface DailyItem {
 	type: "daily";
 	date: string; // YYYY-MM-DD
@@ -80,14 +92,44 @@ export interface NoteItem {
 	title: string;
 }
 
-export interface SourceItem {
-	type: "source";
+export interface SourceWebItem {
+	type: "source-web";
 	path: string;
-	sourceType: "link" | "pdf";
-	url?: string;
+	title: string;
+	url: string;
 }
 
-export type OpenedItem = DailyItem | NoteItem | SourceItem;
+export interface SourcePdfItem {
+	type: "source-pdf";
+	path: string;
+	title: string;
+}
+
+export interface SourceImageItem {
+	type: "source-image";
+	path: string;
+	title: string;
+}
+
+export type OpenedItem =
+	| DailyItem
+	| NoteItem
+	| SourceWebItem
+	| SourcePdfItem
+	| SourceImageItem;
+
+export interface WorkspacePrefs {
+	active_tab_id: string;
+	pinned_dir_tabs: PinnedDirTab[];
+	dir_view_mode: Record<string, DirectoryViewMode>;
+	panel_sizes: WorkspacePanelSizes;
+	right_panel_heights: WorkspaceRightPanelHeights;
+	last_opened_item: OpenedItem | null;
+	pinned_note: { path: string; title: string } | null;
+	chat_mode: ConversationMode;
+}
+
+export type EditorSaveState = "idle" | "saving" | "saved" | "error";
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 

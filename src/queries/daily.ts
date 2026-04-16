@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { todayLocalDate } from "@/lib/date";
 import { ipc } from "@/lib/ipc";
 import { queryKeys } from "./keys";
 
@@ -21,5 +22,5 @@ export function useSaveDailyMutation() {
 }
 
 export function todayDate(): string {
-	return new Date().toISOString().slice(0, 10);
+	return todayLocalDate();
 }

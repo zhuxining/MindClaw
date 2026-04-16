@@ -3,8 +3,10 @@ import type {
 	AppSettings,
 	CreateTaskParams,
 	KnowledgeEntry,
+	OpenedItem,
 	Task,
 	VaultEntry,
+	WorkspacePrefs,
 } from "./types";
 
 // biome-ignore lint/suspicious/noExplicitAny: invoke args can be any shape
@@ -18,6 +20,10 @@ async function call<T>(cmd: string, args?: any): Promise<T> {
 				: ((err as { message?: string })?.message ?? "Unknown error");
 		throw new Error(message);
 	}
+}
+
+function normalizePath(path: string): string {
+	return path.replace(/\.\./g, "").replace(/\/+/g, "/");
 }
 
 export const ipc = {
@@ -64,9 +70,20 @@ export const ipc = {
 	searchKnowledge: (query: string) =>
 		call<KnowledgeEntry[]>("search_knowledge", { query }),
 
+	getRelevantNotes: (path: string) =>
+		call<KnowledgeEntry[]>("get_relevant_notes", { path }),
+
 	// ─── Vault ─────────────────────────────────────────────────────────────────
 	listVaultDir: (path?: string) =>
 		call<VaultEntry[]>("list_vault_dir", { path }),
+
+	listVaultFilesRecursive: (path?: string) =>
+		call<VaultEntry[]>("list_vault_files_recursive", {
+			path: path ? normalizePath(path) : "",
+		}),
+
+	resolveSourceItem: (path: string) =>
+		call<OpenedItem>("resolve_source_item", { path: normalizePath(path) }),
 
 	// ─── Knowledge ─────────────────────────────────────────────────────────────
 	getKnowledge: (id: string) => call<KnowledgeEntry>("get_knowledge", { id }),
@@ -74,8 +91,13 @@ export const ipc = {
 	// ─── Settings ──────────────────────────────────────────────────────────────
 	getSettings: () => call<AppSettings>("get_settings"),
 
+	getWorkspacePrefs: () => call<WorkspacePrefs>("get_workspace_prefs"),
+
 	saveSettings: (settings: AppSettings) =>
 		call<void>("save_settings", { settings }),
+
+	saveWorkspacePrefs: (prefs: WorkspacePrefs) =>
+		call<void>("save_workspace_prefs", { prefs }),
 
 	setVault: (path: string) => call<void>("set_vault", { path }),
 

@@ -1,15 +1,15 @@
 {
 	"version": 1,
 	"skills": {
-		"code-design-docs-spec": {
+		"code-docs-spec": {
 			"source": "zhuxining/harness",
 			"sourceType": "github",
-			"computedHash": "e7e548e51d0d1d35e54fbe652ed0f4231addb5605e7aa3743a9dd830735f1e0e"
+			"computedHash": "4593d2c9f3e37f60c1e756fbe7d84d6d43708af908971588f4956e849079d6fe"
 		},
 		"code-principles": {
 			"source": "zhuxining/harness",
 			"sourceType": "github",
-			"computedHash": "140986925c07eaef7b8d0a68f9e93a4ef7850186a407b0dda2f4d376321dcd58"
+			"computedHash": "5712e7bdfd405b695a2e53ce4a2befd5bfe2ae69c56a7e0b2af99a94807cf719"
 		},
 		"code-simplifier": {
 			"source": "zhuxining/harness",
@@ -24,12 +24,12 @@
 		"shadcn": {
 			"source": "shadcn/ui",
 			"sourceType": "github",
-			"computedHash": "507f011a70e8b3ae242bdc0bb5b39fd91a1d4049a0f3c281991ccf84973d591c"
+			"computedHash": "2bc6cf38ec7b4a5778a43fabb3e87642c9897ad45e9eb42438b57fd2def6cca8"
 		},
 		"tauri-v2": {
 			"source": "nodnarbnitram/claude-code-extensions",
 			"sourceType": "github",
-			"computedHash": "72248dbe36769a12c38c07437063cc5a1ad2d182fee87fb72d92a8fa37ce4a0f"
+			"computedHash": "377c61c46cf48c35b942042bc8abb9a039049a47f37d7f12b4f491d012777490"
 		},
 		"ui-ux-pro-max": {
 			"source": "nextlevelbuilder/ui-ux-pro-max-skill",

@@ -15,6 +15,25 @@ paths:
 
 ---
 
+## 不确定时参考
+
+### 权威来源
+
+| 主题 | 官方参考 |
+|------|---------|
+| 类型系统 | [typing.readthedocs.io](https://typing.readthedocs.io/) |
+| ty类型规则 | [docs.astral.sh](https://docs.astral.sh/ty/reference/rules/) |
+| 语言特性 | [docs.python.org](https://docs.python.org/3/) |
+| 标准库 | [docs.python.org/3/library](https://docs.python.org/3/library/) |
+| 版本变更 | [Python Release Notes](https://www.python.org/downloads/) |
+
+### 关键提示
+
+- 从 `pyproject.toml` 确认 Python 版本
+- 现有代码与文档冲突时，向用户确认后执行
+
+---
+
 ## 核心原则
 
 编写**类型安全、可读性强、可维护**的 Python 代码。以显式意图优先，避免不必要的技巧。

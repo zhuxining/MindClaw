@@ -15,6 +15,24 @@ paths:
 
 ---
 
+## 不确定时参考
+
+### 权威来源
+
+| 主题 | 官方参考 |
+|------|---------|
+| 语言与标准库 | [doc.rust-lang.org](https://doc.rust-lang.org/std/) |
+| The Book | [doc.rust-lang.org/book](https://doc.rust-lang.org/book/) |
+| API Guidelines | [rust-lang.github.io/api-guidelines](https://rust-lang.github.io/api-guidelines/) |
+| 版本变更 | [Rust Releases](https://releases.rs/) |
+
+### 关键提示
+
+- 从 `Cargo.toml` 确认 Rust 版本
+- 现有代码与文档冲突时，向用户确认后执行
+
+---
+
 ## 核心原则
 
 编写**安全、零成本抽象、表达力强**的 Rust 代码。利用编译器保障正确性，而非依赖运行时检查。

@@ -14,6 +14,24 @@ Biome (the underlying engine) provides robust linting and formatting. Most issue
 
 ---
 
+## Reference When Uncertain
+
+### Authoritative Sources
+
+| Topic | Official Reference |
+|------|---------|
+| TypeScript | [typescriptlang.org/docs](https://www.typescriptlang.org/docs/) |
+| React | [react.dev](https://react.dev/) |
+| Web Standards | [MDN](https://developer.mozilla.org/), [web.dev](https://web.dev/) |
+| Compatibility | [caniuse.com](https://caniuse.com/) |
+
+### Key Reminders
+
+- Confirm framework versions from `package.json`
+- When documentation conflicts with existing code, ask the user before proceeding
+
+---
+
 ## Core Principles
 
 Write code that is **accessible, performant, type-safe, and maintainable**. Focus on clarity and explicit intent over brevity.

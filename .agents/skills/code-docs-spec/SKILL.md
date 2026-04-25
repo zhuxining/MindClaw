@@ -60,7 +60,7 @@ description: 软件设计文档规范集合，包含架构设计文档(architect
 **目录结构**：
 
 ```
-docs/design/
+docs/
 ├── architecture/
 │   ├── 00-overview.md
 │   ├── NN-module.md

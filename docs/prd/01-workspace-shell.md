@@ -2,7 +2,7 @@
 
 # 工作区框架
 
-→ 架构关联：[08-desktop-frontend.md](../arch/08-desktop-frontend.md)
+→ 架构关联：[08-desktop-frontend.md](../design/arch/08-desktop-frontend.md)
 
 ## 背景与目标
 

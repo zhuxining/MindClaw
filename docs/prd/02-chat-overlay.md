@@ -2,7 +2,7 @@
 
 # Chat 悬浮覆盖
 
-→ 架构关联：[08-desktop-frontend.md](../arch/08-desktop-frontend.md)  
+→ 架构关联：[08-desktop-frontend.md](../design/arch/08-desktop-frontend.md)  
 → 父文档：[00-overview.md](00-overview.md)
 
 ## 背景与目标

@@ -6,7 +6,7 @@ This file provides guidance to Code Agents (claude.ai/code、codex、qwen) when 
 
 MindClaw is a Tauri 2.0 desktop application combining a React 19 + TypeScript frontend with a Rust backend. Package manager is **Bun**.
 
-> Full architecture docs: `docs/design/architecture/README.md`
+> Full architecture docs: `docs/architecture/README.md`
 
 **NOTICE**: When editing code, refer to architecture documents and update them if needed.
 
@@ -25,7 +25,7 @@ bun run check-types     # TypeScript type-check
 
 ### Layer Principles
 
-> Details: `docs/design/architecture/reference/dependencies.md`
+> Details: `docs/architecture/reference/dependencies.md`
 
 - **Web (React)** = thin client: render UI, collect input, call `invoke()`. No HTTP requests, no persistence, no business logic.
 - **Tauri (Plugins)** = glue: bridge OS capabilities only. Use Plugin JS API for clipboard/dialog/notification/fs. Never use plugins for HTTP, WebSocket, KV storage, or shell execution.
@@ -57,11 +57,11 @@ bun run check-types     # TypeScript type-check
 | `src-tauri/src/main.rs` | Rust binary entry |
 | `src-tauri/tauri.conf.json` | App config (identifier, window, bundle) |
 | `src-tauri/capabilities/` | Tauri permission grants |
-| `docs/design/architecture/` | Full architecture design docs |
+| `docs/architecture/` | Full architecture design docs |
 
 ### Directory Structure
 
-> Details: `docs/design/architecture/reference/directory-structure.md`
+> Details: `docs/architecture/reference/directory-structure.md`
 
 Describes the current state of the codebase directory. Keep it in sync when adding or removing modules and files.
 

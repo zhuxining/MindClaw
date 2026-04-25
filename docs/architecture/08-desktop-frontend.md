@@ -2,7 +2,7 @@
 
 # 桌面端前端架构
 
-→ 相关 PRD：[prd/00-overview.md](../prd/00-overview.md)  
+→ 相关 PRD：[prd/00-overview.md](../design/prd/00-overview.md)  
 → 系统总览：[00-overview.md](00-overview.md)  
 → IPC 通道：[01-channels.md](01-channels.md)
 

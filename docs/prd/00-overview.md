@@ -16,4 +16,4 @@ MindClaw 桌面端是面向个人用户的 AI 伙伴工作区。核心理念：*
 
 ## 架构文档关联
 
-→ [08-desktop-frontend.md](../arch/08-desktop-frontend.md) — 前端组件架构、状态管理、IPC 层
+→ [08-desktop-frontend.md](../design/arch/08-desktop-frontend.md) — 前端组件架构、状态管理、IPC 层

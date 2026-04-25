@@ -175,6 +175,6 @@ src-tauri/
 ├── Cargo.toml              Rust 依赖
 └── build.rs                构建脚本
 
-docs/design/architecture/   架构设计文档
-docs/design/architecture/reference/  参考文档（本目录）
+docs/architecture/   架构设计文档
+docs/architecture/reference/  参考文档（本目录）
 ```

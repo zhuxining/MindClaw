@@ -100,7 +100,7 @@
 
 本文档遵循 [arch-spec.md](../.claude/rules/arch-spec.md) 规范：
 
-- **设计文档**（`*.md`）：记录"为什么这样设计"，在 `docs/design/architecture/` 根目录
+- **设计文档**（`*.md`）：记录"为什么这样设计"，在 `docs/architecture/` 根目录
 - **参考文档**（`reference/*.md`）：记录"当前是什么样"，在 `reference/` 子目录
 - 文档头部包含 `> **Status**: active | deprecated | draft` 标注
 - 所有设计决策使用 ADR 格式记录（决策问题、选择、放弃的替代方案、理由）

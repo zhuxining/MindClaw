@@ -10,6 +10,8 @@
   ],
   "permissions": [
     "autostart:default",
+    "core:window:default",
+    "core:window:allow-start-dragging",
     "cli:default",
     "opener:default",
     "clipboard-manager:default",

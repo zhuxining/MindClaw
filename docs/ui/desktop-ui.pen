@@ -8029,7 +8029,7 @@
     {
       "type": "frame",
       "id": "AbtzM",
-      "x": 1378,
+      "x": 1713,
       "y": 50,
       "name": "MindClaw Main Window",
       "width": 1400,
@@ -8049,7 +8049,7 @@
               "type": "frame",
               "id": "M5t82",
               "name": "Sidebar",
-              "width": 288,
+              "width": 260,
               "height": "fill_container",
               "fill": "#fffcf0",
               "cornerRadius": [
@@ -8133,7 +8133,7 @@
                       "id": "O4Sgc",
                       "name": "Window Title Area",
                       "opacity": 0.8,
-                      "width": 200,
+                      "width": 170,
                       "height": "fill_container",
                       "justifyContent": "space_between",
                       "alignItems": "center",
@@ -8298,7 +8298,7 @@
                   "type": "frame",
                   "id": "rLkry",
                   "name": "Nav Content",
-                  "width": "fill_container",
+                  "width": 256,
                   "height": "fill_container",
                   "cornerRadius": [
                     8,
@@ -8674,7 +8674,7 @@
                               "id": "ZlyXW",
                               "width": 14,
                               "height": 14,
-                              "iconFontName": "unplug",
+                              "iconFontName": "plug",
                               "iconFontFamily": "lucide",
                               "fill": "#6F6E69"
                             }
@@ -8696,7 +8696,7 @@
                               "id": "pHv9j",
                               "width": 14,
                               "height": 14,
-                              "iconFontName": "message-square",
+                              "iconFontName": "messages-square",
                               "iconFontFamily": "lucide",
                               "fill": "#6F6E69"
                             }
@@ -8718,7 +8718,7 @@
                               "id": "aE56I",
                               "width": 14,
                               "height": 14,
-                              "iconFontName": "clock-4",
+                              "iconFontName": "timer-reset",
                               "iconFontFamily": "lucide",
                               "fill": "#6F6E69"
                             }
@@ -8759,7 +8759,7 @@
                       "type": "frame",
                       "id": "bJKwX",
                       "name": "Nav Panel",
-                      "width": 250,
+                      "width": 220,
                       "height": "fill_container",
                       "fill": "#FFFCF0",
                       "stroke": {
@@ -8859,7 +8859,7 @@
                           "type": "frame",
                           "id": "3F4xh",
                           "name": "Calendar Section",
-                          "width": "fill_container",
+                          "width": 220,
                           "fill": "#FFFCF0",
                           "layout": "vertical",
                           "children": [
@@ -8904,7 +8904,7 @@
                               "type": "frame",
                               "id": "RXwkt",
                               "name": "Calendar Content",
-                              "width": "fill_container",
+                              "width": 208,
                               "layout": "vertical",
                               "gap": 6,
                               "padding": [
@@ -8918,7 +8918,11 @@
                                   "name": "monthTitle",
                                   "width": "fill_container",
                                   "gap": 4,
-                                  "justifyContent": "center",
+                                  "padding": [
+                                    0,
+                                    8
+                                  ],
+                                  "justifyContent": "space_between",
                                   "alignItems": "center",
                                   "children": [
                                     {
@@ -10431,7 +10435,7 @@
                       "gap": 6,
                       "padding": [
                         4,
-                        10
+                        12
                       ],
                       "alignItems": "center",
                       "children": [
@@ -10446,7 +10450,7 @@
                               "id": "SxxHm",
                               "width": 14,
                               "height": 14,
-                              "iconFontName": "database",
+                              "iconFontName": "calendar-range",
                               "iconFontFamily": "lucide",
                               "fill": "#6F6E69"
                             },
@@ -10454,7 +10458,7 @@
                               "type": "text",
                               "id": "Lp9dq",
                               "fill": "#6F6E69",
-                              "content": "Vault.md",
+                              "content": "2026-01-01.md",
                               "fontFamily": "Inter",
                               "fontSize": 12,
                               "fontWeight": "normal"
@@ -10464,7 +10468,7 @@
                         {
                           "type": "frame",
                           "id": "ACgLq",
-                          "x": 65,
+                          "x": 86,
                           "y": 4,
                           "name": "closeBtn",
                           "enabled": false,
@@ -10501,7 +10505,7 @@
                       "type": "frame",
                       "id": "pVC0Y",
                       "name": "tab2",
-                      "height": 28,
+                      "height": 24,
                       "fill": "#f2f0e5",
                       "cornerRadius": 4,
                       "stroke": {
@@ -10523,7 +10527,7 @@
                       "gap": 6,
                       "padding": [
                         4,
-                        10
+                        12
                       ],
                       "alignItems": "center",
                       "children": [
@@ -10538,7 +10542,7 @@
                               "id": "H5jqg",
                               "width": 14,
                               "height": 14,
-                              "iconFontName": "book-open",
+                              "iconFontName": "calendar-range",
                               "iconFontFamily": "lucide",
                               "fill": "#100F0F"
                             },
@@ -10546,7 +10550,7 @@
                               "type": "text",
                               "id": "Qz3aZ",
                               "fill": "#100F0F",
-                              "content": "Daily.md",
+                              "content": "2026-04-09",
                               "fontFamily": "Inter",
                               "fontSize": 12,
                               "fontWeight": "normal"
@@ -10601,7 +10605,7 @@
                       "gap": 6,
                       "padding": [
                         4,
-                        10
+                        12
                       ],
                       "alignItems": "center",
                       "children": [
@@ -10682,7 +10686,7 @@
                       "gap": 6,
                       "padding": [
                         4,
-                        10
+                        12
                       ],
                       "alignItems": "center",
                       "children": [
@@ -10715,7 +10719,7 @@
                         {
                           "type": "frame",
                           "id": "k3QqVj",
-                          "x": 83,
+                          "x": 110,
                           "y": 4,
                           "name": "closeBtn",
                           "enabled": false,

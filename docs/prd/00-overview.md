@@ -8,9 +8,10 @@ MindClaw 桌面端是一个**人机知识共建与 Agent 演化工作站**。用
 
 ## 产品原则
 
-- Markdown 是内容真相源，索引、摘要、会话状态和向量结果均为派生信息。
+- Markdown 是已确认知识内容的真相源；Agent 记忆、演化记录和候选审核状态属于结构化运行数据。
 - Frontmatter 的 `tags` 与 `overview` 是知识分层加载入口，服务人类检索与 Agent 预读。
-- Agent 记忆可查看、可纠偏、可删除；影响长期行为的变化必须形成演化记录。
+- Agent 记忆可查看、可纠偏、可删除；经验教训正文进入知识库，Agent 记忆只保留调用索引和引用。
+- 旁路观察、轻量回顾和经验教训候选必须经过用户审核，不能绕过审核直接写入共有知识。
 - Private 内容不进入 Agent 上下文、不参与记忆、不参与共有知识索引。
 - 任务以 Markdown checklist 表达，不作为独立一等业务对象。
 
@@ -25,7 +26,7 @@ MindClaw 桌面端是一个**人机知识共建与 Agent 演化工作站**。用
 | Vault | 共享知识库浏览、编辑、搜索、Frontmatter 索引 |
 | Private | 私密内容编辑与隔离边界 |
 | Agent | Agent Session、上下文引用、执行反馈、草稿生成 |
-| Memory | Agent 记忆查看、确认、修正、删除、升级 |
+| Memory | Agent 记忆查看、确认、修正、删除、知识引用 |
 | Settings | 工作区设置、Vault 路径、隐私边界、基础偏好 |
 
 Graph、Skills、MCP、Cron、Tasks 不作为 MVP Ribbon 主入口。Checklist 任务能力由 Daily、Inbox、Vault 与 Agent Session 承载。
@@ -40,7 +41,7 @@ Graph、Skills、MCP、Cron、Tasks 不作为 MVP Ribbon 主入口。Checklist �
 | [04-vault-knowledge.md](04-vault-knowledge.md) | Vault 共享知识空间 | `draft` |
 | [05-private-boundary.md](05-private-boundary.md) | Private 私密边界 | `draft` |
 | [06-agent-memory.md](06-agent-memory.md) | Agent 记忆管理 | `draft` |
-| [07-reflection-evolution.md](07-reflection-evolution.md) | 反思回顾与演化记录 | `draft` |
+| [07-reflection-evolution.md](07-reflection-evolution.md) | 反思回顾、演化路径与经验教训候选 | `draft` |
 | [08-checklist-tasks.md](08-checklist-tasks.md) | Markdown checklist 任务 | `draft` |
 
 ## 范围界定
@@ -49,7 +50,7 @@ Graph、Skills、MCP、Cron、Tasks 不作为 MVP Ribbon 主入口。Checklist �
 
 - 桌面端工作台基础结构与 MVP Ribbon 入口。
 - Markdown 笔记、Daily、Inbox、Vault、Private、Agent Session、Agent Memory 的用户可见行为。
-- Agent 反思回顾、演化记录、经验教训、知识沉淀的审阅流程。
+- Agent 旁路观察、轻量回顾、演化记录、经验教训候选和知识沉淀的审阅流程。
 - Markdown checklist 的轻量任务能力。
 
 **Out of Scope**：

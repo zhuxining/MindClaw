@@ -7,7 +7,7 @@
 
 ## 背景与目标
 
-**背景**：MindClaw 的输入不只来自对话。用户每天的记录、临时想法、链接、片段和 checklist 都需要低摩擦进入同一个知识闭环，并在整理后进入 Agent 观察、回顾、记忆或共有知识。
+**背景**：MindClaw 的输入不只来自对话。用户每天的记录、临时想法、链接、片段和 checklist 都需要低摩擦进入同一个知识闭环，并在整理后进入旁路观察、轻量回顾、候选审核或共有知识。
 
 **目标**：定义 Daily 与 Inbox 的打开、记录、捕获、整理和回顾入口，让输入从暂存内容转化为可审阅知识材料。
 
@@ -113,23 +113,26 @@ Then Agent Session 打开，并把该条目加入引用上下文
 
 ---
 
-### US-05 从 Daily 或 Inbox 进入回顾
+### US-05 从 Daily 或 Inbox 进入轻量回顾
 
-作为用户，我希望对当天记录和待整理材料进行回顾，以便识别可沉淀的记忆、经验或知识。
+作为用户，我希望对当天记录和待整理材料进行轻量回顾，以便识别可审核的观察候选、记忆建议、经验教训候选或知识草稿。
 
 **验收标准**：
 
 Given 用户处于 Daily 工作域
 When 用户点击 Review Today
-Then 系统打开当日回顾视图，列出今日新增内容、未整理 Inbox 条目、checklist 变化和 Agent 观察建议
+Then 系统打开当日回顾视图，列出今日新增内容、未整理 Inbox 条目、checklist 变化和观察候选
 
 Given 用户处于 Inbox 工作域
 When 用户点击 Review Inbox
-Then 系统打开 Inbox 回顾视图，列出未整理条目和整理建议
+Then 系统打开 Inbox 回顾视图，列出未整理条目、整理建议和可生成的知识草稿入口
 
 Given 用户确认某条整理建议
 When 操作完成
 Then 条目进入对应去向：Daily、Vault 草稿、Agent Session 或删除
+
+- [ ] Daily 与 Inbox 回顾不直接写入共有知识。
+- [ ] 观察候选必须经过用户确认或后续回顾才能进入 Agent Memory。
 
 **优先级**：P1
 
@@ -139,7 +142,7 @@ Then 条目进入对应去向：Daily、Vault 草稿、Agent Session 或删除
 
 - Daily Note 打开、创建、编辑、保存、日期列表。
 - Inbox 条目捕获、查看、整理、恢复。
-- Daily 与 Inbox 进入回顾视图。
+- Daily 与 Inbox 进入轻量回顾视图。
 - 与 Agent Session、Vault 草稿、Checklist 任务的入口衔接。
 
 **Out of Scope**：

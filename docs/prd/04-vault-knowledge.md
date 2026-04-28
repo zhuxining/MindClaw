@@ -7,9 +7,9 @@
 
 ## 背景与目标
 
-**背景**：Vault 是 MindClaw 的共享知识空间。它承载人类笔记、共有知识、Agent 生成草稿和可复用经验，Markdown 文件是内容真相源，Frontmatter 是人类和 Agent 共同使用的轻量索引。
+**背景**：Vault 是 MindClaw 的共享知识空间。它承载人类笔记、共有知识、Agent 生成草稿和经确认的可复用经验，Markdown 文件是已确认知识内容的真相源，Frontmatter 是人类和 Agent 共同使用的轻量索引。
 
-**目标**：定义 Vault 的浏览、编辑、搜索、Frontmatter 展示、`tags` 与 `overview` 使用规则，以及知识草稿保存行为。
+**目标**：定义 Vault 的浏览、编辑、搜索、Frontmatter 展示、`tags` 与 `overview` 使用规则，以及知识草稿和经验教训候选保存行为。
 
 ## 功能描述
 
@@ -114,9 +114,9 @@ Then 文件列表只显示包含该 tag 的笔记
 
 ---
 
-### US-05 保存知识草稿
+### US-05 保存知识草稿和经验教训候选
 
-作为用户，我希望把 Agent 或 Inbox 生成的草稿保存到 Vault，以便把临时内容变成共享知识。
+作为用户，我希望把 Agent、Inbox 或经验教训候选保存到 Vault，以便把审核后的临时内容变成共享知识。
 
 **验收标准**：
 
@@ -132,8 +132,13 @@ Given 草稿保存完成
 When 用户返回 Vault 工作域
 Then 新笔记出现在 Vault 文件树和搜索结果中
 
+Given 经验教训候选已打开
+When 用户点击 Save as Knowledge
+Then 系统保存为 Markdown 知识笔记，并保留来源记忆、演化记录或 Session 链接
+
 - [ ] 草稿保存后保留来源信息链接。
-- [ ] 保存到 Vault 的内容不自动变成 Agent 记忆。
+- [ ] 保存到 Vault 的内容不自动变成 Agent 记忆正文。
+- [ ] 若来源为经验教训候选，Agent Memory 只保留触发条件、短摘要和知识文档引用。
 - [ ] 用户可在保存前编辑标题、`tags`、`overview` 和正文。
 
 **优先级**：P1
@@ -145,7 +150,7 @@ Then 新笔记出现在 Vault 文件树和搜索结果中
 - Vault 文件树浏览、Markdown 打开、编辑、保存。
 - `tags` 与 `overview` 的查看、编辑、搜索结果展示。
 - 按关键词和 tag 搜索。
-- 知识草稿保存到 Vault。
+- 知识草稿和经验教训候选保存到 Vault。
 - Private 作为隔离入口显示，不在 Vault 中展开私密内容。
 
 **Out of Scope**：
@@ -154,6 +159,7 @@ Then 新笔记出现在 Vault 文件树和搜索结果中
 - 双向链接解析：Wikilink 和 backlink 会改变笔记导航模型，单独定义。
 - 复杂 Frontmatter schema：只维护 `tags` 和 `overview`，避免分类维护成本。
 - 版本历史：文件版本管理涉及回滚、冲突和存储策略，另行定义。
+- 保存知识后自动改写 Agent 行为：行为变化需要通过 Agent Memory 引用和演化记录审核。
 
 ## 非功能需求
 

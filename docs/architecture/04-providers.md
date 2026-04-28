@@ -16,7 +16,7 @@ Providers 层负责将 `AgentRunner` 的统一 `ChatRequest` 适配到各服务�
 
 **能力声明集中**：模型支持的 streaming、tools、structured output 等能力由 Provider/Model Profile 声明，而不是散落在 AgentLoop 中硬编码。
 
-**请求语义统一**：上层只认识 `ChatRequest`、`ChatResponse` 与 `ProviderEvent`，不直接使用 Claude/OpenAI 原生消息格式。
+**请求语义统一**：上层只认识 `ChatRequest`、`ChatResponse` 与 `ProviderStreamEvent`，不直接使用 Claude/OpenAI 原生消息格式。
 
 ---
 
@@ -28,7 +28,7 @@ Providers 层负责将 `AgentRunner` 的统一 `ChatRequest` 适配到各服务�
 
 ```rust
 async fn chat(&self, req: &ChatRequest) -> Result<ChatResponse>
-fn chat_stream(&self, req: &ChatRequest) -> impl Stream<Item = ProviderEvent>
+fn chat_stream(&self, req: &ChatRequest) -> impl Stream<Item = ProviderStreamEvent>
 fn supports_model(&self, model: &str) -> bool
 ```
 
@@ -37,7 +37,7 @@ fn supports_model(&self, model: &str) -> bool
 单次 LLM 调用的统一请求体。
 关键属性：消息列表、工具 schema、模型标识、采样参数、响应格式。
 
-**ProviderEvent**
+**ProviderStreamEvent**
 
 流式响应的统一事件。
 关键属性：文本增量、工具调用、完成事件、用量统计。
@@ -66,7 +66,7 @@ Provider Adapter 的注册表。
 3. AgentLoop 经由 ModelRouter 解析出本次 run 的 provider/model
 4. AgentRunner 根据 `resolved_provider` 选择 Adapter
 5. Adapter 将统一 `ChatRequest` 转为厂商请求体
-6. 流式模式下，Adapter 将 SSE/stream 解析为 `ProviderEvent`
+6. 流式模式下，Adapter 将 SSE/stream 解析为 `ProviderStreamEvent`
 7. AgentRunner 消费事件并驱动迭代循环
 
 ---

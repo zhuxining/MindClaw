@@ -2,21 +2,21 @@
 
 # 桌面端前端架构
 
-→ 相关 PRD：[prd/00-overview.md](../design/prd/00-overview.md)  
-→ 系统总览：[00-overview.md](00-overview.md)  
+→ 相关 PRD：[prd/00-overview.md](../prd/00-overview.md)
+→ 系统总览：[00-overview.md](00-overview.md)
 → IPC 通道：[01-channels.md](01-channels.md)
 
 ## 职责定位
 
 桌面端前端负责将 AppRuntime 的服务能力呈现为用户可操作的界面，通过 Tauri IPC（`invoke`）调用后端命令、通过 Tauri 事件系统接收后端推送，不包含任何业务逻辑计算。
 
-**不负责**：任务创建的业务规则、Agent 执行逻辑、文件读写、存储操作——这些全部由 Rust 服务层处理，前端只负责状态展示和用户交互的收集与转发。
+**不负责**：Checklist 解析与写入规则、Agent 执行逻辑、文件读写、存储操作——这些全部由 Rust 服务层处理，前端只负责状态展示和用户交互的收集与转发。
 
 ## 核心原则
 
 1. **IPC 是唯一数据通道**：前端不直接读写文件系统，不持有业务数据的权威副本；所有数据来自 `invoke` 响应或后端 `emit` 事件。
 
-2. **UI 状态与服务器状态分离**：Zustand 管理运行时 UI 状态（当前 Tab、Chat 是否打开、流式消息缓冲），TanStack Query 管理服务器状态（任务列表、日记内容、设置项）并负责缓存和失效。
+2. **UI 状态与服务器状态分离**：Zustand 管理运行时 UI 状态（当前 Tab、Chat 是否打开、流式消息缓冲），TanStack Query 管理服务器状态（Checklist 索引、日记内容、设置项）并负责缓存和失效。
 
 3. **工作区偏好走后端配置**：面板尺寸、固定目录、视图模式、最近打开内容、Chat 模式等工作区偏好通过 `WorkspacePrefs` 存到 UserConfig，不再写 localStorage。
 
@@ -52,8 +52,8 @@
   → chatStore.addUserMessage(content, requestId)   // 乐观更新，立即渲染
   → invoke('send_message', { content, sessionId })  // 通知后端开始处理
   → chatStore.startStreaming(requestId)             // 添加 Agent 气泡占位
-  
-后端 emit 'mindclaw://agent-event'
+
+后端 emit 'mindclaw://runtime-event'
   → Chunk   → chatStore.appendChunk(chunk)         // 文字增量追加
   → Status  → chatStore.setPhase(phase)            // 阶段指示更新
   → Done    → chatStore.completeStreaming()         // 流式结束，Markdown 渲染
@@ -69,14 +69,14 @@
   → CenterContent 根据 openedItem 决定显示内容    // 若 openedItem 为空则显示默认视图
 ```
 
-### 流程 3：任务状态更新（乐观更新）
+### 流程 3：Checklist 状态更新（乐观更新）
 
 ```
-用户点击任务复选框
+用户点击 checklist 复选框
   → 本地 state 立即标记为 done（乐观更新）
-  → invoke('update_task_status', { id, status: 'done' })
-  
-成功：invalidateQueries(queryKeys.tasks.all)       // 重新获取任务列表
+  → invoke('update_checklist_item', { id, status: 'done' })
+
+成功：invalidateQueries(queryKeys.checklist.all)   // 重新获取 checklist 索引
 失败：回滚本地 state + 显示错误提示
 ```
 
@@ -103,7 +103,7 @@ AppShell
 │
 ├── RightPanels                   # 三个垂直堆叠、可拖拽调整高度的区块
 │   ├── PinPanel                  # 单个固定笔记的标题 + 快速打开
-│   ├── TasksPanel                # 任务分组列表 / 任务详情 + 状态切换 + 创建入口
+│   ├── ChecklistPanel            # Checklist 分组列表 / 状态切换 / 来源笔记入口
 │   └── RelevancePanel            # 自动关联笔记列表
 │
 └── ChatOverlay                   # Portal 渲染，带 backdrop 的 fixed 覆盖层
@@ -139,7 +139,7 @@ WorkspaceStore
   pinnedDirTabs: PinnedDirTab[]
   dirViewMode: Record<string, DirectoryViewMode>
   panelSizes: { left, center, right }
-  rightPanelHeights: { pin, tasks, relevance }
+  rightPanelHeights: { pin, checklist, relevance }
   openedItem: OpenedItem | null
   pinnedNote: { path, title } | null
   chatOpen: boolean
@@ -163,7 +163,7 @@ ChatStore
 ### TanStack Query（服务器状态缓存）
 
 ```
-queryKeys.tasks.list(status?)          → invoke('list_tasks')
+queryKeys.checklist.list(status?)      → invoke('list_checklist_items')
 queryKeys.daily.byDate(date)           → invoke('get_daily')
 queryKeys.knowledge.search(query)      → invoke('search_knowledge')
 queryKeys.knowledge.relevant(path)     → invoke('get_relevant_notes')
@@ -178,9 +178,8 @@ queryKeys.vault.flat(path)             → invoke('list_vault_files_recursive')
 
 ```
 ipc.sendMessage(content, sessionId?) → call<string>('send_message', ...)
-ipc.listTasks(status?)               → call<Task[]>('list_tasks', ...)
-ipc.createTask(params)               → call<Task>('create_task', ...)
-ipc.updateTaskStatus(id, status)     → call<void>('update_task_status', ...)
+ipc.listChecklistItems(status?)      → call<ChecklistItem[]>('list_checklist_items', ...)
+ipc.updateChecklistItem(id, status)  → call<void>('update_checklist_item', ...)
 ipc.getDaily(date)                   → call<string>('get_daily', ...)
 ipc.saveDaily(date, content)         → call<void>('save_daily', ...)
 ipc.searchKnowledge(query)           → call<KnowledgeEntry[]>('search_knowledge', ...)
@@ -196,7 +195,7 @@ ipc.setApiKey(key)                   → call<void>('set_api_key', ...)
 `src/lib/events.ts` 封装 Tauri 事件订阅：
 
 ```
-listenAgentEvents(callback) → listen('mindclaw://agent-event', ...)
+listenRuntimeEvents(callback) → listen('mindclaw://runtime-event', ...)
 ```
 
 事件 payload 类型（对应 Rust `OutboundPayload`）：
@@ -213,7 +212,7 @@ listenAgentEvents(callback) → listen('mindclaw://agent-event', ...)
 | 工作区布局是否使用路由（URL）驱动？ | 用 Zustand 状态驱动布局，不用 URL 路由 | TanStack Router 路由树 | 工作区是单一视图应用，Tab 切换和笔记打开是面板内状态变化，不是页面导航；URL 路由会导致三栏布局在导航时重新挂载 |
 | Chat 是否作为独立路由/页面？ | Chat 作为悬浮覆盖层（Portal + fixed 定位） | 独立路由页面 | "对话是万能入口"要求 Chat 随时可达且不打断当前工作区状态；独立路由会失去工作区上下文 |
 | 流式消息是否进入 TanStack Query 缓存？ | 不进缓存，由 chatStore 管理 | 用 useQuery + streaming | 流式消息是实时增量数据，不是标准的请求-响应模型；强行适配 TanStack Query 会引入不必要的复杂度 |
-| 任务状态更新是否使用乐观更新？ | 使用乐观更新 + 失败回滚 | 等待服务器确认后更新 | 任务状态切换是高频操作，等待 I/O 会造成明显延迟感；本地文件操作失败率低，回滚情况罕见 |
+| Checklist 状态更新是否使用乐观更新？ | 使用乐观更新 + 失败回滚 | 等待服务器确认后更新 | Checklist 状态切换是高频操作，等待 I/O 会造成明显延迟感；本地文件操作失败率低，回滚情况罕见 |
 | 编辑器保存策略 | 防抖 1 秒自动保存 + Cmd+S 手动强制保存 | 每次输入立即保存 | 每次 keystroke 触发文件 I/O 会产生过高的写入频率；1 秒防抖在用户感知上接近实时，且大幅减少写入次数 |
 | 工作区偏好存储位置 | 独立 `WorkspacePrefs`（UserConfig）| 前端 localStorage | 工作区尺寸、Tab、最近打开内容与 Chat 模式需要跨重启保留，且应该被桌面端其它入口共享 |
 | 目录视图模式存储 | `WorkspacePrefs.dir_view_mode`，按 tabId 独立记录 | 全局单一模式 | 不同 Tab 的使用场景不同（Daily 适合平铺，Vault 适合树状导航），按 Tab 独立记忆符合实际使用习惯 |

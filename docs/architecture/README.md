@@ -43,15 +43,16 @@
 | [03.07-tool-execution.md](./03.07-tool-execution.md) | Tool Execution：工具执行、沙箱、并发与审计 |
 | [03.08-mcp.md](./03.08-mcp.md) | MCP：外部能力适配 |
 | [03.09-skills.md](./03.09-skills.md) | Skills：能力定义与按需注入 |
-| [03.10-memory.md](./03.10-memory.md) | Memory：后台提取与升华 |
-| [03.11-observability.md](./03.11-observability.md) | Observability：Runtime 可观测性 |
+| [03.10-memory.md](./03.10-memory.md) | Memory：Agent 记忆与召回 |
+| [03.11-review-evolution.md](./03.11-review-evolution.md) | Review & Evolution：回顾、演化与经验教训候选 |
+| [03.12-observability.md](./03.12-observability.md) | Observability：Runtime 可观测性 |
 
 #### 数据与业务层
 
 | 文件 | 内容 |
 |------|------|
 | [04-providers.md](./04-providers.md) | Providers：LLM Provider Adapter 层 |
-| [05-services.md](./05-services.md) | Services：Task / Knowledge / Daily 业务服务层 |
+| [05-services.md](./05-services.md) | Services：Note / Daily / Checklist / Memory / Review / Evolution 业务服务层 |
 | [06-storage.md](./06-storage.md) | Storage：SQLite / Markdown vault / OS Keychain 职责划分 |
 
 #### 运行时
@@ -86,7 +87,9 @@
 
 **理解数据流**：`01-channels.md` → `02-bus.md` → `03.02-agent-loop.md` → `06-storage.md`
 
-**理解上下文组装**：`03.06-context-pipeline.md` → `03.07-tool-execution.md` → `03.09-skills.md`
+**理解上下文组装**：`03.06-context-pipeline.md` → `03.10-memory.md` → `03.09-skills.md`
+
+**理解 Agent 演化**：`03.10-memory.md` → `03.11-review-evolution.md` → `06-storage.md`
 
 **添加新工具**：`03.07-tool-execution.md` → `03.08-mcp.md`
 
@@ -98,7 +101,7 @@
 
 ## 文档规范
 
-本文档遵循 [arch-spec.md](../.claude/rules/arch-spec.md) 规范：
+本文档遵循 [architecture-spec.md](../../.agents/skills/code-docs-spec/references/architecture-spec.md) 规范：
 
 - **设计文档**（`*.md`）：记录"为什么这样设计"，在 `docs/architecture/` 根目录
 - **参考文档**（`reference/*.md`）：记录"当前是什么样"，在 `reference/` 子目录

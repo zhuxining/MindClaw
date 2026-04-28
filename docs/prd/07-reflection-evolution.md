@@ -2,7 +2,7 @@
 
 # 反思回顾、演化路径与经验教训候选
 
-→ 架构关联：[03.10-memory.md](../architecture/03.10-memory.md)、[03.11-observability.md](../architecture/03.11-observability.md)
+→ 架构关联：[03.10-memory.md](../architecture/03.10-memory.md)、[03.11-review-evolution.md](../architecture/03.11-review-evolution.md)、[03.12-observability.md](../architecture/03.12-observability.md)
 → 父文档：[00-overview.md](00-overview.md)
 
 ## 背景与目标

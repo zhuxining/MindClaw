@@ -4,41 +4,41 @@
 
 # MindClaw 系统架构总览
 
-MindClaw 的核心命题是”记忆是 Agent 的，知识是共同的”。系统围绕本地 AI 知识管理构建，支持对话、笔记两大核心场景，Agent 行为模式通过 Profile 配置可自定义。数据尽量留在本地、边界清晰、运行时可控。
+MindClaw 是一个以 Markdown 共有知识库为真相源、以桌面工作站为操作界面、以 Agent 演化记录为反馈机制的人机知识共建系统。系统核心命题是：**记忆是 Agent 的，知识是共同的**。
 
 ---
 
 ## § 系统目标与约束
 
-**系统定位**：MindClaw 为个人用户提供跨通道的 AI 助手，帮助管理知识笔记、任务与长期记忆。
+**系统定位**：MindClaw 为个人用户提供本地优先的 AI 工作站，支持对话、笔记、Daily、Inbox、私密空间、Agent 记忆和可审阅的 Agent 演化流程。
 
 **核心约束**：
 
-1. 所有业务逻辑在 Rust 侧执行，前端保持薄客户端。
-2. API Key 等敏感信息存储在 OS Keychain，不以明文落盘。
-3. Agent 文件写操作仅限受控工作区，路径沙箱强制生效。
+1. 所有业务逻辑在 Rust Services 层执行，前端保持薄客户端。
+2. Markdown Vault 是已确认知识正文的真相源；SQLite 存储运行状态、索引、Agent 记忆、审核候选和演化记录。
+3. Private 路径不进入 Agent 上下文、不生成记忆、不进入共有知识索引。
 4. 同一 `session_key` 的消息串行处理。
-5. `AgentRunner` 不持有 Session、MessageBus 或持久化依赖。
-6. `AgentProfile` 是静态定义，不是运行时实体。
+5. `AgentRunner` 不持有 Session、MessageBus、审核状态或持久化依赖。
+6. 旁路观察、记忆更新建议和经验教训候选必须先进入审核流程，不能直接写入稳定记忆或共有知识。
 
 ---
 
 ## § 核心设计原则
 
-**1. Definition 与 Runtime 分离**
+**1. 记忆与知识分离**
+Agent 记忆服务后续行动，Markdown 知识承载共同真相；这个边界避免黑盒记忆替代可审阅知识。
+
+**2. 候选先于长期状态**
+旁路观察、记忆更新和经验教训先形成候选或建议；这个流程减少误判污染长期上下文。
+
+**3. Definition 与 Runtime 分离**
 `AgentProfile` 只描述身份、策略和边界；Session、上下文、取消状态和消息分发都属于 Runtime。
 
-**2. 外层编排与内层执行分离**
-`AgentLoop` 负责编排一条入站消息，`AgentRunner` 负责执行一次 run 的迭代循环。
+**4. 外层编排与内层执行分离**
+`AgentLoop` 负责编排一条入站消息，`AgentRunner` 负责执行一次 run 的 LLM 与工具迭代。
 
-**3. Provider 仅作为 Adapter**
-LLM Provider 只处理模型协议差异，不参与 Agent 路由、上下文构建或工具执行。
-
-**4. 概念层与实现层分离**
-`SubAgent` 与 `BackgroundAgent` 在概念层保持区分；实现层共用同一个 `AgentRunner` 与 spawn 机制。
-
-**5. Markdown 为知识真相源**
-知识笔记保存在 vault 中，数据库只维护索引和辅助状态。
+**5. Adapter 不承载业务语义**
+Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业务判断留在 Runtime 和 Services。
 
 ---
 
@@ -48,42 +48,85 @@ LLM Provider 只处理模型协议差异，不参与 Agent 路由、上下文构
 |---------|------|--------------|------|
 | Agent 是否是运行时实体？ | 否，使用 `AgentProfile` | Agent 持有 provider/session/tools | 定义与状态分离更利于复用和权限控制 |
 | 编排与执行是否分层？ | 是，Loop / Runner 分离 | 单个大 Agent 对象包办全部 | turn 级和 run 级粒度不同，混在一起会导致职责失控 |
-| SubAgent 与 BackgroundAgent 是否统一成同一个概念？ | 否，概念层保留区分 | 统一叫 child agent | 保留发起语义和等待语义，避免把后台任务也误建模成父子关系 |
-| 派生执行是否单独一套 runtime？ | 否，统一 spawn 机制 | 各做一套执行链路 | 统一调度与观测语义，减少重复逻辑 |
-| Provider 在哪里选型？ | `ModelRouter + ProviderRegistry` | AgentLoop 直接硬编码 provider | Provider 选择应是声明式路由，不应散落在业务层 |
-| 工具权限在哪里决定？ | `AgentProfile.ToolPolicy` + Loop 过滤 | Tool 自己决定可不可用 | 权限统一收敛在定义层与编排层 |
+| 旁路观察是否进入主调用链？ | 否，作为 Review & Evolution side path | 每次输入同步观察和沉淀 | 观察和沉淀不应拉长主响应链路 |
+| 经验教训正文存在哪里？ | Markdown Vault | Agent Memory 或 SQLite 正文 | 经验教训是共同知识，必须人类可读、可审阅、可修改 |
+| Agent 记忆如何持久化？ | SQLite 结构化运行数据，保留来源和知识引用 | 独立 Markdown 记忆文件作为真相源 | 记忆是 Agent 状态，不是共同知识正文；需要状态、来源、降权、删除等审核字段 |
+| Observability 与 Evolution 是否合并？ | 否，运行观测和业务审计分离 | 把演化记录当日志 | 运行日志服务排障，演化记录影响长期行为，可信要求不同 |
+| Private 隔离在哪里强制？ | Rust PathGuard 和上下文策略双重隔离 | 仅靠前端隐藏入口 | Agent 不可见边界必须由后端强制 |
 
 ---
 
-## § 全局分层
+## § 边界划分
 
 ```text
 ┌─────────────────────────────────────────────────────┐
-│ Channel 层                                           │
-│ Desktop · Telegram · 飞书                           │
+│ Desktop Frontend                                    │
+│ Workspace Shell · Editor · Review Queue · Memory UI │
 └───────────────────┬─────────────────────────────────┘
-                    ↕ Inbound / Outbound
-┌───────────────────┴─────────────────────────────────┐
-│ MessageBus                                           │
+                    │ invoke / event subscription
+┌───────────────────▼─────────────────────────────────┐
+│ Channel + MessageBus                                │
+│ InboundMessage / OutboundMessage / user status       │
 └───────────────────┬─────────────────────────────────┘
-                    ↕
-┌───────────────────┴─────────────────────────────────┐
+                    │
+┌───────────────────▼─────────────────────────────────┐
 │ Agent Runtime                                        │
-│ Definition: AgentProfile / AgentRegistry / ModelRouter│
-│ Orchestration: AgentLoop / Session / Context         │
-│ Execution: AgentRunner / ToolExecutor / RunHooks     │
-│ Adapter: Provider / MCP / Event / Storage adapters   │
-└────────┬──────────────────────────┬─────────────────┘
-         ↕                          ↕
-┌────────┴────────┐       ┌─────────┴──────────────────┐
-│ Services        │       │ Storage                     │
-│ Task / Note ... │       │ SQLite / vault / Keychain   │
-└─────────────────┘       └─────────────────────────────┘
+│ Definition: AgentProfile / AgentRegistry / Router    │
+│ Orchestration: AgentLoop / Session / Context / Spawn  │
+│ Execution: AgentRunner / ToolExecutor / RunHooks      │
+│ Adapter: Provider / MCP / Event / Storage adapters    │
+└─────────────┬───────────────────────────┬───────────┘
+              │                           │
+              │ review trigger            │ business calls
+              ▼                           ▼
+┌──────────────────────────────┐   ┌────────────────────────────┐
+│ Review & Evolution            │   │ Services                   │
+│ candidates / proposals / logs  │   │ Note / Daily / Checklist   │
+│ lesson candidates              │   │ Memory / Review / Evolution│
+└─────────────┬────────────────┘   └─────────────┬──────────────┘
+              │                                  │
+              ▼                                  ▼
+┌─────────────────────────────────────────────────────┐
+│ Storage                                             │
+│ Markdown Vault · SQLite · OS Keychain · PathGuard   │
+└─────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## § Runtime 主调用链
+## § 核心实体关系
+
+**AgentSession**：用户与 Agent 的一次对话会话，包含多个 Turn，归属于具体通道和 `session_key`。
+
+**AgentProfile**：Agent 的静态定义，描述提示词、模型、工具、上下文和安全策略。
+
+**MemoryRecord**：Agent 为后续判断和行动保存的结构化记忆，具有状态、来源和可选知识引用。
+
+**ReviewItem**：回顾队列中的统一审核项，承载观察候选、记忆更新建议、经验教训候选或知识草稿入口。
+
+**EvolutionLog**：记忆或策略变化的审计记录，解释变化原因和证据来源。
+
+**LessonCandidate**：可复用经验教训的待审核候选，确认后可以保存为共有知识。
+
+**KnowledgeNote**：已确认共有知识，正文保存在 Markdown Vault 中，可被人和 Agent 共同引用。
+
+```mermaid
+erDiagram
+    AGENT_PROFILE ||--o{ AGENT_SESSION : configures
+    AGENT_SESSION ||--o{ REVIEW_ITEM : produces
+    REVIEW_ITEM ||--o| MEMORY_RECORD : proposes_update
+    REVIEW_ITEM ||--o| LESSON_CANDIDATE : proposes_lesson
+    MEMORY_RECORD ||--o{ EVOLUTION_LOG : changes
+    LESSON_CANDIDATE ||--o| KNOWLEDGE_NOTE : saves_as
+    KNOWLEDGE_NOTE ||--o{ MEMORY_RECORD : referenced_by
+    AGENT_SESSION ||--o{ EVOLUTION_LOG : evidences
+```
+
+---
+
+## § 整体流程
+
+### 主调用链
 
 ```mermaid
 sequenceDiagram
@@ -91,15 +134,14 @@ sequenceDiagram
     participant Channel as Channel
     participant Bus as MessageBus
     participant Loop as AgentLoop
-    participant Profile as AgentProfile
+    participant Ctx as ContextPipeline
     participant Runner as AgentRunner
     participant Provider as ProviderAdapter
 
     User->>Channel: 输入
     Channel->>Bus: InboundMessage
     Bus->>Loop: consume
-    Loop->>Profile: resolve
-    Loop->>Loop: build context + run spec
+    Loop->>Ctx: build context
     Loop->>Runner: run(spec, hooks)
     Runner->>Provider: chat / chat_stream
     Provider-->>Runner: response
@@ -109,39 +151,34 @@ sequenceDiagram
     Channel->>User: 输出
 ```
 
----
+### 知识与演化闭环
 
-## § Main / Sub / Background 统一模型
-
-| 类型 | Profile.kind | InvocationMode | 结果去向 |
-|------|--------------|----------------|---------|
-| 主 Agent | `main` | `interactive` | 直接给用户 |
-| 子代理 | `sub` | `inline_child` | 返回给父 Agent |
-| 后台代理 | `background` | `detached` | 后续独立通知 |
-
-统一点：
-
-- 共用 `AgentRunner`
-- 共用 ToolExecutor
-- 共用 Provider Adapter
-
-差异点：
-
-- Profile 策略
-- RunHooks
-- 可见性与等待语义
+```mermaid
+flowchart LR
+    A[输入或执行结果] --> B[草稿或行动]
+    B --> C[用户审阅]
+    C --> D[记忆更新建议]
+    C --> E[经验教训候选]
+    D --> F[Agent 记忆]
+    D --> G[演化记录]
+    E --> H[Markdown 共有知识]
+    H --> I[知识引用]
+    I --> F
+    F --> J[后续上下文召回]
+    H --> J
+```
 
 ---
 
-## § 跨切关注点
+## § 安全架构
 
-| 关注点 | 实现策略 | 说明 |
-|--------|---------|------|
-| 认证 | Provider Adapter 统一处理 | API Key 只在 Adapter 层读取和持有 |
-| 并发控制 | Session Lock + Global Gate | Session 级串行、全局级限流 |
-| 指标 | Runtime Events | Loop / Runner / Tool / Child Dispatch 统一产生日志与指标 |
-| 错误翻译 | 模块边界显式转换 | Provider、Tool、Storage 错误分别在边界处翻译 |
-| 权限控制 | Profile + PathGuard + Tool filtering | 权限决策集中，不下放给单个工具实现 |
+| 边界 | 强制点 | 说明 |
+|------|--------|------|
+| Private Vault | Rust PathGuard | 拒绝 Agent 读取、索引、记忆生成和知识沉淀 |
+| Provider Secret | OS Keychain | API Key 不以明文落盘 |
+| Tool 权限 | AgentProfile + Tool filtering | 工具可用性由定义层和编排层统一收敛 |
+| 文件写入 | Storage PathGuard | Agent 文件写操作只允许受控工作区路径 |
+| 候选审核 | Review & Evolution | 未审核候选不能直接写入长期知识或稳定记忆 |
 
 ---
 
@@ -154,7 +191,7 @@ sequenceDiagram
 | [00-overview.md](./00-overview.md) | 系统架构总览 |
 | [01-channels.md](./01-channels.md) | Channels：多通道架构 |
 | [02-bus.md](./02-bus.md) | MessageBus：异步消息队列 |
-| [03-agent-runtime.md](./03-agent-runtime.md) | Agent Runtime：Definition / Orchestration / Execution 总览 |
+| [03-agent-runtime.md](./03-agent-runtime.md) | Agent Runtime：Definition / Orchestration / Execution / Adapter 总览 |
 | [03.01-agent-profile.md](./03.01-agent-profile.md) | AgentProfile：静态定义与策略边界 |
 | [03.02-agent-loop.md](./03.02-agent-loop.md) | AgentLoop：turn 级编排层 |
 | [03.03-agent-runner.md](./03.03-agent-runner.md) | AgentRunner：run 级执行引擎 |
@@ -164,12 +201,14 @@ sequenceDiagram
 | [03.07-tool-execution.md](./03.07-tool-execution.md) | Tool Execution：工具执行系统 |
 | [03.08-mcp.md](./03.08-mcp.md) | MCP：外部能力适配 |
 | [03.09-skills.md](./03.09-skills.md) | Skills：能力定义与按需注入 |
-| [03.10-memory.md](./03.10-memory.md) | Memory：后台提取与升华 |
-| [03.11-observability.md](./03.11-observability.md) | Observability：Runtime 可观测性 |
+| [03.10-memory.md](./03.10-memory.md) | Memory：Agent 记忆与召回 |
+| [03.11-review-evolution.md](./03.11-review-evolution.md) | Review & Evolution：回顾、演化与经验教训候选 |
+| [03.12-observability.md](./03.12-observability.md) | Observability：Runtime 可观测性 |
 | [04-providers.md](./04-providers.md) | Providers：LLM Provider Adapter 层 |
 | [05-services.md](./05-services.md) | Services：业务服务层 |
 | [06-storage.md](./06-storage.md) | Storage：存储层设计 |
 | [07-runtime.md](./07-runtime.md) | AppRuntime：统一运行时与依赖注入 |
+| [08-desktop-frontend.md](./08-desktop-frontend.md) | Desktop Frontend：桌面端前端架构 |
 
 ### 参考文档
 

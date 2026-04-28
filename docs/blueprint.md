@@ -1,6 +1,6 @@
-# MindClaw 产品蓝图
-
 > **Status**: `active`
+
+# MindClaw 产品蓝图
 
 ## 文档定位
 

@@ -21,9 +21,9 @@
 - `spawn.rs`：派生执行与后台代理调度
 - `session.rs`：会话管理
 - `context.rs`：上下文装配
-- `events.rs`：共享运行事件协议（流事件 / 观测事件 / 内部阶段 / 对外状态）
+- `events.rs`：共享运行事件协议（ProviderEvent / ProviderUsage / AgentEvent / LoopPhase / UserVisiblePhase）
 - `spec.rs`：run 契约
-- `memory.rs`：记忆数据结构与召回入口
+- `memory.rs`：Memory / MemoryCategory / recall
 - `skills.rs`：技能清单、元数据与注册表
 - `observability.rs`：观测接口与 tracing 实现
 
@@ -110,7 +110,7 @@ src/
 ├── services/               业务服务层
 │   ├── mod.rs
 │   ├── task.rs             TaskService
-│   ├── knowledge.rs        KnowledgeService
+│   ├── note.rs             NoteService
 │   └── daily.rs            DailyService
 │
 ├── commands/               Tauri IPC 命令（薄层）

@@ -6,7 +6,7 @@
 
 ## § 职责定位
 
-Storage 层负责三类存储介质（SQLite、Markdown 文件、OS Keychain）的读写操作，不负责任何业务逻辑判断、数据聚合或索引重建决策。
+Storage 层负责 SQLite、Markdown 文件和 OS Keychain 的读写封装；不负责任何业务判断、候选审核、记忆召回排序或知识提炼。
 
 ---
 
@@ -14,85 +14,93 @@ Storage 层负责三类存储介质（SQLite、Markdown 文件、OS Keychain）�
 
 **真相源不可混淆**：
 
-- **笔记**的真相源是 Markdown 文件（YAML Frontmatter），SQLite 只存储索引（允许过时，可重建）
-- **会话历史**的真相源是 SQLite（全局 DB），不暴露在文件系统
-- **可选任务**以 Markdown checklist 形式存在于 Daily Note 中，SQLite 仅建立派生索引
-- 混淆两者的写入权会导致数据不一致无法恢复
+- 已确认知识正文的真相源是 Markdown 文件和 YAML Frontmatter。
+- Checklist 任务的真相源是 Markdown checklist。
+- Agent 记忆、观察候选、审核状态和演化记录的真相源是 SQLite。
+- API Key 的真相源是 OS Keychain。
 
-**双 DB 架构**：
+**索引可重建，运行状态不可重建**：`notes_index`、`checklist_index` 可从 Markdown 重建；Memory、Review、Evolution 表不可从 Markdown 完整重建。
 
-- **全局 DB**（`~/.config/mindclaw/mindclaw.db`）：存储跨 vault 的会话/回合/消息
-- **Vault DB**（`{vault}/.mindclaw/mindclaw.db`）：存储当前 vault 的任务/笔记/记忆索引
+**Private 后端强隔离**：任何 Storage 读取、索引、召回和写入入口都必须拒绝 Agent 访问 `private/` 路径。
 
 ---
 
 ## § 目录结构
 
-```
+```text
 ~/.config/mindclaw/
 ├── config.json          ← UserConfig（providers、vault 列表）
-└── mindclaw.db          ← 全局 DB：sessions/turns
+└── mindclaw.db          ← 全局 DB：sessions / turns
 
-{obsidian-vault}/
+{vault}/
 ├── .obsidian/           ← Obsidian 配置（不动）
 ├── .mindclaw/
 │   ├── config.json      ← VaultConfig（agent 偏好、folder 映射）
-│   ├── mindclaw.db      ← Vault DB：checklist_index/notes/memories 索引
-│   └── memory/          ← Memory Markdown 文件（Agent 内部数据）
-└── daily/               ← 日记 Markdown 文件（含 checklist 任务）
+│   └── mindclaw.db      ← Vault DB：索引、记忆、候选、演化记录
+├── daily/               ← Daily Markdown 文件
+├── private/             ← Agent 不可见内容
+└── **/*.md              ← 共有知识、项目笔记、Inbox 等 Markdown 内容
 ```
 
 ---
 
-## § 边界与实体
+## § 存储介质
 
-**输入**：来自 Services 层的读写请求，携带领域对象（Task、Note 内容、Memory 等）。
+**GlobalDatabase**：全局 SQLite 数据库，管理跨 vault 的会话和 turn。
 
-**输出**：存储操作结果（成功/失败）或检索结果（记录列表、文件内容），对上层屏蔽存储介质的差异。
+**VaultDatabase**：Vault 级 SQLite 数据库，管理 notes/checklist 索引、Agent 记忆、审核候选和演化记录。
 
-**核心实体**：
+**MarkdownStorage**：Vault 目录的文件访问层，提供 Markdown 文件读写、Frontmatter 解析和原子写入。
 
-**GlobalDatabase**：全局 SQLite 数据库，管理跨 vault 数据。
-
-- 关键属性：数据库文件路径（`~/.config/mindclaw/mindclaw.db`）、WAL 模式
-- 关系：由 AppRuntimeBuilder 初始化，以 `Arc<Mutex<Connection>>` 形式被 SessionManager 共享
-
-**VaultDatabase**：Vault 级 SQLite 数据库，管理索引数据。
-
-- 关键属性：数据库文件路径（`{vault}/.mindclaw/mindclaw.db`）、WAL 模式
-- 关系：由 AppRuntimeBuilder 初始化，以 `Arc<Mutex<Connection>>` 形式被 Services 层共享
-
-**MarkdownStorage**：Vault 目录的文件访问层，提供 Markdown 文件的读写接口。
-
-- 关键属性：vault 根路径（`vault_path`，从 AppConfig 读取）
-- 关系：TaskService/MemoryStore/NoteService 直接读写 Markdown 文件，同步更新 SQLite 索引
-
-**KeychainStorage**：OS Keychain 的访问封装（不变）。
-
-- 关键属性：服务名称（`mindclaw-{provider}-api-key`）
-- 关系：Provider 初始化时读取 API Key
+**KeychainStorage**：OS Keychain 封装，保存 Provider API Key 等敏感信息。
 
 ---
 
 ## § 存储职责分配
 
-| 数据类型 | 存储位置 | 真相源 | 写入方 | 同步机制 |
-|---------|---------|--------|-------|---------|
-| 会话消息历史（Turn） | 全局 DB `sessions/turns` | SQLite | SessionManager | 单一写入方，无需同步 |
-| Agent 记忆（Memory） | `{vault}/.mindclaw/memory/*.md` + Vault DB `memories_index` | **Markdown** | MemoryStore | 写文件后更新索引 |
-| 可选任务（Task） | `{vault}/daily/*.md` 中的 checklist + Vault DB `checklist_index` | **Markdown** | Agent 工具 | 写文件后更新索引 |
-| 笔记索引 | `{vault}/**/*.md` + Vault DB `notes_index` | **Markdown** | NoteService | 启动时 sync，运行时增量更新 |
-| 日记 | `{vault}/daily/*.md` | Markdown | DailyService | 直接读写，无索引 |
-| 私密笔记 | `{vault}/private/` | Markdown | 用户直接编辑 | Agent 不可访问 |
-| API Key | OS Keychain | Keychain | 设置界面 | 独立存储 |
+| 数据类型 | 存储位置 | 真相源 | 写入方 | 可重建 |
+|---------|---------|--------|--------|--------|
+| 会话消息历史 | 全局 DB `sessions` / `turns` | SQLite | SessionManager | 否 |
+| 知识笔记正文 | Vault Markdown | Markdown | NoteService / 用户编辑 | 是 |
+| 笔记索引 | Vault DB `notes_index` | Markdown 派生 | NoteService | 是 |
+| Daily | `daily/*.md` | Markdown | DailyService / 用户编辑 | 是 |
+| Checklist | Markdown checklist + `checklist_index` | Markdown | ChecklistService | 是 |
+| Agent 记忆 | Vault DB `memories` | SQLite | MemoryService | 否 |
+| 记忆来源 | Vault DB `memory_sources` | SQLite | MemoryService | 否 |
+| 知识引用 | Vault DB `memory_knowledge_refs` | SQLite + Markdown 路径 | MemoryService | 可部分校验 |
+| 回顾队列 | Vault DB `review_items` | SQLite | ReviewService | 否 |
+| 观察候选 | Vault DB `observation_candidates` | SQLite | ReviewService | 否 |
+| 记忆更新建议 | Vault DB `memory_update_proposals` | SQLite | ReviewService | 否 |
+| 经验教训候选 | Vault DB `lesson_candidates` | SQLite | ReviewService | 否 |
+| 演化记录 | Vault DB `evolution_logs` | SQLite | EvolutionService | 否 |
+| API Key | OS Keychain | Keychain | Settings / Provider | 否 |
 
 ---
 
-## § 可选：Checklist 索引
+## § Frontmatter 知识索引
 
-任务以 Markdown checklist（`- [ ] 内容`）形式存在于 Daily Note 中。
+知识笔记使用 Markdown Frontmatter 作为人类和 Agent 共用的轻量索引。
 
-### Checklist 格式
+```yaml
+---
+title: 笔记标题
+tags: [agent-memory, knowledge-design]
+overview: 一句话到一小段，说明这篇笔记解决什么问题、核心判断是什么。
+---
+```
+
+字段规则：
+
+- `title` 用于人类浏览和搜索结果展示。
+- `tags` 用于轻量路由和过滤。
+- `overview` 用于 Agent 预读，判断是否需要加载正文。
+- 正文承载完整论证、案例、方法和反例。
+
+---
+
+## § Checklist 索引
+
+任务以 Markdown checklist 表达，不作为独立一等业务对象。
 
 ```markdown
 - [ ] 普通任务
@@ -101,90 +109,32 @@ Storage 层负责三类存储介质（SQLite、Markdown 文件、OS Keychain）�
 - [x] 已完成任务 ✅ 2026-04-28
 ```
 
-### checklist_index 表结构
-
-```sql
-CREATE TABLE checklist_index (
-    id INTEGER PRIMARY KEY,
-    note_path TEXT NOT NULL,      -- 所属笔记路径
-    line_number INTEGER,          -- 行号
-    content TEXT NOT NULL,        -- 任务内容（去除标记）
-    raw_line TEXT,                -- 原始行
-    status TEXT,                  -- "todo" | "done"
-    priority TEXT,                -- "high" | "medium" | "low"
-    due_date TEXT,                -- YYYY-MM-DD
-    completed_at TEXT,            -- ISO8601
-    last_indexed TEXT
-);
-```
-
-### 索引重建
-
-扫描所有 `.md` 文件，正则匹配 `^- \[([ x])\] (.+)$`，提取内容并解析标签。
-
----
-
-## § Frontmatter 格式规范（已废弃）
-
-### Task Frontmatter
-
-```yaml
----
-id: "uuid"
-title: "任务标题"
-status: todo          # todo | in_progress | done | cancelled
-priority: medium      # low | medium | high
-due_date: 2026-04-10  # YYYY-MM-DD，可选
-tags: [work, urgent]
-created: 2026-04-07T14:30:00+08:00
-updated: 2026-04-07T14:30:00+08:00
----
-
-任务正文内容（Markdown 格式）
-```
-
-**文件名规则**：`{YYYY-MM-DD}-{slug}.md`，如 `2026-04-07-写季度报告.md`
-
-### Memory Frontmatter
-
-```yaml
----
-id: "uuid"
-key: "user-preference-theme"
-category: preference  # user_fact | preference | work_context | relationship | goal
-importance: 0.85
-created: 2026-04-07T14:30:00+08:00
-updated: 2026-04-07T14:30:00+08:00
----
-
-记忆内容（Markdown 格式）
-```
-
-**文件名规则**：`{category}-{key-slug}.md`，如 `preference-theme.md`
+`checklist_index` 是派生索引，用于快速筛选和 UI 展示。启动或文件变化时可从 Markdown 重建。
 
 ---
 
 ## § 关键流程
 
-### Checklist 索引更新
+### 笔记保存
 
-1. Agent 工具修改 Markdown 文件（追加 `- [ ] 内容` 或更新 `- [x]`）
-2. 文件系统事件触发索引更新
-3. 解析变更行，提取 content/status/priority/due_date
-4. UPSERT 到 `checklist_index`
+1. NoteService 构造 Markdown 正文和 Frontmatter。
+2. MarkdownStorage 使用 temp + rename 原子写入。
+3. NoteService 更新 `notes_index`。
+4. 若来源为经验教训候选，ReviewService 和 MemoryService 更新候选状态与知识引用。
 
-### 笔记索引同步（sync_index）
+### 记忆更新
 
-1. 遍历 vault 下所有 `.md` 文件（排除 `.obsidian/`, `.mindclaw/` 等）
-2. 对比文件 `mtime` 与 `notes_index.modified_at`
-3. 仅更新有变化的文件：提取 title/tags，计算 path hash
-4. UPSERT 到 `notes_index`
+1. ReviewService 或用户操作请求 MemoryService 更新记忆。
+2. MemoryService 写入 `memories`、`memory_sources` 和可选 `memory_knowledge_refs`。
+3. EvolutionService 写入 `evolution_logs`。
+4. ContextPipeline 后续召回读取 MemoryService 输出，不直接读表。
 
-### 笔记检索（RAG 简化版）
+### 索引重建
 
-1. NoteService 在 `notes_index` 中对 title/tags 进行 LIKE 查询
-2. 返回 `NoteIndex` 列表（轻量，不含正文）
-3. 调用方按需调用 `read(file_path)` 获取完整内容
+1. 扫描 Vault 下允许索引的 Markdown 文件。
+2. 排除 `.obsidian/`、`.mindclaw/`、`private/` 等目录。
+3. 提取 Frontmatter 和 checklist。
+4. 重建 `notes_index` 与 `checklist_index`。
 
 ---
 
@@ -192,18 +142,13 @@ updated: 2026-04-07T14:30:00+08:00
 
 | 决策问题 | 选择 | 放弃的替代方案 | 理由 |
 |---------|------|--------------|------|
-| 知识笔记的真相源是哪里？ | **Markdown 文件**（`{vault}/`） | SQLite 为真相源，Markdown 为导出格式 | 文件对用户直接可见可编辑，SQLite 损坏后可从 Markdown 重建索引；Obsidian 可直接打开 |
-| 向量嵌入存储在哪里？ | **不存储**（先不做向量嵌入） | SQLite BLOB / 独立向量数据库 | 个人应用规模小，LIKE 查询足够；向量增加复杂度 |
-| 双 DB 如何划分？ | **全局 DB**（会话）+ **Vault DB**（索引） | 单 DB 存储所有数据 | Vault DB 随 vault 迁移，会话历史保留在本地；多 vault 场景下数据隔离清晰 |
-| 配置格式是什么？ | **JSON**（`serde_json`） | TOML | JSON 与前端天然兼容，无需额外转换；serde_json 性能更好 |
-| 配置层级如何设计？ | **两级配置**（UserConfig + VaultConfig → AppConfig） | 单配置 | 用户级配置跟随用户账号，Vault 级配置跟随 vault（可 git sync） |
-| 会话历史是否永久保留在 SQLite？ | 永久保留（全局 DB） | 90 天后归档 | 全局 DB 只存会话，数据量可控；vault 级数据在 Markdown 中 |
-| 私密内容如何与 Agent 隔离？ | PathGuard 在 Rust 层拒绝 `private/` 路径 | 文件系统权限 | Rust 层强制比文件系统权限更可靠 |
-| SQLite 并发访问如何处理？ | WAL 模式 + `Arc<Mutex<Connection>>` | 连接池 | WAL 模式支持并发读；Mutex 序列化写，简单可靠 |
-| 文件写入如何保证原子性？ | **temp + rename** 模式 | 直接写入 | rename 原子性由 OS 保证，崩溃后不会留下半写文件 |
-| vault 与 SQLite 如何保持一致？ | **文件先写，后更新索引**；启动时支持重建 | 单事务覆盖两者 | SQLite 不支持文件系统事务；索引可重建使恢复简单 |
-| 崩溃后如何恢复？ | 启动时扫描 vault，重建 SQLite 索引 | 依赖 SQLite 日志回滚 | 索引可重建使恢复简单可靠；Markdown 文件是真相源 |
-| 如何处理存储空间不足？ | 返回错误，调用方处理 | 自动清理旧数据 | 自动清理可能导致数据丢失；返回错误让用户决定 |
+| 知识笔记的真相源是哪里？ | Markdown 文件 | SQLite 为真相源，Markdown 为导出格式 | 文件对用户直接可见可编辑，损坏后可重建索引 |
+| Agent 记忆的真相源是哪里？ | SQLite | Markdown memory 文件 | 记忆是结构化运行状态，需要审核、降权、来源和删除语义 |
+| 观察候选和经验候选是否写 Markdown？ | 否，SQLite 保存审核状态 | 每个候选生成 Markdown 文件 | 候选不是确认知识，写 Markdown 会污染知识空间 |
+| 向量嵌入存储在哪里？ | 暂不作为必需存储层 | SQLite BLOB / 独立向量库 | MVP 先依赖 Frontmatter、LIKE 和按需正文加载 |
+| 双 DB 如何划分？ | 全局 DB 存会话，Vault DB 存 vault 相关索引和运行状态 | 单 DB 存所有数据 | Vault 数据随 vault 迁移，全局会话保持本地 |
+| 私密内容如何与 Agent 隔离？ | PathGuard 在 Rust 层拒绝 `private/` 路径 | 文件系统权限或前端隐藏 | Agent 不可见边界必须由后端强制 |
+| 文件写入如何保证原子性？ | temp + rename | 直接写入 | rename 原子性由 OS 保证，崩溃后避免半写文件 |
 
 ---
 
@@ -211,7 +156,7 @@ updated: 2026-04-07T14:30:00+08:00
 
 | 文件 | 说明 |
 |------|------|
-| `src/storage/database/global.rs` | 全局 DB 打开与迁移 |
-| `src/storage/database/vault.rs` | Vault DB 打开与迁移 |
-| `src/storage/markdown.rs` | Frontmatter 解析与原子写入 |
-| `src/storage/migrations/` | SQL 迁移文件 |
+| `src-tauri/src/storage/database/global.rs` | 全局 DB 打开与迁移 |
+| `src-tauri/src/storage/database/vault.rs` | Vault DB 打开与迁移 |
+| `src-tauri/src/storage/markdown.rs` | Frontmatter 解析与原子写入 |
+| `src-tauri/src/storage/migrations/` | SQL 迁移文件 |

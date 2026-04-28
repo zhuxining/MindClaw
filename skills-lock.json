@@ -4,7 +4,8 @@
 		"code-docs-spec": {
 			"source": "zhuxining/harness",
 			"sourceType": "github",
-			"computedHash": "065e06b13e654daa22dfe19bfbc3457567df89d23431e57905d15f4ee7fb7e78"
+			"skillPath": "code-docs-spec/SKILL.md",
+			"computedHash": "546753ed6695b7d0cd01f59d6666eb3e534f54d3ac6a7304ac86aa7daba0bc9c"
 		},
 		"code-principles": {
 			"source": "zhuxining/harness",

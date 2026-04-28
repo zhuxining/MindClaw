@@ -14,8 +14,9 @@ Storage 层负责三类存储介质（SQLite、Markdown 文件、OS Keychain）�
 
 **真相源不可混淆**：
 
-- **任务、记忆、笔记**的真相源是 Markdown 文件（YAML Frontmatter），SQLite 只存储索引（允许过时，可重建）
+- **笔记**的真相源是 Markdown 文件（YAML Frontmatter），SQLite 只存储索引（允许过时，可重建）
 - **会话历史**的真相源是 SQLite（全局 DB），不暴露在文件系统
+- **可选任务**以 Markdown checklist 形式存在于 Daily Note 中，SQLite 仅建立派生索引
 - 混淆两者的写入权会导致数据不一致无法恢复
 
 **双 DB 架构**：
@@ -36,10 +37,9 @@ Storage 层负责三类存储介质（SQLite、Markdown 文件、OS Keychain）�
 ├── .obsidian/           ← Obsidian 配置（不动）
 ├── .mindclaw/
 │   ├── config.json      ← VaultConfig（agent 偏好、folder 映射）
-│   ├── mindclaw.db      ← Vault DB：tasks/notes/memories 索引
+│   ├── mindclaw.db      ← Vault DB：checklist_index/notes/memories 索引
 │   └── memory/          ← Memory Markdown 文件（Agent 内部数据）
-├── tasks/               ← Task Markdown 文件（YAML Frontmatter）
-└── daily/               ← 日记 Markdown 文件
+└── daily/               ← 日记 Markdown 文件（含 checklist 任务）
 ```
 
 ---
@@ -80,7 +80,7 @@ Storage 层负责三类存储介质（SQLite、Markdown 文件、OS Keychain）�
 |---------|---------|--------|-------|---------|
 | 会话消息历史（Turn） | 全局 DB `sessions/turns` | SQLite | SessionManager | 单一写入方，无需同步 |
 | Agent 记忆（Memory） | `{vault}/.mindclaw/memory/*.md` + Vault DB `memories_index` | **Markdown** | MemoryStore | 写文件后更新索引 |
-| 任务（Task） | `{vault}/tasks/*.md` + Vault DB `tasks_index` | **Markdown** | TaskService | 写文件后更新索引 |
+| 可选任务（Task） | `{vault}/daily/*.md` 中的 checklist + Vault DB `checklist_index` | **Markdown** | Agent 工具 | 写文件后更新索引 |
 | 笔记索引 | `{vault}/**/*.md` + Vault DB `notes_index` | **Markdown** | NoteService | 启动时 sync，运行时增量更新 |
 | 日记 | `{vault}/daily/*.md` | Markdown | DailyService | 直接读写，无索引 |
 | 私密笔记 | `{vault}/private/` | Markdown | 用户直接编辑 | Agent 不可访问 |
@@ -88,7 +88,43 @@ Storage 层负责三类存储介质（SQLite、Markdown 文件、OS Keychain）�
 
 ---
 
-## § Frontmatter 格式规范
+## § 可选：Checklist 索引
+
+任务以 Markdown checklist（`- [ ] 内容`）形式存在于 Daily Note 中。
+
+### Checklist 格式
+
+```markdown
+- [ ] 普通任务
+- [ ] 优先级任务 !high
+- [ ] 截止日任务 @2026-05-01
+- [x] 已完成任务 ✅ 2026-04-28
+```
+
+### checklist_index 表结构
+
+```sql
+CREATE TABLE checklist_index (
+    id INTEGER PRIMARY KEY,
+    note_path TEXT NOT NULL,      -- 所属笔记路径
+    line_number INTEGER,          -- 行号
+    content TEXT NOT NULL,        -- 任务内容（去除标记）
+    raw_line TEXT,                -- 原始行
+    status TEXT,                  -- "todo" | "done"
+    priority TEXT,                -- "high" | "medium" | "low"
+    due_date TEXT,                -- YYYY-MM-DD
+    completed_at TEXT,            -- ISO8601
+    last_indexed TEXT
+);
+```
+
+### 索引重建
+
+扫描所有 `.md` 文件，正则匹配 `^- \[([ x])\] (.+)$`，提取内容并解析标签。
+
+---
+
+## § Frontmatter 格式规范（已废弃）
 
 ### Task Frontmatter
 
@@ -130,20 +166,12 @@ updated: 2026-04-07T14:30:00+08:00
 
 ## § 关键流程
 
-### 任务创建
+### Checklist 索引更新
 
-1. TaskService 生成 UUID 和 ISO8601 时间戳
-2. 构造 TaskFrontmatter，生成文件路径（`tasks/YYYY-MM-DD-{slug}.md`）
-3. 原子写入 Markdown 文件（tmp + rename）
-4. 更新 `tasks_index` 表（INSERT OR REPLACE）
-
-### 任务更新
-
-1. 查 `tasks_index` 获取 `file_path`
-2. 读取 Markdown 文件，解析 Frontmatter
-3. 合并更新字段，更新 `updated` 时间戳
-4. 原子写回 Markdown 文件
-5. 更新 `tasks_index`
+1. Agent 工具修改 Markdown 文件（追加 `- [ ] 内容` 或更新 `- [x]`）
+2. 文件系统事件触发索引更新
+3. 解析变更行，提取 content/status/priority/due_date
+4. UPSERT 到 `checklist_index`
 
 ### 笔记索引同步（sync_index）
 

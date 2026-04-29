@@ -52,8 +52,8 @@
 | 文件 | 内容 |
 |------|------|
 | [04-providers.md](./04-providers.md) | Providers：LLM Provider Adapter 层 |
-| [05-services.md](./05-services.md) | Services：Note / Daily / Checklist / Memory / Review / Evolution 业务服务层 |
-| [06-storage.md](./06-storage.md) | Storage：SQLite / Markdown vault / OS Keychain 职责划分 |
+| [05-services.md](./05-services.md) | Services：Note / Daily / Inbox / Checklist / Memory / Review / Evolution 业务服务层 |
+| [06-storage.md](./06-storage.md) | Storage：ContextFS / ContextIndex / RuntimeStore / OS Keychain 职责划分 |
 
 #### 运行时
 
@@ -87,7 +87,7 @@
 
 **理解数据流**：`01-channels.md` → `02-bus.md` → `03.02-agent-loop.md` → `06-storage.md`
 
-**理解上下文组装**：`03.06-context-pipeline.md` → `03.10-memory.md` → `03.09-skills.md`
+**理解上下文组装**：`06-storage.md` → `03.06-context-pipeline.md` → `03.10-memory.md` → `03.09-skills.md`
 
 **理解 Agent 演化**：`03.10-memory.md` → `03.11-review-evolution.md` → `06-storage.md`
 

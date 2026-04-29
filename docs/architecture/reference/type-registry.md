@@ -31,8 +31,10 @@
 
 | Trait | 位置 | 关键约束 | 用途 |
 |-------|------|---------|------|
-| `NoteStorage` | `src/storage/markdown.rs` | 读写 Markdown 文件，维护 frontmatter 元数据 | Vault 笔记持久化 |
-| `VectorStorage` | `src/storage/vector.rs` | `index()` / `search()` / `delete()`，支持语义搜索 | 向量索引与检索 |
+| `ContextStore` | `src/storage/` | 使用 ContextURI 读写上下文，维护 Frontmatter、PathGuard 和 ContextIndex | Services 访问 Vault、Inbox、source、agent 资产的统一入口 |
+| `MarkdownStorage` | `src/storage/markdown.rs` | 读写 Markdown 文件，解析 Frontmatter，保证原子写入 | ContextFS 的 Markdown 文件适配 |
+| `ContextIndex` | `src/storage/database/vault.rs` | 保存可重建文档级索引，不保存内容真相 | L0 查询、FTS 搜索和召回候选过滤 |
+| `VectorStorage` | `src/storage/vector.rs` | `index()` / `search()` / `delete()`，只保存可重建语义缓存或引用 | 可选语义搜索增强 |
 
 ---
 
@@ -57,7 +59,10 @@
 | `AgentEvent` | `src/agent/events.rs` | Runtime 内部观测事件 | 供 observability / tracing / metrics 消费 |
 | `LoopPhase` | `src/agent/events.rs` | Runtime 内部阶段机 | 不直接暴露给前端 |
 | `UserVisiblePhase` | `src/agent/events.rs` | 对外简化状态 | 通过 MessageBus / Channel 暴露给前端 |
-| `Memory` | `src/agent/memory.rs` | Agent 私有观察记录 | 含重要性权重和衰减系数 |
+| `ContextUri` | `src/storage/` | 上下文稳定引用 | 跨 Vault 文件、source、agent 资产和 session 证据引用 |
+| `ContextFrontmatter` | `src/storage/markdown.rs` | 可索引 Markdown 的通用 Frontmatter | 承载 `tags`、`overview`、`source`、引用和来源扩展 |
+| `MemoryFrontmatter` | `src/agent/memory.rs` | Agent 记忆文档的 Frontmatter 扩展 | Markdown 是记忆真相源，ContextIndex 只维护召回索引 |
+| `Memory` | `src/agent/memory.rs` | Agent 可召回记忆记录 | 对应 Vault 中的受管 Markdown 文件 |
 | `SkillManifest` | `src/agent/skills.rs` | 技能完整清单 | 启动时只索引元数据，激活时加载完整内容 |
 
 ### 消息总线

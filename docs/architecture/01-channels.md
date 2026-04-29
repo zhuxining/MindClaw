@@ -86,7 +86,7 @@ fn check_sender(&self, sender_id: &str) -> bool
 |---------|------|--------------|------|
 | Channel 如何与 Agent 通信？ | 通过 MessageBus 异步队列，互不持有引用 | Channel 直接调用 AgentLoop 方法 | MessageBus 解耦两侧生命周期：Channel 重启不影响 AgentLoop，AgentLoop 繁忙时 Channel 不阻塞 |
 | 通道配置如何管理？ | `channels.yaml` 声明式配置文件 | 代码内硬编码配置 | 用户可不修改代码地启用/禁用通道和配置多实例；配置文件在 git 中可见但凭证通过环境变量引用 |
-| 同一平台是否支持多实例？ | 支持（通过不同 `name` 字段，对应不同 session_key 前缀） | 每个平台唯一实例 | 用户可能同时运行个人 Telegram Bot 和团队 Telegram Bot，需要不同白名单和独立 session |
+| 同一平台是否支持多实例？ | 支持（通过不同 `name` 字段，对应不同 session_key 前缀） | 每个平台唯一实例 | 用户同时运行个人 Telegram Bot 和团队 Telegram Bot 时，需要不同白名单和独立 session |
 | 发送者白名单在哪层控制？ | Channel 层（进入 MessageBus 之前）| AgentLoop 层 | 权限验证尽量靠前；未授权消息不进入 MessageBus，减少无效处理，避免日志污染 |
 | 敏感凭证（Bot Token）如何配置？ | `channels.yaml` 中引用 `${ENV_VAR}` 环境变量 | 直接写入配置文件 | 凭证不应进入版本控制；环境变量是 12-Factor App 的标准实践，与容器部署兼容 |
 | 热重载通道配置是否支持？ | 不支持，需要重启应用 | 支持运行时热重载 | 热重载需要优雅停止/启动 Channel，增加状态管理复杂度；个人应用重启成本低 |

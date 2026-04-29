@@ -148,14 +148,14 @@ WorkspaceStore
 
 `WorkspacePrefs` 通过 `get_workspace_prefs / save_workspace_prefs` 从后端配置水合到 `WorkspaceStore`，`WorkspaceStore` 自身只保留运行时状态，不负责本地持久化。
 
-### ChatStore（Zustand）
+### AgentSessionStore（Zustand）
 
-管理 Chat 的会话状态，包含流式消息的实时缓冲。
+管理 Agent Session 的会话状态，包含流式消息的实时缓冲。
 
 ```
-ChatStore
+AgentSessionStore
   currentSessionId: string | null
-  mode: 'companion' | 'reflection' | 'challenge' | 'knowledge' | 'vault'
+  mode: 'workbench' | 'research' | 'reflection' | 'knowledge' | 'review'
   messages: (UserMessage | StreamingMessage)[]
   streamingRequestId: string | null    // 当前正在流式的 request_id
 ```

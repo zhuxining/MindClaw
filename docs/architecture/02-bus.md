@@ -80,5 +80,5 @@ sequenceDiagram
 | session_key 格式？ | `{channel_name}:{chat_id}` 纯字符串 | 结构体（含 channel 和 chat_id 字段） | 字符串在日志中直接可读；ChannelManager 按前缀字符串匹配即可路由，无需反序列化 |
 | 消息队列如何实现？ | tokio mpsc channel（内存队列） | 持久化消息队列（如 SQLite 队列） | 本地桌面应用消息在内存中传递即可；持久化队列增加磁盘 I/O 和复杂度，且 AgentLoop 处理速度通常快于消息到达速度 |
 | 队列消费超时如何处理？ | 设置超时时间，超时后继续循环（优雅退出） | 无限期阻塞等待 | 超时允许 AgentLoop 在退出信号到达时有机会检查状态，实现优雅关闭 |
-| 如何确保消息不丢失？ | Channel 确认收到后再返回 | 异步 fire-and-forget | 确认机制保证消息到达 MessageBus；本地应用内存队列本身可靠，fire-and-forget 在崩溃时可能丢失 |
+| 如何确保消息不丢失？ | Channel 确认收到后再返回 | 异步 fire-and-forget | 确认机制保证消息到达 MessageBus；本地应用内存队列本身可靠，fire-and-forget 在崩溃时会丢失未入队消息 |
 | 如何处理超大消息？ | 拒绝超过大小限制的消息 | 分片传输 | 本地应用消息通常不大；分片增加复杂度，简单拒绝使问题暴露给调用方 |

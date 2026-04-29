@@ -15,18 +15,18 @@ MindClaw 是一个以 Markdown 共有知识库为真相源、以桌面工作站�
 **核心约束**：
 
 1. 所有业务逻辑在 Rust Services 层执行，前端保持薄客户端。
-2. Markdown Vault 是已确认知识正文的真相源；SQLite 存储运行状态、索引、Agent 记忆、审核候选和演化记录。
+2. Markdown + Frontmatter 和原始资源文件是真相源：已确认知识在 Vault，待处理产物在 Inbox，外部原文在 sources，Agent 长期资产在 `agent/`；SQLite 只存储运行状态、会话、ContextIndex 和查询缓存。
 3. Private 路径不进入 Agent 上下文、不生成记忆、不进入共有知识索引。
 4. 同一 `session_key` 的消息串行处理。
 5. `AgentRunner` 不持有 Session、MessageBus、审核状态或持久化依赖。
-6. 旁路观察、记忆更新建议和经验教训候选必须先进入审核流程，不能直接写入稳定记忆或共有知识。
+6. 旁路观察、记忆更新建议、外部解析结果和经验教训候选必须先进入 Inbox 审核流程，不能直接写入稳定记忆或共有知识。
 
 ---
 
 ## § 核心设计原则
 
 **1. 记忆与知识分离**
-Agent 记忆服务后续行动，Markdown 知识承载共同真相；这个边界避免黑盒记忆替代可审阅知识。
+Agent 记忆服务后续行动，Markdown 知识承载共同真相；两者都必须可审阅，区别在于状态、用途和引用边界。
 
 **2. 候选先于长期状态**
 旁路观察、记忆更新和经验教训先形成候选或建议；这个流程减少误判污染长期上下文。
@@ -50,7 +50,9 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
 | 编排与执行是否分层？ | 是，Loop / Runner 分离 | 单个大 Agent 对象包办全部 | turn 级和 run 级粒度不同，混在一起会导致职责失控 |
 | 旁路观察是否进入主调用链？ | 否，作为 Review & Evolution side path | 每次输入同步观察和沉淀 | 观察和沉淀不应拉长主响应链路 |
 | 经验教训正文存在哪里？ | Markdown Vault | Agent Memory 或 SQLite 正文 | 经验教训是共同知识，必须人类可读、可审阅、可修改 |
-| Agent 记忆如何持久化？ | SQLite 结构化运行数据，保留来源和知识引用 | 独立 Markdown 记忆文件作为真相源 | 记忆是 Agent 状态，不是共同知识正文；需要状态、来源、降权、删除等审核字段 |
+| Agent 记忆如何持久化？ | 受管 Markdown + Frontmatter，ContextIndex 只建索引 | SQLite 结构化运行数据作为真相源 | 记忆影响长期行为，必须可审阅、可迁移、可人工纠偏 |
+| 上下文如何统一引用？ | 使用 ContextURI + ContextFS | 各模块传递文件路径、session id 和表主键 | 记忆、演化、外部资料和会话证据需要稳定交叉引用 |
+| 待处理 Markdown 产物存在哪里？ | Inbox | 分散写入 `sources/` 或 `agent/` | Inbox 是统一待处理源，用户可以集中审核、分流；归档只作为无明确去向时的兜底 |
 | Observability 与 Evolution 是否合并？ | 否，运行观测和业务审计分离 | 把演化记录当日志 | 运行日志服务排障，演化记录影响长期行为，可信要求不同 |
 | Private 隔离在哪里强制？ | Rust PathGuard 和上下文策略双重隔离 | 仅靠前端隐藏入口 | Agent 不可见边界必须由后端强制 |
 
@@ -81,14 +83,14 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
               ▼                           ▼
 ┌──────────────────────────────┐   ┌────────────────────────────┐
 │ Review & Evolution            │   │ Services                   │
-│ candidates / proposals / logs  │   │ Note / Daily / Checklist   │
+│ Inbox candidates / logs        │   │ Note / Daily / Inbox       │
 │ lesson candidates              │   │ Memory / Review / Evolution│
 └─────────────┬────────────────┘   └─────────────┬──────────────┘
               │                                  │
               ▼                                  ▼
 ┌─────────────────────────────────────────────────────┐
 │ Storage                                             │
-│ Markdown Vault · SQLite · OS Keychain · PathGuard   │
+│ ContextFS · ContextIndex · RuntimeStore · OS Keychain · PathGuard │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -100,13 +102,13 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
 
 **AgentProfile**：Agent 的静态定义，描述提示词、模型、工具、上下文和安全策略。
 
-**MemoryRecord**：Agent 为后续判断和行动保存的结构化记忆，具有状态、来源和可选知识引用。
+**MemoryRecord**：Agent 为后续判断和行动保存的受管 Markdown 记忆，具有状态、来源和可选知识引用。
 
-**ReviewItem**：回顾队列中的统一审核项，承载观察候选、记忆更新建议、经验教训候选或知识草稿入口。
+**ReviewItem**：回顾队列中的统一审核项，承载观察候选、记忆更新建议、经验教训候选或知识草稿入口，索引来自 Inbox Markdown 和 ContextIndex。
 
-**EvolutionLog**：记忆或策略变化的审计记录，解释变化原因和证据来源。
+**EvolutionLog**：记忆或策略变化的 Markdown 审计记录，解释变化原因和证据来源。
 
-**LessonCandidate**：可复用经验教训的待审核候选，确认后可以保存为共有知识。
+**LessonCandidate**：Inbox 中可复用经验教训的 Markdown 待审核候选，确认后可以保存为共有知识或归档为 Agent 经验。
 
 **KnowledgeNote**：已确认共有知识，正文保存在 Markdown Vault 中，可被人和 Agent 共同引用。
 
@@ -156,15 +158,16 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     A[输入或执行结果] --> B[草稿或行动]
-    B --> C[用户审阅]
-    C --> D[记忆更新建议]
-    C --> E[经验教训候选]
-    D --> F[Agent 记忆]
-    D --> G[演化记录]
-    E --> H[Markdown 共有知识]
-    H --> I[知识引用]
-    I --> F
-    F --> J[后续上下文召回]
+    B --> C[Inbox 待处理条目]
+    C --> D[用户审阅]
+    D --> E[记忆更新建议确认]
+    D --> F[经验教训候选确认]
+    E --> G[Agent 记忆 Markdown]
+    E --> K[演化记录 Markdown]
+    F --> H[Markdown 共有知识]
+    H --> I[ContextURI 知识引用]
+    I --> G
+    G --> J[后续上下文召回]
     H --> J
 ```
 
@@ -178,7 +181,7 @@ flowchart LR
 | Provider Secret | OS Keychain | API Key 不以明文落盘 |
 | Tool 权限 | AgentProfile + Tool filtering | 工具可用性由定义层和编排层统一收敛 |
 | 文件写入 | Storage PathGuard | Agent 文件写操作只允许受控工作区路径 |
-| 候选审核 | Review & Evolution | 未审核候选不能直接写入长期知识或稳定记忆 |
+| 候选审核 | Inbox + Review & Evolution | 未审核候选不能直接写入长期知识或稳定记忆 |
 
 ---
 

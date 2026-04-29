@@ -1,15 +1,15 @@
 > **Status**: `draft`
 
-# Daily 与 Inbox 输入闭环
+# Daily 与 Inbox 待处理闭环
 
 → 架构关联：[08-desktop-frontend.md](../architecture/08-desktop-frontend.md)
 → 父文档：[00-overview.md](00-overview.md)
 
 ## 背景与目标
 
-**背景**：MindClaw 的输入不只来自对话。用户每天的记录、临时想法、链接、片段和 checklist 都需要低摩擦进入同一个知识闭环，并在整理后进入旁路观察、轻量回顾、候选审核或共有知识。
+**背景**：MindClaw 的输入不只来自对话。用户每天的记录、临时想法、链接、片段、外部资料解析结果、知识草稿和 Agent 候选都需要先进入一个可集中处理的位置，再由用户确认去向。Inbox 是待整理、待审核、待沉淀 Markdown 产物的统一集散地。
 
-**目标**：定义 Daily 与 Inbox 的打开、记录、捕获、整理和回顾入口，让输入从暂存内容转化为可审阅知识材料。
+**目标**：定义 Daily 与 Inbox 的打开、记录、捕获、待处理审核、分流和回顾入口，让输入从暂存内容转化为可审阅知识材料、Agent 记忆或共有知识。
 
 ## 功能描述
 
@@ -61,53 +61,84 @@ Then 状态栏显示保存失败，并保留用户未保存内容
 
 ---
 
-### US-03 捕获 Inbox 条目
+### US-03 捕获和接收 Inbox 条目
 
-作为用户，我希望把想法、链接、片段或待整理事项快速放入 Inbox，以便先收集再整理。
+作为用户，我希望把想法、链接、片段、外部资料解析结果或 Agent 候选统一放入 Inbox，以便先集中处理再决定去向。
 
 **验收标准**：
 
 Given 用户点击 Ribbon 中的 Inbox
 When Inbox 工作域加载完成
-Then 左侧面板显示待整理条目列表，中央内容区显示 Inbox 列表或最近选中条目
+Then 左侧面板显示待处理条目列表，中央内容区显示 Inbox 列表或最近选中条目
 
 Given 用户点击 Add Link
 When 用户输入 URL 和可选说明
-Then 新条目出现在 Inbox 列表顶部，并标记为未整理
+Then 新条目出现在 Inbox 列表顶部，并标记为待处理
 
 Given 用户在 Inbox 中点击 New Capture
 When 用户输入文本并保存
-Then 新条目出现在 Inbox 列表顶部，并标记为未整理
+Then 新条目出现在 Inbox 列表顶部，并标记为待处理
 
-- [ ] Inbox 条目支持文本、链接、摘录三种可见类型。
-- [ ] Inbox 条目显示创建时间、来源类型和整理状态。
+Given PDF、网页或文件完成解析
+When 解析结果可供用户处理
+Then 系统在 Inbox 中创建解析结果条目，并保留原始来源入口
+
+Given Agent 生成观察候选、记忆更新建议或经验教训候选
+When 候选需要用户判断
+Then 系统在 Inbox 中创建审核条目，并标记候选类型
+
+- [ ] Inbox 条目支持文本、链接、摘录、解析结果、知识草稿、观察候选、记忆建议、经验候选八种可见类型。
+- [ ] Inbox 条目显示创建时间、来源类型、处理类型和处理状态。
 - [ ] Inbox 条目可打开为中央内容区 Tab。
+- [ ] Inbox 默认列表只显示待处理和处理中条目。
 
 **优先级**：P0
 
 ---
 
-### US-04 整理 Inbox 条目
+### US-04 处理 Inbox 条目
 
-作为用户，我希望把 Inbox 条目整理到 Daily、Vault 或 Agent Session，以便让临时输入进入明确归属。
+作为用户，我希望把 Inbox 条目处理到 Daily、Vault、Agent Memory、演化记录或 Agent Session，以便让临时内容进入明确归属。
 
 **验收标准**：
 
 Given Inbox 条目已打开
 When 用户选择 Move to Daily
-Then 条目内容追加到当前日期 Daily Note，并标记为已整理
+Then 条目内容追加到当前日期 Daily Note，并显示处理去向
 
 Given Inbox 条目已打开
 When 用户选择 Create Knowledge Draft
 Then 中央内容区打开知识草稿，草稿包含可编辑标题、`tags`、`overview` 和正文
 
+Given 用户保存知识草稿
+When 用户选择主题位置或存在匹配用户规则
+Then 内容保存到对应 Vault 位置，Inbox 条目显示目标链接
+
+Given Inbox 条目处理完成但没有明确去向
+When 用户选择 Archive 或关闭处理
+Then 条目进入归档列表，并保留原始内容和来源引用
+
+Given Inbox 条目是记忆更新建议
+When 用户点击 Confirm Memory
+Then 该建议写入 Agent Memory，并生成演化记录入口
+
+Given Inbox 条目是经验教训候选
+When 用户点击 Confirm Lesson
+Then 该条目显示 Save as Knowledge 入口
+
 Given Inbox 条目已打开
 When 用户选择 Send to Agent
 Then Agent Session 打开，并把该条目加入引用上下文
 
+Given 用户拒绝 Inbox 条目
+When 操作完成
+Then 该条目标记为已拒绝，并从默认待处理列表移除
+
 - [ ] Private 条目不提供 Send to Agent 操作。
-- [ ] 已整理条目保留原始内容和整理去向。
-- [ ] 用户可把已整理条目恢复为未整理。
+- [ ] 有明确目标的已处理条目显示目标去向，并从默认待处理列表移除。
+- [ ] 无明确目标、被拒绝或用户选择归档的条目进入归档列表。
+- [ ] 用户可从归档列表恢复条目为待处理。
+- [ ] 确认、拒绝、归档不会删除原始来源引用。
 
 **优先级**：P1
 
@@ -115,24 +146,25 @@ Then Agent Session 打开，并把该条目加入引用上下文
 
 ### US-05 从 Daily 或 Inbox 进入轻量回顾
 
-作为用户，我希望对当天记录和待整理材料进行轻量回顾，以便识别可审核的观察候选、记忆建议、经验教训候选或知识草稿。
+作为用户，我希望对当天记录和待处理材料进行轻量回顾，以便识别可审核的观察候选、记忆建议、经验教训候选或知识草稿。
 
 **验收标准**：
 
 Given 用户处于 Daily 工作域
 When 用户点击 Review Today
-Then 系统打开当日回顾视图，列出今日新增内容、未整理 Inbox 条目、checklist 变化和观察候选
+Then 系统打开当日回顾视图，列出今日新增内容、待处理 Inbox 条目、checklist 变化和观察候选
 
 Given 用户处于 Inbox 工作域
 When 用户点击 Review Inbox
-Then 系统打开 Inbox 回顾视图，列出未整理条目、整理建议和可生成的知识草稿入口
+Then 系统打开 Inbox 回顾视图，列出待处理条目、审核候选、整理建议和可生成的知识草稿入口
 
 Given 用户确认某条整理建议
 When 操作完成
-Then 条目进入对应去向：Daily、Vault 草稿、Agent Session 或删除
+Then 条目进入对应去向：Daily、Vault 主题位置、Agent Memory、演化记录、Agent Session 或归档
 
 - [ ] Daily 与 Inbox 回顾不直接写入共有知识。
 - [ ] 观察候选必须经过用户确认或后续回顾才能进入 Agent Memory。
+- [ ] Inbox 回顾可以按来源类型、处理类型和处理状态筛选。
 
 **优先级**：P1
 
@@ -141,7 +173,7 @@ Then 条目进入对应去向：Daily、Vault 草稿、Agent Session 或删除
 **In Scope**：
 
 - Daily Note 打开、创建、编辑、保存、日期列表。
-- Inbox 条目捕获、查看、整理、恢复。
+- Inbox 条目捕获、接收解析结果、接收审核候选、查看、处理、分流、归档、恢复。
 - Daily 与 Inbox 进入轻量回顾视图。
 - 与 Agent Session、Vault 草稿、Checklist 任务的入口衔接。
 
@@ -149,8 +181,9 @@ Then 条目进入对应去向：Daily、Vault 草稿、Agent Session 或删除
 
 - 日历月视图：日期列表已覆盖 MVP 的 Daily 导航。
 - Daily 模板系统：模板会引入独立配置和变量规则，不进入本功能。
-- Inbox 自动分类：MVP 由用户触发整理，自动分类需先验证整理结果质量。
+- Inbox 自动分类：MVP 由用户触发处理，自动分类需先验证整理结果质量。
 - 外部浏览器插件捕获：桌面端内部 Add Link 已覆盖第一版捕获路径。
+- Source 原始文件预览器：Inbox 只提供来源入口，复杂预览由 Source / Vault 能力单独定义。
 
 ## 非功能需求
 

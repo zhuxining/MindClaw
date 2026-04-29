@@ -7,9 +7,11 @@
 
 ## 背景与目标
 
-**背景**：Vault 是 MindClaw 的共享知识空间。它承载人类笔记、共有知识、Agent 生成草稿和经确认的可复用经验，Markdown 文件是已确认知识内容的真相源，Frontmatter 是人类和 Agent 共同使用的轻量索引。
+**背景**：Vault 是 MindClaw 的共享知识空间。它承载人类笔记、共有知识、Agent 生成草稿、经确认的可复用经验，以及可审阅的 Agent 演化资产。Markdown 文件是内容真相源，Frontmatter 是人类和 Agent 共同使用的轻量索引。
 
 **目标**：定义 Vault 的浏览、编辑、搜索、Frontmatter 展示、`tags` 与 `overview` 使用规则，以及知识草稿和经验教训候选保存行为。
+
+Vault 共有知识可以按主题、项目或用户规则组织。保存入口需要支持用户选择目标位置；未选择时，系统可按既有规则、当前工作域或 `tags` 给出建议，但不要求新增复杂 Frontmatter 字段。
 
 ## 功能描述
 
@@ -114,15 +116,19 @@ Then 文件列表只显示包含该 tag 的笔记
 
 ---
 
-### US-05 保存知识草稿和经验教训候选
+### US-05 保存 Inbox 草稿和经验教训候选
 
-作为用户，我希望把 Agent、Inbox 或经验教训候选保存到 Vault，以便把审核后的临时内容变成共享知识。
+作为用户，我希望把 Inbox 中的知识草稿、解析结果或经验教训候选保存到 Vault，以便把审核后的临时内容变成共享知识。
 
 **验收标准**：
 
 Given 知识草稿已打开
 When 用户点击 Save to Vault
 Then 系统要求标题不为空，并保存为 Markdown 笔记
+
+Given 用户选择目标主题或存在匹配用户规则
+When 草稿保存完成
+Then 新笔记出现在对应 Vault 目录、文件树和搜索结果中
 
 Given 草稿缺少 `overview`
 When 用户点击 Save to Vault
@@ -134,9 +140,11 @@ Then 新笔记出现在 Vault 文件树和搜索结果中
 
 Given 经验教训候选已打开
 When 用户点击 Save as Knowledge
-Then 系统保存为 Markdown 知识笔记，并保留来源记忆、演化记录或 Session 链接
+Then 系统保存为 Markdown 知识笔记，并保留来源记忆、演化记录、Session 或 sources 链接
 
 - [ ] 草稿保存后保留来源信息链接。
+- [ ] 若来源为 Inbox 条目，保存完成后 Inbox 条目链接到新知识笔记，并从默认待处理列表移除。
+- [ ] 若没有目标主题、用户规则或显式保存位置，用户可把 Inbox 来源条目标记为归档，不把正文误放入共有知识区。
 - [ ] 保存到 Vault 的内容不自动变成 Agent 记忆正文。
 - [ ] 若来源为经验教训候选，Agent Memory 只保留触发条件、短摘要和知识文档引用。
 - [ ] 用户可在保存前编辑标题、`tags`、`overview` 和正文。

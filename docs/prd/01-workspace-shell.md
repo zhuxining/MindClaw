@@ -141,7 +141,7 @@ Then 右侧面板不显示发送给 Agent、生成记忆、写入知识类操作
 - [ ] Open Today 打开或创建当日 Daily Note。
 - [ ] New Note 在 Vault 中创建新 Markdown 笔记。
 - [ ] New Session 创建新的 Agent Session Tab。
-- [ ] Add Link 将链接保存到 Inbox。
+- [ ] Add Link 将链接保存到 Inbox 待处理列表。
 - [ ] 全局动作在 Private 工作域中不提供“发送给 Agent”类入口。
 
 **优先级**：P1
@@ -151,7 +151,7 @@ Then 右侧面板不显示发送给 Agent、生成记忆、写入知识类操作
 | Ribbon 入口 | 左侧面板 | 中央默认内容 | 右侧上下文面板 |
 |-------------|----------|--------------|----------------|
 | Daily | 日期列表、当日 checklist、回顾入口 | 今日 Daily Note | 大纲、Frontmatter、关联内容 |
-| Inbox | 捕获列表、待整理筛选 | Inbox 列表或选中条目 | 整理建议、关联笔记 |
+| Inbox | 待处理列表、来源类型筛选、审核状态筛选 | Inbox 列表或选中条目 | 处理动作、来源引用、目标去向 |
 | Vault | 文件树、标签、搜索 | 最近打开笔记或 Vault 首页 | 大纲、Frontmatter、关联内容 |
 | Private | Private 文件树、搜索 | 最近打开私密笔记 | 大纲、Frontmatter，不显示 Agent 操作 |
 | Agent | 会话列表、上下文对象 | 最近 Agent Session | 引用上下文、执行状态、草稿 |

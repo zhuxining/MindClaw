@@ -68,9 +68,9 @@ MindClaw 使用双 SQLite 数据库架构：
 
 | 表名 | 写入方 | 说明 | 可重建 |
 |------|--------|------|--------|
-| `context_index` | ContextStore | Vault、source、inbox、agent 空间的文档级统一索引 | 是 |
+| `context_index` | ContextStore | Vault、resource、inbox、agent 空间的文档级统一索引 | 是 |
 | `context_fts` | ContextStore | 文档级全文搜索索引 | 是 |
-| `source_index` | SourceImportService | 原始来源与 Inbox 解析条目映射 | 是 |
+| `resource_index` | ResourceImportService | 原始资源与 Inbox 解析条目映射 | 是 |
 | `checklist_index` | ChecklistService | Markdown checklist 行级索引 | 是 |
 | `review_queue_index` | ReviewService | 基于 Inbox 审核条目的回顾队列排序和优先级缓存 | 是 |
 | `evolution_timeline_index` | EvolutionService | 演化记录时间线缓存 | 是 |
@@ -124,14 +124,14 @@ MindClaw 使用双 SQLite 数据库架构：
 
 ---
 
-## source_index
+## resource_index
 
-`source_index` 保存外部资料的原始资源、来源 manifest 和 Inbox 解析条目的映射关系。解析后的 Markdown 不写入 `sources/`。
+`resource_index` 保存外部资源的原始资源、资源清单和 Inbox 解析条目的映射关系。解析后的 Markdown 不写入 `resources/`。
 
 | 列名 | 类型 | 约束 | 说明 |
 |------|------|------|------|
-| `uri` | TEXT | PRIMARY KEY | 来源 ContextURI |
-| `source_kind` | TEXT | NOT NULL | web / pdf / file / image / audio / video |
+| `uri` | TEXT | PRIMARY KEY | 资源 ContextURI |
+| `resource_kind` | TEXT | NOT NULL | web / pdf / file / image / audio / video |
 | `original_uri` | TEXT | | 原始 URL 或导入前路径 |
 | `raw_path` | TEXT | | Vault 内原始资源路径 |
 | `manifest_path` | TEXT | | 来源 manifest 路径 |
@@ -232,9 +232,9 @@ Checklist 仍然是 Markdown checklist 的行级索引，不成为独立任务�
 |----------|----------|------|
 | Sessions / Turns | 永久保留，用户主动删除 | 活跃会话恢复数据 |
 | Session Archive | Vault Markdown | 会话进入回顾或审计后生成可迁移摘要 |
-| context_index | 可重建 | 从 Vault Markdown、Inbox Markdown、sources 和 agent 资产重建 |
+| context_index | 可重建 | 从 Vault Markdown、Inbox Markdown、resources 和 agent 资产重建 |
 | context_fts | 可重建 | 从 ContextIndex 和 Markdown 重建 |
-| source_index | 可重建 | 从 `sources/` manifest、原始文件和 Inbox 来源引用重建 |
+| resource_index | 可重建 | 从 `resources/` manifest、原始文件和 Inbox 来源引用重建 |
 | checklist_index | 可重建 | 从 Markdown checklist 重建 |
 | review_queue_index | 可重建 | 从 `inbox/review/*.md` Frontmatter 重建 |
 | evolution_timeline_index | 可重建 | 从 `agent/evolution/*.md` 重建 |

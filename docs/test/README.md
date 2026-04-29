@@ -1,3 +1,5 @@
+> **Status**: `active`
+
 # MindClaw 测试说明
 
 ## 目标

@@ -57,7 +57,7 @@ bun run check-types     # TypeScript type-check
 | `src-tauri/src/main.rs` | Rust binary entry |
 | `src-tauri/tauri.conf.json` | App config (identifier, window, bundle) |
 | `src-tauri/capabilities/` | Tauri permission grants |
-| `docs/blueprint.md/` | Blueprint docs |
+| `docs/blueprint/00-overview.md` | Blueprint docs |
 | `docs/prd/` | Product Requirements Document |
 | `docs/architecture/` | Full architecture design docs |
 | `docs/ui/` | UI design documents |

@@ -52,7 +52,7 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
 | 经验教训正文存在哪里？ | Markdown Vault | Agent Memory 或 SQLite 正文 | 经验教训是共同知识，必须人类可读、可审阅、可修改 |
 | Agent 记忆如何持久化？ | 受管 Markdown + Frontmatter，ContextIndex 只建索引 | SQLite 结构化运行数据作为真相源 | 记忆影响长期行为，必须可审阅、可迁移、可人工纠偏 |
 | 上下文如何统一引用？ | 使用 ContextURI + ContextFS | 各模块传递文件路径、session id 和表主键 | 记忆、演化、外部资料和会话证据需要稳定交叉引用 |
-| 待处理 Markdown 产物存在哪里？ | Inbox | 分散写入 `sources/` 或 `agent/` | Inbox 是统一待处理源，用户可以集中审核、分流；归档只作为无明确去向时的兜底 |
+| 待处理 Markdown 产物存在哪里？ | Inbox | 分散写入 `resources/` 或 `agent/` | Inbox 是统一待处理源，用户可以集中审核、分流；归档只作为无明确去向时的兜底 |
 | Observability 与 Evolution 是否合并？ | 否，运行观测和业务审计分离 | 把演化记录当日志 | 运行日志服务排障，演化记录影响长期行为，可信要求不同 |
 | Private 隔离在哪里强制？ | Rust PathGuard 和上下文策略双重隔离 | 仅靠前端隐藏入口 | Agent 不可见边界必须由后端强制 |
 

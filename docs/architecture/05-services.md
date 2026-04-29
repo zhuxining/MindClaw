@@ -42,7 +42,7 @@ Services 层负责笔记、Daily、Inbox、Checklist、Agent 记忆、回顾队�
 
 **EvolutionService**：负责追加和查询演化记录 Markdown，并保证关键记忆变化可审计。
 
-**SourceImportService**：负责外部网页、PDF、文件和媒体资源的原始来源保存、解析执行和来源索引同步；解析后的 Markdown 交给 InboxService 写入 Inbox。
+**ResourceImportService**：负责外部网页、PDF、文件和媒体资源的原始资源保存、解析执行和资源索引同步；解析后的 Markdown 交给 InboxService 写入 Inbox。
 
 ---
 
@@ -54,7 +54,7 @@ Services 层负责笔记、Daily、Inbox、Checklist、Agent 记忆、回顾队�
 | DailyService | Daily 命令 | daily 命令 | Daily 读写工具 |
 | InboxService | Inbox 命令 | inbox 命令 | 待处理条目创建、归档和恢复 |
 | ChecklistService | Daily / Vault checklist 命令 | checklist 命令 | checklist 更新工具 |
-| SourceImportService | Source 导入和预览命令 | source 命令 | 外部原始来源保存和解析调度 |
+| ResourceImportService | Resource 导入和预览命令 | resource 命令 | 外部原始资源保存和解析调度 |
 | MemoryService | Memory 工作域命令 | memory inspect 命令 | ContextPipeline 召回、确认后写入 |
 | ReviewService | Review Queue 命令 | review 命令 | 消费 Inbox 审核条目、AgentLoop trigger、后台 review run |
 | EvolutionService | Memory / Review 详情命令 | evolution inspect 命令 | 记忆变更后追加记录 |
@@ -69,7 +69,7 @@ pub struct ServiceContainer {
     pub daily: Arc<DailyService>,
     pub inbox: Arc<InboxService>,
     pub checklist: Arc<ChecklistService>,
-    pub source_import: Arc<SourceImportService>,
+    pub resource_import: Arc<ResourceImportService>,
     pub memory: Arc<MemoryService>,
     pub review: Arc<ReviewService>,
     pub evolution: Arc<EvolutionService>,
@@ -109,10 +109,10 @@ ServiceContainer 在 `AppRuntimeBuilder` 中初始化。服务共享 Storage Ada
 
 ### 导入外部资料
 
-1. SourceImportService 保存原始资源、HTML 快照、URL 和 metadata 到 `sources/`。
-2. SourceImportService 解析网页、PDF 或文件为 Markdown。
-3. InboxService 将解析结果写入 `inbox/imports/`，标记 `source: external` 和 `inbox.type: parse_result`。
-4. ContextIndex 记录 Inbox 条目的 L0/L1 字段，SourceIndex 记录原始来源与 Inbox 条目的映射。
+1. ResourceImportService 保存原始资源、HTML 快照、URL 和 metadata 到 `resources/`。
+2. ResourceImportService 解析网页、PDF 或文件为 Markdown。
+3. InboxService 将解析结果写入 `inbox/imports/`，标记 `origin: external` 和 `inbox.type: parse_result`。
+4. ContextIndex 记录 Inbox 条目的 L0/L1 字段，ResourceIndex 记录原始来源与 Inbox 条目的映射。
 5. 用户确认后，NoteService 按主题或用户规则另存为共有知识，InboxService 保留目标引用；无目标或用户选择关闭时归档源条目。
 
 ---
@@ -124,7 +124,7 @@ ServiceContainer 在 `AppRuntimeBuilder` 中初始化。服务共享 Storage Ada
 | Markdown 知识正文 | NoteService | Markdown | 用户和 Agent 共享知识 |
 | Daily 正文 | DailyService | Markdown | 按日期直接寻址 |
 | Inbox 待处理条目 | InboxService | Markdown | 捕获、解析结果、草稿和审核候选的统一待处理源 |
-| 外部原始资料 | SourceImportService | 原始资源 + manifest | 只保存来源，不保存待审核解析 Markdown |
+| 外部原始资源 | ResourceImportService | 原始资源 + manifest | 只保存资源，不保存待审核解析 Markdown |
 | Checklist 项 | ChecklistService | Markdown | SQLite 只保存可重建索引 |
 | Agent 记忆 | MemoryService | Markdown | 可审阅行动上下文，ContextIndex 只保存召回索引 |
 | 回顾队列语义 | ReviewService | Inbox Markdown 派生 | 审核状态写入 Inbox Frontmatter，ContextIndex 只保存队列索引 |
@@ -142,7 +142,7 @@ ServiceContainer 在 `AppRuntimeBuilder` 中初始化。服务共享 Storage Ada
 - MemoryService 可以建立知识引用，但不能写 Markdown 知识正文。
 - NoteService 可以保存知识草稿，但不能修改记忆状态。
 - NoteService 负责解析共有知识的保存位置；InboxService 只记录处理状态和去向，不判断知识应属于哪个主题。
-- SourceImportService 只保存原始来源和生成解析结果，不能绕过 InboxService 直接落盘 Inbox、共有知识或 Agent 记忆。
+- ResourceImportService 只保存原始资源和生成解析结果，不能绕过 InboxService 直接落盘 Inbox、共有知识或 Agent 记忆。
 - InboxService 负责待处理条目的状态和归档，不负责判断候选是否成立。
 - EvolutionService 只追加或查询演化记录，不反向修改业务对象。
 
@@ -159,7 +159,7 @@ ServiceContainer 在 `AppRuntimeBuilder` 中初始化。服务共享 Storage Ada
 | 共有知识保存位置归谁？ | NoteService | InboxService 或前端直接决定路径 | 主题目录、`tags` 和用户规则属于知识库落位语义，不应由待处理队列拥有 |
 | 演化记录是否由 MemoryService 内部维护？ | 否，EvolutionService 独立追加 | MemoryService 写自己的审计字段 | 演化记录会关联记忆、候选、Session 和知识，不只属于 Memory |
 | Checklist 是否成为独立任务系统？ | 否，ChecklistService 维护 Markdown checklist 索引 | 独立任务 Service 管理任务实体 | 产品主线不把任务做成一等对象 |
-| 外部资料解析结果是否写入 sources？ | 否，解析结果进入 Inbox | 写入 `sources/` 或直接生成知识笔记 | `sources/` 只保存原始来源；解析产物需要先进入待处理审核 |
+| 外部资源解析结果是否写入 resources？ | 否，解析结果进入 Inbox | 写入 `resources/` 或直接生成知识笔记 | `resources/` 只保存原始资源；解析产物需要先进入待处理审核 |
 
 ---
 
@@ -171,7 +171,7 @@ ServiceContainer 在 `AppRuntimeBuilder` 中初始化。服务共享 Storage Ada
 | DailyService | Daily Note 读写 |
 | InboxService | 待处理条目、状态、归档和去向引用 |
 | ChecklistService | Markdown checklist 索引 |
-| SourceImportService | 外部原始资料保存、解析调度和来源索引 |
+| ResourceImportService | 外部原始资源保存、解析调度和资源索引 |
 | MemoryService | Agent 记忆与召回 |
 | ReviewService | 回顾队列与候选 |
 | EvolutionService | 演化记录 |

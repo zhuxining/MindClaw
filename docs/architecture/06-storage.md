@@ -56,7 +56,7 @@ MindClaw 不照搬 OpenViking 的 AGFS / Vector DB 形态。MindClaw 的内容�
                 │                      │
 ┌───────────────▼──────────────┐ ┌─────▼──────────────────┐
 │ ContextFS                    │ │ ContextIndex            │
-│ Vault Markdown / raw sources │ │ SQLite metadata / FTS    │
+│ Vault Markdown / raw resources │ │ SQLite metadata / FTS    │
 │ PathGuard / file operations  │ │ optional vector refs     │
 └───────────────┬──────────────┘ └─────┬──────────────────┘
                 │                      │
@@ -65,6 +65,41 @@ MindClaw 不照搬 OpenViking 的 AGFS / Vector DB 形态。MindClaw 的内容�
 │ sessions / turns / queues    │ │ provider secrets        │
 │ locks / processing cursors   │ │                         │
 └──────────────────────────────┘ └────────────────────────┘
+```
+
+### 实体关系
+
+```mermaid
+erDiagram
+    RESOURCE_RAW ||--o| RESOURCE_MANIFEST : "metadata 伴随"
+    RESOURCE_RAW ||--o{ INBOX_ENTRY : "解析生成"
+    RESOURCE_MANIFEST ||--o{ INBOX_ENTRY : "ResourceIndex 索引映射"
+    INBOX_ENTRY ||--o{ KNOWLEDGE : "审核后保存为"
+    KNOWLEDGE }o--|| RESOURCE_RAW : "refs 追溯"
+
+    RESOURCE_RAW {
+        string uri "mc://resource/{id}/{type}/{file}"
+        string path "resources/pdf|web|files/"
+        string kind "pdf | web | file | image | ..."
+    }
+
+    RESOURCE_MANIFEST {
+        string uri "mc://resource/{id}/manifests/"
+        string content "checksum · captured_at · 来源类型"
+    }
+
+    INBOX_ENTRY {
+        string uri "mc://vault/{id}/inbox/imports/"
+        string origin "external"
+        string inbox_type "parse_result"
+        string raw_ref "mc://resource/"
+    }
+
+    KNOWLEDGE {
+        string uri "mc://vault/{id}/notes/"
+        string origin "derived"
+        string refs "mc://resource/"
+    }
 ```
 
 ---
@@ -77,7 +112,7 @@ ContextURI 是 Storage 和 Services 内部使用的稳定引用格式，解决�
 mc://vault/{vault_id}/daily/2026-04-29.md
 mc://vault/{vault_id}/notes/frontmatter-design.md
 mc://vault/{vault_id}/inbox/imports/openviking-parse.md
-mc://source/{vault_id}/pdf/openviking.pdf
+mc://resource/{vault_id}/pdf/openviking.pdf
 mc://agent/{vault_id}/memory/mem_20260429_001.md
 mc://agent/{vault_id}/evolution/evo_20260429_003.md
 mc://session/{session_id}/turn/{turn_id}
@@ -87,7 +122,7 @@ mc://private/{vault_id}/journal/private-note.md
 URI 规则：
 
 - `mc://vault/` 指向人类笔记、Daily、Inbox 和共有知识。
-- `mc://source/` 指向外部资料原文、HTML 快照、链接清单、附件原件和来源 manifest。
+- `mc://resource/` 指向外部资料原文、HTML 快照、链接清单、附件原件和资源清单。
 - `mc://agent/` 指向已确认 Agent 记忆、已应用建议归档、演化记录、已确认经验归档和会话归档。
 - `mc://session/` 指向活跃会话和 turn 运行记录；可被审计 Markdown 引用，但不直接成为知识。
 - `mc://private/` 只允许 PrivateService 使用，Agent ContextPipeline 和 ContextIndex 必须拒绝。
@@ -114,11 +149,11 @@ URI 规则：
 │   ├── review/              ← 观察、记忆建议、经验候选等待审核项
 │   ├── drafts/              ← 知识草稿和整理草稿
 │   └── archive/             ← 无明确去向或已关闭条目，保留处理引用
-├── sources/                 ← 外部原始资料
+├── resources/               ← 外部原始资源
 │   ├── web/                 ← URL、HTML 快照、网页 metadata
 │   ├── pdf/                 ← PDF 原文和 metadata
 │   ├── files/               ← 文档、图片、音视频等附件原件
-│   └── manifests/           ← 来源清单、checksum、导入批次记录
+│   └── manifests/           ← 资源清单、checksum、导入批次记录
 ├── agent/                   ← Agent 可审阅资产
 │   ├── sessions/            ← 会话归档摘要和可引用审计入口
 │   ├── proposals/           ← 已应用记忆建议归档
@@ -131,7 +166,7 @@ URI 规则：
 
 目录规则：
 
-- `sources/` 只保留外部原始资料、HTML / URL 快照、附件原件、checksum 和来源 manifest。
+- `resources/` 只保留外部原始资源、HTML / URL 快照、附件原件、checksum 和资源清单。
 - `inbox/` 是待整理、待审核、待沉淀 Markdown 产物的真实存储位置，不只是 UI 聚合视图。
 - `agent/` 下的文件是确认后或长期审计所需的系统受管 Markdown，用户可打开审阅，但状态变更必须走对应 Service。
 - `.mindclaw/cache/` 可以删除；删除后系统能从 Markdown 和原始资源重建索引或摘要缓存。
@@ -146,8 +181,8 @@ URI 规则：
 | 共有知识正文 | Vault Markdown | `context_index` | NoteService | 是 |
 | Daily | Vault Markdown | `context_index` | DailyService | 是 |
 | Inbox 待处理条目 | `inbox/**/*.md` | `context_index` / `review_queue_index` | InboxService / ReviewService | 是 |
-| 外部资料原文 | `sources/` 原始文件和 manifest | `source_index` | SourceImportService | 是 |
-| 外部资料解析结果 | `inbox/imports/*.md` | `context_index` / 摘要缓存 | SourceImportService / InboxService | 是 |
+| 外部资源原文 | `resources/` 原始文件和 manifest | `resource_index` | ResourceImportService | 是 |
+| 外部资源解析结果 | `inbox/imports/*.md` | `context_index` / 摘要缓存 | ResourceImportService / InboxService | 是 |
 | Checklist | Markdown checklist | `checklist_index` | ChecklistService | 是 |
 | Agent 记忆 | `agent/memory/*.md` | `context_index` | MemoryService | 是 |
 | 观察 / 建议 / 经验候选 | `inbox/review/*.md` | `context_index` / `review_queue_index` | ReviewService / InboxService | 是 |
@@ -166,20 +201,17 @@ URI 规则：
 
 ### 通用字段
 
-所有可索引 Markdown 都遵循同一套最小字段。普通用户主要维护 `tags` 和 `overview`，系统维护 `source`、时间和引用。
+所有可索引 Markdown 都遵循同一套最小字段。普通用户主要维护 `tags` 和 `overview`，系统维护 `origin`、时间和引用。
 
 ```yaml
 ---
 title: Frontmatter 设计
 tags: [knowledge-design, context-storage]
 overview: 说明 MindClaw 如何用 Markdown Frontmatter 支持人类和 Agent 的分层知识加载。
-source: user
+origin: user
 created_at: 2026-04-29T10:00:00+08:00
 updated_at: 2026-04-29T10:30:00+08:00
-refs:
-  source: []
-  evidence: []
-  knowledge: []
+refs: []
 ---
 ```
 
@@ -188,29 +220,29 @@ refs:
 - `title` 用于人类浏览、Tab 标题和搜索结果展示；缺省时从文件名或一级标题派生。
 - `tags` 是轻量路由和过滤，不承载复杂分类体系。
 - `overview` 是 L1 预读入口，说明文档解决什么问题、核心判断是什么。
-- `source` 标识生成来源：`user`、`external`、`agent`、`derived`、`system`。
-- `refs` 统一承载来源、证据和知识引用，值使用 ContextURI 或 Vault 相对路径。
+- `origin` 标识创作来源：`user`、`external`、`agent`、`derived`、`system`。
+- `refs` 记录上级来源引用（原始资源、触发对话等），值为 ContextURI 或 Vault 相对路径的数组，无引用时为空数组。
 
 ### 外部资料扩展
 
-外部资料扩展用于 `sources/` 下的来源 manifest 或指向原始资源的 Inbox 条目。解析后的 Markdown 不写回 `sources/`，而是写入 Inbox。
+外部资料扩展用于 `resources/` 下的资源清单或指向原始资源的 Inbox 条目。解析后的 Markdown 不写回 `resources/`，而是写入 Inbox。
 
 ```yaml
 ---
 title: OpenViking Storage Architecture
 tags: [context-database, storage]
 overview: OpenViking 原网页来源记录，解析产物进入 Inbox 等待整理。
-source: external
+origin: external
 external:
   kind: web
   uri: https://volcengine-openviking.mintlify.app/concepts/storage
-  raw_ref: mc://source/main/web/openviking-storage.html
+  raw_ref: mc://resource/main/web/openviking-storage.html
   captured_at: 2026-04-29T10:00:00+08:00
   checksum:
 ---
 ```
 
-`external.kind` 支持 `web`、`pdf`、`file`、`image`、`audio`、`video`。原始资源和 Inbox 解析产物都必须通过 `refs.source` 或 `external.raw_ref` 保留可追溯关系。
+`external.kind` 支持 `web`、`pdf`、`file`、`image`、`audio`、`video`。原始资源和 Inbox 解析产物都必须通过 `refs` 或 `external.raw_ref` 保留可追溯关系。
 
 ### Inbox 扩展
 
@@ -219,19 +251,16 @@ Inbox 条目是待整理、待审核、待沉淀的 Markdown 产物。
 ```yaml
 ---
 title: OpenViking Storage 解析结果
-tags: [storage, external-source]
+tags: [storage, external]
 overview: 从 OpenViking 存储文档解析出的上下文数据库设计要点，等待整理为知识或引用材料。
-source: external
+origin: external
 inbox:
   type: parse_result
   status: pending
-  source_kind: web
+  resource_kind: web
   target: []
 refs:
-  source:
-    - mc://source/main/web/openviking-storage.html
-  evidence: []
-  knowledge: []
+  - mc://resource/main/web/openviking-storage.html
 created_at: 2026-04-29T10:00:00+08:00
 updated_at: 2026-04-29T10:30:00+08:00
 ---
@@ -239,7 +268,7 @@ updated_at: 2026-04-29T10:30:00+08:00
 
 `inbox.type` 支持 `capture`、`parse_result`、`knowledge_draft`、`memory_proposal`、`observation`、`lesson_candidate`、`review_note`。
 
-`inbox.status` 支持 `pending`、`processing`、`reviewed`、`archived`、`rejected`。完成处理时，Inbox 条目先按用户选择、主题目录、`tags` 或 Vault 配置规则写入目标位置，并在 `inbox.target` 或 `refs.knowledge` 中保留去向引用；只有没有明确目标或用户选择归档时，条目才进入 `inbox/archive/`。
+`inbox.status` 支持 `pending`、`processing`、`reviewed`、`archived`、`rejected`。完成处理时，Inbox 条目先按用户选择、主题目录、`tags` 或 Vault 配置规则写入目标位置，并在 `inbox.target` 或 `refs` 中保留去向引用；只有没有明确目标或用户选择归档时，条目才进入 `inbox/archive/`。
 
 ### Agent 资产扩展
 
@@ -248,7 +277,7 @@ updated_at: 2026-04-29T10:30:00+08:00
 title: Markdown 作为 Agent 记忆真相源
 tags: [agent-memory, storage]
 overview: 用户确认 Agent 记忆应保存为可审阅 Markdown，而不是隐藏在数据库中。
-source: agent
+origin: agent
 agent_asset:
   kind: memory
   status: confirmed
@@ -256,11 +285,8 @@ agent_asset:
   memory_type: preference
   confidence: 0.86
 refs:
-  source:
-    - mc://session/sess_20260429/turn/12
-  evidence:
-    - mc://agent/main/evolution/evo_20260429_003.md
-  knowledge: []
+  - mc://session/sess_20260429/turn/12
+  - mc://agent/main/evolution/evo_20260429_003.md
 created_at: 2026-04-29T10:20:00+08:00
 updated_at: 2026-04-29T10:30:00+08:00
 ---
@@ -277,16 +303,43 @@ updated_at: 2026-04-29T10:30:00+08:00
 title: ContextFS 存储设计原则
 tags: [architecture, context-storage]
 overview: 综合用户讨论、OpenViking 参考和 MindClaw 本地优先约束后形成的存储设计原则。
-source: derived
+origin: derived
 derived:
   method: synthesis
   from:
-    - mc://source/main/web/openviking-storage.md
+    - mc://resource/main/web/openviking-storage.md
     - mc://agent/main/evolution/evo_20260429_003.md
 ---
 ```
 
 `derived` 表示内容来自整理、反思、总结、提炼或合并，不代表外部原文，也不代表 Agent 稳定记忆。
+
+### Frontmatter 引用链
+
+```mermaid
+flowchart TD
+    subgraph Raw["resources/pdf/paper.pdf"]
+        RF["PDF 二进制内容"]
+    end
+
+    subgraph Manifest["resources/manifests/ 或同目录"]
+        MF["manifest / metadata<br/>checksum · captured_at"]
+    end
+
+    subgraph Inbox["inbox/imports/paper-parse.md"]
+        IE["---<br/>origin: external<br/>external:<br/>  kind: pdf<br/>  raw_ref: mc://resource/main/pdf/paper.pdf<br/>inbox:<br/>  type: parse_result<br/>  resource_kind: pdf<br/>refs:<br/>  - mc://resource/main/pdf/paper.pdf<br/>---<br/>正文（解析内容）"]
+    end
+
+    subgraph Knowledge["notes/paper-summary.md"]
+        K["---<br/>origin: derived<br/>derived:<br/>  from:<br/>    - mc://resource/main/pdf/paper.pdf<br/>refs:<br/>  - mc://resource/main/pdf/paper.pdf<br/>---"]
+    end
+
+    Raw -->|"external.raw_ref"| Inbox
+    Manifest -->|"ResourceIndex 映射"| Inbox
+    Inbox -->|"refs 可追溯"| Raw
+    Inbox -->|"用户审核"| Knowledge
+    Knowledge -->|"derived.from · refs"| Raw
+```
 
 ---
 
@@ -296,7 +349,7 @@ MindClaw 的分层加载基于 Markdown 和 ContextIndex，而不是隐藏的上
 
 | 层级 | MindClaw 载体 | 作用 | 读取成本 |
 |------|---------------|------|----------|
-| L0 索引层 | `context_index` 中的 path、title、tags、source、asset kind、status、updated_at | 快速过滤、排序、权限判断 | 不读正文 |
+| L0 索引层 | `context_index` 中的 path、title、tags、origin、asset kind、status、updated_at | 快速过滤、排序、权限判断 | 不读正文 |
 | L1 概览层 | Frontmatter `overview`、Inbox 解析摘要、目录概览缓存 | 判断是否需要打开正文，构建轻量上下文 | 读少量文本 |
 | L2 正文层 | Markdown body、原始资源、会话归档正文 | 承载完整论证、证据、案例、反例和执行细节 | 按需读取 |
 
@@ -306,6 +359,26 @@ MindClaw 的分层加载基于 Markdown 和 ContextIndex，而不是隐藏的上
 - 大型外部资料的解析摘要先进入 Inbox；目录级或章节级 L1 缓存可删除、可重建，不替代用户可审阅 Markdown。
 - Agent 资产的 L1 必须来自 Frontmatter `overview` 或审核后的正文摘要，不能只依赖向量结果。
 - ContextPipeline 默认只注入 L0/L1；L2 需要明确相关性或用户打开当前文档后才加载。
+
+```mermaid
+flowchart TB
+    subgraph L0["L0 索引层 — 不读正文"]
+        L0_fields["ContextIndex 字段<br/>uri · title · tags · origin · updated_at"]
+    end
+
+    subgraph L1["L1 概览层 — 读少量文本"]
+        L1_overview["Frontmatter overview（人工撰写）<br/>外部资料解析摘要（inbox/imports）<br/>可删除缓存（.mindclaw/cache/）"]
+    end
+
+    subgraph L2["L2 正文层 — 按需读取"]
+        L2_md["Vault Markdown 正文"]
+        L2_raw["resources/ 原始资源"]
+        L2_archive["agent/sessions/ 会话归档"]
+    end
+
+    L0 -->|"相关性成立"| L1
+    L1 -->|"预算允许"| L2
+```
 
 ---
 
@@ -318,13 +391,13 @@ ContextIndex 是 Vault 级 SQLite 派生索引，统一承载文档级检索字�
 | 字段 | 说明 |
 |------|------|
 | `uri` | ContextURI，索引主键 |
-| `space` | `vault` / `source` / `inbox` / `agent` |
+| `space` | `vault` / `resource` / `inbox` / `agent` |
 | `path` | Vault 相对路径 |
 | `title` | 标题 |
 | `tags` | JSON 数组 |
 | `overview` | L1 概览 |
-| `source` | `user` / `external` / `agent` / `derived` / `system` |
-| `asset_kind` | Agent 资产或来源资产类型，普通笔记可为空 |
+| `origin` | 创作来源：`user` / `external` / `agent` / `derived` / `system` |
+| `asset_kind` | Agent 资产或资源资产类型，普通笔记可为空 |
 | `status` | 生命周期状态，普通笔记可为空 |
 | `owner` | `user` / `agent` / `shared`，仅 Agent 资产使用 |
 | `updated_at` | 文件更新时间或 Frontmatter 更新时间 |
@@ -333,7 +406,7 @@ ContextIndex 是 Vault 级 SQLite 派生索引，统一承载文档级检索字�
 
 - `checklist_index`：Markdown checklist 的行级索引。
 - `private_index`：Private 工作域内部搜索索引，Agent 不可访问。
-- `source_index`：外部原始资源、来源 manifest 与 Inbox 解析产物的映射索引。
+- `resource_index`：外部原始资源、资源清单与 Inbox 解析产物的映射索引。
 - `review_queue_index`：基于 Inbox 审核型条目的队列排序、优先级和未处理状态缓存。
 - `evolution_timeline_index`：演化记录时间线缓存。
 - `semantic_cache`：可选摘要、embedding 或 rerank 缓存，不保存正文真相。
@@ -350,20 +423,58 @@ ContextIndex 可以使用 SQLite FTS 和可选向量引用增强召回，但不�
 2. ContextStore 校验 ContextURI 和 PathGuard。
 3. ContextFS 使用 temp + rename 原子写入文件。
 4. ContextStore 解析 Frontmatter，更新 ContextIndex。
-5. 若文档过大或来源为外部资料，RuntimeStore 排队生成 L1 缓存或语义缓存。
+5. 若文档过大或 origin 为 external，RuntimeStore 排队生成 L1 缓存或语义缓存。
 
 ### 外部资料导入
 
-1. SourceImportService 保存原始资源、HTML 快照、URL 和 metadata 到 `sources/`。
+1. ResourceImportService 保存原始资源、HTML 快照、URL 和 metadata 到 `resources/`。
 2. Parser 只做格式解析和结构化拆分，不在解析阶段写长期判断。
-3. 解析后的 Markdown 写入 `inbox/imports/`，Frontmatter 标记 `source: external` 和 `inbox.type: parse_result`。
-4. ContextIndex 索引 Inbox 解析产物，SourceIndex 记录原始来源与 Inbox 条目的映射。
+3. 解析后的 Markdown 写入 `inbox/imports/`，Frontmatter 标记 `origin: external` 和 `inbox.type: parse_result`。
+4. ContextIndex 索引 Inbox 解析产物，ResourceIndex 记录原始来源与 Inbox 条目的映射。
 5. 用户确认有复用价值时，NoteService 按用户选择、主题目录、`tags` 或 Vault 配置规则保存为共有知识，并让 Inbox 条目保留目标引用；没有明确目标或用户选择归档时，Inbox 条目进入 `inbox/archive/`。
+
+```mermaid
+flowchart LR
+    subgraph Raw["resources/ 原始资源"]
+        direction TB
+        S_web["web/<br/>URL · HTML快照"]
+        S_pdf["pdf/<br/>PDF原文"]
+        S_files["files/<br/>文档·图片·音视频"]
+        S_manifest["manifests/<br/>资源清单·checksum"]
+    end
+
+    subgraph Parse["Parser 仅格式解析"]
+        P["不写长期判断"]
+    end
+
+    subgraph Inbox["inbox/ 待处理"]
+        I_imports["imports/<br/>解析结果 Markdown<br/>origin: external"]
+    end
+
+    subgraph Index["索引层"]
+        CI["context_index<br/>L0 索引"]
+        SI["resource_index<br/>原始资源 ↔ Inbox 映射"]
+    end
+
+    subgraph Vault["Vault 共有知识"]
+        V_knowledge["*.md<br/>审核后保存"]
+    end
+
+    S_web --> P
+    S_pdf --> P
+    S_files --> P
+    S_manifest --> SI
+    P --> I_imports
+    I_imports --> CI
+    I_imports --> SI
+    I_imports -->|"审核确认"| V_knowledge
+    I_imports -->|"无明确去向"| I_archive["inbox/archive/"]
+```
 
 ### Agent 候选与演化资产写入
 
 1. ReviewService 生成观察、记忆建议或经验候选时，先写入 `inbox/review/`。
-2. Frontmatter 使用 `source: agent` 和 `inbox` 扩展表达候选类型、审核状态和证据。
+2. Frontmatter 使用 `origin: agent` 和 `inbox` 扩展表达候选类型、审核状态和证据。
 3. 用户确认后，MemoryService、NoteService 或 EvolutionService 将结果写入 `agent/` 或 Vault；共有知识由 NoteService 解析保存位置。
 4. 原 Inbox 条目记录已确认记忆、演化记录或知识笔记引用，并从默认待处理队列移除；没有后续目标或用户选择关闭时进入 `inbox/archive/`。
 5. `agent/` 只保存确认后或需要长期审计的受管 Markdown。
@@ -385,10 +496,10 @@ ContextIndex 可以使用 SQLite FTS 和可选向量引用增强召回，但不�
 
 ### 索引重建
 
-1. 扫描 Vault 下允许索引的 Markdown、Inbox 条目和 `sources/` 原始资源。
+1. 扫描 Vault 下允许索引的 Markdown、Inbox 条目和 `resources/` 原始资源。
 2. 排除 `.obsidian/`、`.mindclaw/cache/`、`private/` 等目录。
 3. 解析通用 Frontmatter、来源扩展、Agent 资产扩展和 checklist。
-4. 重建 ContextIndex、SourceIndex、ChecklistIndex、ReviewQueueIndex 和 EvolutionTimelineIndex。
+4. 重建 ContextIndex、ResourceIndex、ChecklistIndex、ReviewQueueIndex 和 EvolutionTimelineIndex。
 5. 语义缓存可异步重建；重建期间不影响 Markdown 读取。
 
 ---
@@ -403,7 +514,7 @@ ContextIndex 可以使用 SQLite FTS 和可选向量引用增强召回，但不�
 | Private 是否进入 ContextIndex？ | 否，使用独立 Private 索引 | 在同表里用 visibility 过滤 | Agent 不可见边界必须用后端结构隔离，不能只靠查询条件 |
 | 是否必需向量数据库？ | 否，MVP 以 SQLite FTS、Frontmatter 和按需正文加载为主 | 默认引入独立向量库 | 本地桌面 MVP 应降低部署复杂度；向量可以作为可重建缓存扩展 |
 | 会话是否全部写 Markdown？ | 否，活跃 turn 留在 RuntimeStore，提交后生成可审阅归档摘要 | 每条消息都实时写 Vault Markdown | 实时对话需要恢复和性能；长期审计只需要可引用归档和证据链 |
-| 外部资料解析结果存在哪里？ | Inbox | 写回 `sources/` 或直接写入 Vault | `sources/` 只保存原始来源；解析结果是待处理产物，需要用户审核 |
+| 外部资源解析结果存在哪里？ | Inbox | 写回 `resources/` 或直接写入 Vault | `resources/` 只保存原始资源；解析结果是待处理产物，需要用户审核 |
 | Agent 候选存在哪里？ | Inbox | 直接写入 Agent 长期资产目录 | 候选尚未确认，先进入统一待处理源，避免污染长期 Agent 资产 |
 | Inbox 条目处理后如何落位？ | 优先写入目标位置，Archive 作为兜底 | 默认归档或原地保留 | 共有知识需要进入合适主题位置；Archive 只承接无明确去向、已拒绝或用户选择关闭的条目 |
 | L1 缓存是否是真相源？ | 否，可删除可重建 | 将生成摘要作为唯一概览 | 自动摘要会过时或出错，用户确认的 `overview` 优先 |

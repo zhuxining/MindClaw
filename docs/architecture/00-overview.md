@@ -15,8 +15,8 @@ MindClaw 是一个以 Markdown 共有知识库为真相源、以桌面工作站�
 **核心约束**：
 
 1. 所有业务逻辑在 Rust Services 层执行，前端保持薄客户端。
-2. Markdown + Frontmatter 和原始资源文件是真相源：已确认知识在 Vault，待处理产物在 Inbox，外部原文在 sources，Agent 长期资产在 `agent/`；SQLite 只存储运行状态、会话、ContextIndex 和查询缓存。
-3. Private 路径不进入 Agent 上下文、不生成记忆、不进入共有知识索引。
+2. Markdown + Frontmatter 和原始资源文件是真相源：已确认知识在 Vault，待处理产物在 Inbox，外部原文在 `resources/`，Agent 长期资产在 `agent/`；SQLite 只存储运行状态、会话、ContextIndex 和查询缓存。
+3. `private/` 是 Vault 下的普通文件夹，不作为独立存储空间或数据库索引；该路径不进入 Agent 上下文、不生成记忆、不进入共有知识索引。
 4. 同一 `session_key` 的消息串行处理。
 5. `AgentRunner` 不持有 Session、MessageBus、审核状态或持久化依赖。
 6. 旁路观察、记忆更新建议、外部解析结果和经验教训候选必须先进入 Inbox 审核流程，不能直接写入稳定记忆或共有知识。
@@ -54,7 +54,7 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
 | 上下文如何统一引用？ | 使用 ContextURI + ContextFS | 各模块传递文件路径、session id 和表主键 | 记忆、演化、外部资料和会话证据需要稳定交叉引用 |
 | 待处理 Markdown 产物存在哪里？ | Inbox | 分散写入 `resources/` 或 `agent/` | Inbox 是统一待处理源，用户可以集中审核、分流；归档只作为无明确去向时的兜底 |
 | Observability 与 Evolution 是否合并？ | 否，运行观测和业务审计分离 | 把演化记录当日志 | 运行日志服务排障，演化记录影响长期行为，可信要求不同 |
-| Private 隔离在哪里强制？ | Rust PathGuard 和上下文策略双重隔离 | 仅靠前端隐藏入口 | Agent 不可见边界必须由后端强制 |
+| Private 隔离在哪里强制？ | Rust PathGuard 和上下文策略双重隔离 | 专用数据库索引或仅靠前端隐藏入口 | Private 只是 Vault 文件夹，但 Agent 不可见边界必须由后端强制 |
 
 ---
 
@@ -108,7 +108,7 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
 
 **EvolutionLog**：记忆或策略变化的 Markdown 审计记录，解释变化原因和证据来源。
 
-**LessonCandidate**：Inbox 中可复用经验教训的 Markdown 待审核候选，确认后可以保存为共有知识或归档为 Agent 经验。
+**LessonCandidate**：Inbox 中可复用经验教训的 Markdown 待审核候选，确认后可以保存为共有知识或转化为 Agent Memory。
 
 **KnowledgeNote**：已确认共有知识，正文保存在 Markdown Vault 中，可被人和 Agent 共同引用。
 
@@ -119,6 +119,7 @@ erDiagram
     REVIEW_ITEM ||--o| MEMORY_RECORD : proposes_update
     REVIEW_ITEM ||--o| LESSON_CANDIDATE : proposes_lesson
     MEMORY_RECORD ||--o{ EVOLUTION_LOG : changes
+    LESSON_CANDIDATE ||--o| MEMORY_RECORD : confirms_as
     LESSON_CANDIDATE ||--o| KNOWLEDGE_NOTE : saves_as
     KNOWLEDGE_NOTE ||--o{ MEMORY_RECORD : referenced_by
     AGENT_SESSION ||--o{ EVOLUTION_LOG : evidences
@@ -177,7 +178,7 @@ flowchart LR
 
 | 边界 | 强制点 | 说明 |
 |------|--------|------|
-| Private Vault | Rust PathGuard | 拒绝 Agent 读取、索引、记忆生成和知识沉淀 |
+| `private/` 文件夹 | Rust PathGuard | 拒绝 Agent 读取、索引、记忆生成和知识沉淀 |
 | Provider Secret | OS Keychain | API Key 不以明文落盘 |
 | Tool 权限 | AgentProfile + Tool filtering | 工具可用性由定义层和编排层统一收敛 |
 | 文件写入 | Storage PathGuard | Agent 文件写操作只允许受控工作区路径 |

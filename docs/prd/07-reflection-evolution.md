@@ -25,7 +25,7 @@ Then 页面按类型列出观察候选、记忆更新建议、经验教训候选
 
 Given 用户点击某条候选
 When 详情加载完成
-Then 右侧面板显示该候选关联的 Session、Daily、Inbox、Vault 或 sources 来源
+Then 右侧面板显示该候选关联的 Session、Daily、Inbox、Vault 或 resources 来源
 
 - [ ] 观察候选以假设状态显示。
 - [ ] 观察候选不能直接写入共有知识。
@@ -54,6 +54,10 @@ Then 回顾视图显示当日变化摘要和观察候选
 Given 用户确认一条记忆更新建议
 When 操作完成
 Then 该建议进入 Agent Memory，生成演化记录 Markdown，原 Inbox 条目记录目标引用并移出默认队列
+
+Given 用户审核观察、记忆建议或经验候选
+When 用户调整置信度并确认
+Then 系统把 `confidence` 写入目标 Markdown Frontmatter，并在演化记录中保留本次调整来源
 
 Given 用户拒绝一条观察候选
 When 操作完成
@@ -120,16 +124,20 @@ Then 页面显示无来源状态，并禁止生成经验教训候选
 **验收标准**：
 
 Given 演化记录、记忆或回顾结果可生成经验教训
-When 用户点击 Create Lesson
+When 用户点击 Create Candidate
 Then 系统在 Inbox 中生成经验教训候选 Markdown，包含适用场景、规则、反例、触发条件和来源记录
 
 Given 经验教训候选已打开
-When 用户编辑候选并点击 Confirm
-Then 候选显示为已审核确认，并显示 Save as Knowledge 和 Archive as Agent Lesson 入口
+When 用户编辑候选并点击 Confirm Review
+Then 候选显示为已审核确认，并显示 Save as Memory 和 Save as Knowledge 入口
+
+Given 已确认经验教训候选
+When 用户点击 Save as Memory
+Then 系统写入 Agent Memory，保留适用场景、触发条件、短摘要和来源引用，并生成对应演化记录
 
 Given 已确认经验教训候选
 When 用户点击 Save as Knowledge
-Then 中央内容区打开 Vault 知识草稿，包含标题、`tags`、`overview`、正文、来源链接和目标位置选择
+Then 中央内容区打开 Vault 知识草稿，包含标题、`tags`、`overview`、`confidence`、正文、来源链接和目标位置选择
 
 Given 知识草稿保存到 Vault
 When 保存完成
@@ -137,7 +145,7 @@ Then 草稿保存到所选或规则匹配的 Vault 位置，原 Inbox 候选记�
 
 - [ ] 保存为知识后，Agent Memory 只保留触发条件、短摘要和知识文档引用。
 - [ ] 用户拒绝的经验教训候选不出现在默认回顾队列。
-- [ ] 没有目标位置或用户选择不沉淀时，候选可以归档为 Agent Lesson 或 Inbox 历史记录。
+- [ ] 没有目标位置或用户选择不沉淀时，候选保留为 Inbox 历史记录，不写入 Agent 长期资产目录。
 - [ ] 被拒绝候选仍可通过 Inbox 归档或历史筛选查看。
 
 **优先级**：P1
@@ -150,14 +158,14 @@ Then 草稿保存到所选或规则匹配的 Vault 位置，原 Inbox 候选记�
 - Session 回顾与 Daily 回顾。
 - 周期回顾的模式候选展示。
 - 演化记录 Markdown 生成、查看、筛选、备注。
-- Inbox 经验教训候选 Markdown 审核、Agent 经验归档与共有知识草稿生成。
+- Inbox 经验教训候选 Markdown 审核、Agent Memory 转化与共有知识草稿生成。
 
 **Out of Scope**：
 
 - 全自动写入共有知识：共有知识需要用户确认，避免错误经验扩散。
 - 对 Private 内容做观察和回顾：该行为违反 Private 隔离边界。
 - 将经验教训正文复制到 Agent Memory：Agent Memory 只保留调用索引和知识引用。
-- 复杂评分体系：MVP 只展示置信状态，不引入多维分数维护。
+- 复杂评分体系：MVP 只维护单一 `confidence`，不引入多维分数维护。
 - 团队协作审批流：当前产品定位为个人桌面工作站。
 
 ## 非功能需求

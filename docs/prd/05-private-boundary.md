@@ -7,9 +7,9 @@
 
 ## 背景与目标
 
-**背景**：MindClaw 需要同时支持共享知识共建和个人私密记录。Private 工作域承载不进入 Agent 上下文、不参与记忆、不参与共有知识索引的内容，并在界面上阻断相关操作。
+**背景**：MindClaw 需要同时支持共享知识共建和个人私密记录。Private 不是独立数据库、独立 Vault 或独立 ContextURI 类型，而是当前 Vault 下的 `private/` 文件夹。该文件夹内容不进入 Agent 上下文、不参与记忆、不参与共有知识索引，并在界面上阻断相关操作。
 
-**目标**：定义 Private 的打开、编辑、搜索、隔离提示、误操作防护和 Agent 操作禁用状态。
+**目标**：定义 Private 文件夹的打开、编辑、文件夹内搜索、隔离提示、误操作防护和 Agent 操作禁用状态。
 
 ## 功能描述
 
@@ -29,6 +29,7 @@ Then 系统切换到 Private 工作域
 
 - [ ] Private 文件树只显示 Private 范围内的内容。
 - [ ] 当前打开的私密文件在左侧文件树中显示选中态。
+- [ ] Private 文件路径位于当前 Vault 的 `private/` 文件夹下，不显示为独立 Vault 或独立数据库空间。
 - [ ] Private 工作域标题显示“Private”。
 
 **优先级**：P0
@@ -54,7 +55,7 @@ When 编辑器收到失败结果
 Then 状态栏显示保存失败，并保留未保存内容
 
 - [ ] Private 笔记支持与 Vault 笔记相同的基础 Markdown 编辑能力。
-- [ ] Private 笔记可包含 `tags` 和 `overview`，但这些字段只服务 Private 内部浏览。
+- [ ] Private 笔记可包含 `tags`、`overview` 和 `confidence`，但这些字段只服务文件夹内浏览，不进入共有知识索引或 Agent 召回。
 - [ ] Private 内容不显示 Add Context、Send to Agent、Create Memory、Save as Knowledge 操作。
 
 **优先级**：P0
@@ -63,7 +64,7 @@ Then 状态栏显示保存失败，并保留未保存内容
 
 ### US-03 搜索 Private 内容
 
-作为用户，我希望在 Private 工作域内部搜索私密笔记，以便快速找到个人内容。
+作为用户，我希望在 `private/` 文件夹内部搜索私密笔记，以便快速找到个人内容。
 
 **验收标准**：
 
@@ -75,8 +76,9 @@ Given 搜索结果列表已显示
 When 用户点击结果项
 Then 中央内容区打开对应 Private 笔记
 
-- [ ] Private 搜索结果显示标题、路径、`tags`、`overview`。
+- [ ] Private 搜索结果显示标题、路径、`tags`、`overview` 和 `confidence`。
 - [ ] Private 搜索结果不出现在 Vault 搜索结果中。
+- [ ] Private 搜索不依赖独立数据库索引；它只是在 `private/` 文件夹范围内执行本地文件搜索或即时解析。
 - [ ] 无结果时显示空状态和清除搜索入口。
 
 **优先级**：P1
@@ -108,7 +110,7 @@ Then 系统显示确认对话框，说明移动后该内容会进入共享知识
 **In Scope**：
 
 - Private 工作域入口、文件树、Markdown 编辑、保存。
-- Private 内部搜索。
+- `private/` 文件夹范围内搜索。
 - Private 内容对 Agent 操作的界面阻断。
 - Private 移动到 Vault 前的确认。
 

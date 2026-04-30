@@ -122,7 +122,7 @@ Then Agent 停止执行该建议，并在 Session 中记录用户拒绝结果
 
 Given Agent 回复中包含可沉淀内容
 When 用户点击 Create Draft
-Then 中央内容区打开知识草稿 Tab，草稿包含标题、`tags`、`overview` 和正文
+Then 中央内容区打开知识草稿 Tab，草稿包含标题、`tags`、`overview`、`confidence` 和正文
 
 Given 草稿已打开
 When 用户点击保存到 Vault
@@ -133,7 +133,7 @@ When 草稿未保存
 Then 系统提示保存、放弃或返回编辑
 
 - [ ] 草稿默认不进入共有知识，保存后才成为 Vault 内容。
-- [ ] 草稿保存前可编辑标题、`tags`、`overview` 和正文。
+- [ ] 草稿保存前可编辑标题、`tags`、`overview`、`confidence` 和正文。
 - [ ] 草稿来源显示关联 Session。
 
 **优先级**：P1

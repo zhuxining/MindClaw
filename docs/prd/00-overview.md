@@ -9,11 +9,11 @@ MindClaw 桌面端是一个**人机知识共建与 Agent 演化工作站**。用
 ## 产品原则
 
 - Markdown + Frontmatter 是知识内容、Inbox 待处理产物与 Agent 演化资产的真相源；索引层只作为可重建查询和运行时加速层。
-- Frontmatter 的 `tags` 与 `overview` 是知识分层加载入口，服务人类检索与 Agent 预读。
+- Frontmatter 的 `tags`、`overview` 与 `confidence` 是知识分层加载入口，服务人类检索、Agent 预读和召回重排。
 - 共有知识可以按主题、项目或用户规则组织；Inbox 处理结果优先进入合适位置，Archive 只作为无明确去向时的兜底。
 - Agent 记忆、旁路观察、记忆更新建议、演化记录和经验教训候选都必须可查看、可纠偏、可迁移。
 - 旁路观察、轻量回顾、外部解析结果和经验教训候选必须先进入 Inbox 待处理流程，不能绕过审核直接写入共有知识。
-- Private 内容不进入 Agent 上下文、不参与记忆、不参与共有知识索引。
+- Private 是当前 Vault 下的 `private/` 文件夹，不是独立存储空间；其内容不进入 Agent 上下文、不参与记忆、不参与共有知识索引。
 - 任务以 Markdown checklist 表达，不作为独立一等业务对象。
 
 ## MVP Ribbon 入口

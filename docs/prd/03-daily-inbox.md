@@ -108,7 +108,7 @@ Then 条目内容追加到当前日期 Daily Note，并显示处理去向
 
 Given Inbox 条目已打开
 When 用户选择 Create Knowledge Draft
-Then 中央内容区打开知识草稿，草稿包含可编辑标题、`tags`、`overview` 和正文
+Then 中央内容区打开知识草稿，草稿包含可编辑标题、`tags`、`overview`、`confidence` 和正文
 
 Given 用户保存知识草稿
 When 用户选择主题位置或存在匹配用户规则
@@ -123,8 +123,8 @@ When 用户点击 Confirm Memory
 Then 该建议写入 Agent Memory，并生成演化记录入口
 
 Given Inbox 条目是经验教训候选
-When 用户点击 Confirm Lesson
-Then 该条目显示 Save as Knowledge 入口
+When 用户点击 Confirm Review
+Then 该条目可以保存为 Agent Memory，或显示 Save as Knowledge 入口
 
 Given Inbox 条目已打开
 When 用户选择 Send to Agent

@@ -126,7 +126,8 @@ sequenceDiagram
     Review-->>User: ReviewItem
     User->>Review: confirm / reject
     Review->>Memory: apply confirmed proposal
-    Review->>Vault: save confirmed lesson as knowledge
+    Review->>Memory: save confirmed lesson as memory
+    Review->>Vault: optional save lesson as knowledge
 ```
 
 旁路规则：

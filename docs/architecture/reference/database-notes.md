@@ -1,13 +1,38 @@
 > **Status**: `active`
 >
-> 本文档描述目标 SQLite 索引、运行时表和并发模型。SQLite 只保存索引、缓存和运行时状态；内容真相源见 [../06-storage.md](../06-storage.md)。
+> 本文档描述目标 SQLite 表、运行时表和并发模型。SQLite 只保存运行恢复、查询加速、可删除缓存和后台任务状态；内容真相源见 [../06-storage.md](../06-storage.md)。
 
 # 数据库说明
 
 MindClaw 使用双 SQLite 数据库架构：
 
-- **全局 DB**（`~/.config/mindclaw/mindclaw.db`）：保存跨 vault 的活跃会话和 turn 运行记录。
-- **Vault DB**（`{vault}/.mindclaw/mindclaw.db`）：保存当前 vault 的 ContextIndex、PrivateIndex、ChecklistIndex、Inbox 队列视图、来源映射、查询缓存、后台队列和运行时锁。
+- **Global DB**（`~/.config/mindclaw/mindclaw.db`）：保存跨 Vault 的活跃会话运行时数据。
+- **Vault DB**（`{vault}/.mindclaw/mindclaw.db`）：保存当前 Vault 的可重建索引、全文搜索、可选语义缓存和后台任务状态。
+
+长期内容不写入 SQLite 正文。知识、Daily、Inbox、Agent Memory 和 EvolutionLog 都以 Markdown + Frontmatter 为真相源；`resources/` 只保存原始资源和 manifest；`private/` 是 Vault 文件夹，不进入数据库索引。
+
+---
+
+## 当前代码状态
+
+当前 Rust migration 仍是旧表结构：
+
+- Global migration 已包含 `sessions`、`turns`。
+- Vault migration 仍包含 `tasks_index`、`notes_index`、`memories_index`。
+
+本文档描述目标数据库设计。本轮只更新文档，不修改 `src-tauri/src/storage/migrations/` 或 Rust 存储代码；代码迁移需要单独实现计划。
+
+---
+
+## 设计原则
+
+**Markdown 是真相源**：凡是需要人类审阅、迁移、纠偏或长期保留的内容都写入 Markdown 或原始资源文件。
+
+**SQLite 是派生层**：业务索引表必须能从 Vault Markdown、Inbox Markdown、Agent Markdown、resource manifest 和文件路径重建。
+
+**运行状态单独保存**：活跃会话 turn、后台任务、锁和游标可以写入 SQLite，因为它们用于恢复或调度，不是长期知识事实。
+
+**少表优先**：除 `context_index`、`context_fts`、`checklist_index` 和运行时表外，不为 resource、review queue、evolution timeline 建独立目标表；这些视图通过 `context_index` 查询派生。
 
 ---
 
@@ -17,11 +42,13 @@ MindClaw 使用双 SQLite 数据库架构：
 - **忙等待超时**：`PRAGMA busy_timeout = 5000`，5 秒超时后返回错误。
 - **外键约束**：`PRAGMA foreign_keys = ON`。
 - **连接模型**：每个 DB 使用 `Arc<Mutex<Connection>>`，Tokio 异步运行时通过 Mutex 序列化访问。
-- **重建策略**：业务索引表必须可从 Vault Markdown、Inbox Markdown 和原始资源重建；运行时表不可重建。
+- **重建策略**：可重建表允许删除后重建；运行时表不可重建，但异常退出后可以清理或恢复。
 
 ---
 
-## 全局 DB 表清单
+## Global DB
+
+Global DB 只保存跨 Vault 的活跃会话恢复数据。
 
 | 表名 | 写入方 | 说明 | 可重建 |
 |------|--------|------|--------|
@@ -49,7 +76,7 @@ MindClaw 使用双 SQLite 数据库架构：
 | 列名 | 类型 | 约束 | 说明 |
 |------|------|------|------|
 | `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 回合自增 ID |
-| `session_id` | TEXT | NOT NULL, FK → sessions(id) | 所属会话 |
+| `session_id` | TEXT | NOT NULL, FK -> sessions(id) | 所属会话 |
 | `user_message` | TEXT | NOT NULL | 用户消息 JSON |
 | `assistant_message` | TEXT | | Agent 响应 JSON |
 | `tool_trace` | TEXT | NOT NULL DEFAULT '[]' | 工具执行轨迹 JSON |
@@ -60,59 +87,67 @@ MindClaw 使用双 SQLite 数据库架构：
 
 - `idx_turns_session`
 
-活跃 turn 是运行时恢复数据；进入长期审计或回顾链路时，由 Session / Review 相关服务生成 `agent/sessions/*.md` 会话归档摘要，归档摘要进入 ContextIndex。
+活跃 turn 用于会话恢复和证据追溯。进入长期审计或回顾链路时，EvolutionLog 通过 `refs` 引用相关 session / turn / tool trace，并在正文中记录必要证据摘要；Vault 不再生成完整会话归档 Markdown。
 
 ---
 
-## Vault DB 表清单
+## Vault DB
+
+Vault DB 第一版只保留必要索引、可选缓存和运行时表。
 
 | 表名 | 写入方 | 说明 | 可重建 |
 |------|--------|------|--------|
-| `context_index` | ContextStore | Vault、resource、inbox、agent 空间的文档级统一索引 | 是 |
-| `context_fts` | ContextStore | 文档级全文搜索索引 | 是 |
-| `resource_index` | ResourceImportService | 原始资源与 Inbox 解析条目映射 | 是 |
+| `context_index` | ContextStore | 文档级统一索引，覆盖 Vault、Inbox、Agent 资产和 resource manifest | 是 |
+| `context_fts` | ContextStore | 本地全文搜索索引 | 是 |
 | `checklist_index` | ChecklistService | Markdown checklist 行级索引 | 是 |
-| `review_queue_index` | ReviewService | 基于 Inbox 审核条目的回顾队列排序和优先级缓存 | 是 |
-| `evolution_timeline_index` | EvolutionService | 演化记录时间线缓存 | 是 |
-| `private_index` | PrivateService | Private 工作域内部搜索索引 | 是 |
-| `semantic_cache` | ContextStore | 摘要、embedding 引用和 rerank 缓存 | 是 |
+| `semantic_cache` | ContextStore | 可选摘要、embedding 引用和 rerank 缓存 | 是，可删除 |
 | `runtime_locks` | Runtime / Services | 文件写入锁、任务锁 | 否 |
-| `background_jobs` | Runtime / Services | 后台解析、索引、回顾任务游标 | 否 |
+| `background_jobs` | Runtime / Services | 解析、索引、缓存生成、后台回顾任务游标 | 否 |
 
----
+### context_index
 
-## context_index
-
-`context_index` 是文档级统一索引。它不保存正文真相，只保存从 Markdown Frontmatter、文件路径和受管资产状态派生出的检索字段。
+`context_index` 是 Vault 级文档索引。它不保存正文真相，只保存从 Frontmatter、文件路径、manifest 和受管资产状态派生的 L0 / L1 检索字段。
 
 | 列名 | 类型 | 约束 | 说明 |
 |------|------|------|------|
 | `uri` | TEXT | PRIMARY KEY | ContextURI |
-| `space` | TEXT | NOT NULL CHECK | vault / source / inbox / agent |
-| `path` | TEXT | NOT NULL UNIQUE | Vault 相对路径 |
+| `space` | TEXT | NOT NULL CHECK | vault / resource / inbox / agent |
+| `path` | TEXT | NOT NULL UNIQUE | Vault 相对路径或 resource manifest 路径 |
 | `title` | TEXT | NOT NULL | 标题 |
 | `tags` | TEXT | NOT NULL DEFAULT '[]' | JSON 数组 |
 | `overview` | TEXT | NOT NULL DEFAULT '' | L1 概览 |
-| `source` | TEXT | NOT NULL CHECK | user / external / agent / derived / system |
+| `confidence` | REAL | NOT NULL DEFAULT 0.5 CHECK (`confidence` >= 0.0 AND `confidence` <= 1.0) | 0.0-1.0 置信度，从 Frontmatter 派生 |
+| `origin` | TEXT | NOT NULL CHECK | user / agent / external |
 | `asset_kind` | TEXT | | parse_result / memory_proposal / memory / evolution_log 等 |
 | `status` | TEXT | | draft / pending / processing / reviewed / confirmed / rejected / archived / deleted 等 |
-| `owner` | TEXT | | user / agent / shared |
+| `owner` | TEXT | | user / agent / shared；仅 Agent 资产或记忆相关条目使用 |
 | `updated_at` | TEXT | NOT NULL | 更新时间 |
 | `frontmatter_hash` | TEXT | NOT NULL | Frontmatter 哈希 |
-| `content_hash` | TEXT | | 正文或资源哈希 |
+| `content_hash` | TEXT | | 正文、manifest 或原始资源哈希 |
 
 **索引**：
 
 - `idx_context_space`
-- `idx_context_source`
+- `idx_context_origin`
+- `idx_context_confidence`
 - `idx_context_asset_kind`
 - `idx_context_status`
 - `idx_context_owner`
 - `idx_context_updated`
 
+以下能力不再建独立目标表，统一从 `context_index` 派生：
+
+| 能力 | 派生方式 |
+|------|----------|
+| Resource 映射 | `space = resource` 的 manifest、`refs` 和 `content_hash` |
+| Review Queue | `space = inbox` + `asset_kind` + `status` |
+| Evolution Timeline | `space = agent` + `asset_kind = evolution_log` + `updated_at` |
+| Agent Memory 列表 | `space = agent` + `asset_kind = memory` + `owner` |
+| Inbox 状态列表 | `space = inbox` + `status` + `updated_at` |
+
 ### context_fts
 
-`context_fts` 使用 SQLite FTS 保存标题、标签、概览和可选正文片段，用于本地搜索。它可以从 Markdown 和 ContextIndex 重建。
+`context_fts` 使用 SQLite FTS 保存搜索字段，用于本地搜索加速。它可以从 Markdown、manifest 和 `context_index` 重建。
 
 | 列名 | 说明 |
 |------|------|
@@ -122,27 +157,7 @@ MindClaw 使用双 SQLite 数据库架构：
 | `overview` | 概览 |
 | `body_excerpt` | 可重建正文片段 |
 
----
-
-## resource_index
-
-`resource_index` 保存外部资源的原始资源、资源清单和 Inbox 解析条目的映射关系。解析后的 Markdown 不写入 `resources/`。
-
-| 列名 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| `uri` | TEXT | PRIMARY KEY | 资源 ContextURI |
-| `resource_kind` | TEXT | NOT NULL | web / pdf / file / image / audio / video |
-| `original_uri` | TEXT | | 原始 URL 或导入前路径 |
-| `raw_path` | TEXT | | Vault 内原始资源路径 |
-| `manifest_path` | TEXT | | 来源 manifest 路径 |
-| `latest_inbox_uri` | TEXT | | 最新解析结果或导入摘要的 Inbox ContextURI |
-| `checksum` | TEXT | | 原始资源校验值 |
-| `parser` | TEXT | | 解析器名称 |
-| `captured_at` | TEXT | NOT NULL | 捕获时间 |
-
----
-
-## checklist_index
+### checklist_index
 
 Checklist 仍然是 Markdown checklist 的行级索引，不成为独立任务真相源。
 
@@ -153,7 +168,6 @@ Checklist 仍然是 Markdown checklist 的行级索引，不成为独立任务�
 | `status` | TEXT | NOT NULL CHECK | todo / done |
 | `priority` | TEXT | | low / medium / high |
 | `due_date` | TEXT | | YYYY-MM-DD |
-| `tags` | TEXT | NOT NULL DEFAULT '[]' | JSON 数组 |
 | `file_path` | TEXT | NOT NULL | Vault 相对路径 |
 | `line_number` | INTEGER | | 行号 |
 | `created` | TEXT | NOT NULL | 创建时间 |
@@ -165,82 +179,56 @@ Checklist 仍然是 Markdown checklist 的行级索引，不成为独立任务�
 - `idx_checklist_due_date`
 - `idx_checklist_updated`
 
----
+### semantic_cache
 
-## review_queue_index
+`semantic_cache` 是可选缓存，不是 MVP 必需表，不保存内容真相。
 
-`review_queue_index` 是回顾工作域的队列视图。审核状态真相源仍在对应 Inbox Markdown Frontmatter。
+| 字段 | 说明 |
+|------|------|
+| `uri` | ContextURI |
+| `cache_kind` | summary / embedding_ref / rerank_hint |
+| `cache_value` | 缓存值或外部向量引用 |
+| `source_hash` | 生成缓存时使用的源内容哈希 |
+| `updated_at` | 缓存更新时间 |
 
-| 列名 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| `uri` | TEXT | PRIMARY KEY | ReviewItem 对应 Inbox ContextURI |
-| `asset_kind` | TEXT | NOT NULL | observation / memory_proposal / lesson_candidate |
-| `status` | TEXT | NOT NULL | pending / processing / reviewed / rejected / archived |
-| `priority` | INTEGER | NOT NULL DEFAULT 0 | 队列排序权重 |
-| `updated_at` | TEXT | NOT NULL | 更新时间 |
+缓存失效或删除后，系统从 Markdown、manifest 和 `context_index` 重新生成。
 
-**索引**：
-
-- `idx_review_queue_kind`
-- `idx_review_queue_status`
-- `idx_review_queue_priority`
-
----
-
-## evolution_timeline_index
-
-`evolution_timeline_index` 是演化记录时间线缓存。记录正文和证据链在 `agent/evolution/*.md`。
-
-| 列名 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| `uri` | TEXT | PRIMARY KEY | EvolutionLog ContextURI |
-| `status` | TEXT | NOT NULL | active / archived |
-| `changed_asset_uri` | TEXT | | 被影响的记忆、Inbox 候选或知识 URI |
-| `updated_at` | TEXT | NOT NULL | 更新时间 |
-
----
-
-## private_index
-
-`private_index` 只服务 Private 工作域搜索。Agent Runtime、ContextPipeline、MemoryService、ReviewService 和 EvolutionService 不得访问该表。
-
-| 列名 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| `uri` | TEXT | PRIMARY KEY | Private ContextURI |
-| `path` | TEXT | NOT NULL UNIQUE | Private 相对路径 |
-| `title` | TEXT | NOT NULL | 标题 |
-| `tags` | TEXT | NOT NULL DEFAULT '[]' | JSON 数组 |
-| `overview` | TEXT | NOT NULL DEFAULT '' | 概览 |
-| `updated_at` | TEXT | NOT NULL | 更新时间 |
-
----
-
-## runtime_locks / background_jobs
+### runtime_locks / background_jobs
 
 运行时表不承载长期知识、记忆或审计事实。
 
 | 表名 | 说明 |
 |------|------|
 | `runtime_locks` | 文件写入、解析、索引、回顾任务的互斥锁 |
-| `background_jobs` | 外部资料解析、L1 缓存生成、索引重建、后台回顾任务游标 |
+| `background_jobs` | 外部资源解析、L1 缓存生成、索引重建、后台回顾任务游标 |
 
 ---
 
-## 归档策略
+## 不进入 SQLite 的内容
+
+| 内容 | 真相源 | 说明 |
+|------|--------|------|
+| 知识、项目笔记、Daily | Vault Markdown | `context_index` 只保存检索字段 |
+| Inbox 解析结果、草稿、候选 | `inbox/**/*.md` | 审核状态写在 Frontmatter |
+| Agent Memory | `agent/memory/*.md` | 数据库只保存索引字段 |
+| EvolutionLog | `agent/evolution/*.md` | 时间线从 `context_index` 派生 |
+| Agent 经验教训 | `agent/memory/*.md` | 作为 Memory 类型保存，不设独立 lessons 目录 |
+| 会话证据 | Global DB sessions / turns | EvolutionLog 通过 `refs` 引用，不设 Vault 会话归档 |
+| 外部原始资源 | `resources/` 原始文件和 manifest | manifest 可进入 `context_index` |
+| Private 内容 | `private/` Markdown | 不进入 `context_index`，不建立独立索引 |
+
+---
+
+## 保留策略
 
 | 数据类型 | 保留策略 | 说明 |
 |----------|----------|------|
-| Sessions / Turns | 永久保留，用户主动删除 | 活跃会话恢复数据 |
-| Session Archive | Vault Markdown | 会话进入回顾或审计后生成可迁移摘要 |
-| context_index | 可重建 | 从 Vault Markdown、Inbox Markdown、resources 和 agent 资产重建 |
-| context_fts | 可重建 | 从 ContextIndex 和 Markdown 重建 |
-| resource_index | 可重建 | 从 `resources/` manifest、原始文件和 Inbox 来源引用重建 |
-| checklist_index | 可重建 | 从 Markdown checklist 重建 |
-| review_queue_index | 可重建 | 从 `inbox/review/*.md` Frontmatter 重建 |
-| evolution_timeline_index | 可重建 | 从 `agent/evolution/*.md` 重建 |
-| private_index | 可重建 | 从 `private/` Markdown 重建 |
-| semantic_cache | 可删除 | 后台异步重建 |
-| runtime_locks / background_jobs | 不可重建 | 运行时状态，异常退出后可清理或恢复 |
+| `sessions` / `turns` | 永久保留，用户主动删除 | 活跃会话恢复数据 |
+| `context_index` | 可重建 | 从 Markdown、manifest 和文件路径重建 |
+| `context_fts` | 可重建 | 从 `context_index` 和 Markdown 正文片段重建 |
+| `checklist_index` | 可重建 | 从 Markdown checklist 重建 |
+| `semantic_cache` | 可删除 | 后台异步重建 |
+| `runtime_locks` / `background_jobs` | 不可重建 | 运行时状态，异常退出后可清理或恢复 |
 
 ---
 
@@ -248,7 +236,7 @@ Checklist 仍然是 Markdown checklist 的行级索引，不成为独立任务�
 
 | 文件 | 说明 |
 |------|------|
-| `src-tauri/src/storage/database/global.rs` | 全局 DB 打开与迁移 |
+| `src-tauri/src/storage/database/global.rs` | Global DB 打开与迁移 |
 | `src-tauri/src/storage/database/vault.rs` | Vault DB 打开与迁移 |
-| `src-tauri/src/storage/migrations/001_init.sql` | 全局 DB 迁移 |
-| `src-tauri/src/storage/migrations/vault_001_init.sql` | Vault DB 迁移 |
+| `src-tauri/src/storage/migrations/001_init.sql` | 当前 Global DB 迁移 |
+| `src-tauri/src/storage/migrations/vault_001_init.sql` | 当前 Vault DB 迁移，仍待迁移到本文档目标设计 |

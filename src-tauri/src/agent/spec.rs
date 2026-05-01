@@ -3,8 +3,9 @@
 //! 声明式执行配置与结构化执行结果
 //! 双层架构的核心数据类型
 
+use crate::agent::messages::ToolChoice;
+use crate::agent::messages::{ChatMessage, ToolSchema};
 use crate::agent::session::ToolTrace;
-use crate::providers::{ChatMessage, ToolSchema};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -73,6 +74,9 @@ pub struct AgentRunSpec {
     /// false：顺序执行
     pub parallel_tools: bool,
 
+    /// 工具选择策略
+    pub tool_choice: ToolChoice,
+
     /// 工具错误是否立即中止循环
     /// true：第一个工具错误立即中止
     /// false：错误作为消息返回，LLM 可重试（默认）
@@ -94,6 +98,7 @@ impl Default for AgentRunSpec {
             temperature: None,
             max_tokens: None,
             parallel_tools: true,
+            tool_choice: ToolChoice::Auto,
             fail_on_tool_error: false,
         }
     }
@@ -125,6 +130,7 @@ impl AgentRunSpec {
             temperature: None,
             max_tokens: None,
             parallel_tools: true,
+            tool_choice: ToolChoice::Auto,
             fail_on_tool_error: false,
         }
     }
@@ -150,6 +156,7 @@ impl AgentRunSpec {
             temperature: config.agent_temperature,
             max_tokens: config.agent_max_tokens,
             parallel_tools: true,
+            tool_choice: ToolChoice::Auto,
             fail_on_tool_error: false,
         }
     }
@@ -174,6 +181,7 @@ impl AgentRunSpec {
             temperature: Some(0.0), // 确定性输出
             max_tokens: Some(2000),
             parallel_tools: true,
+            tool_choice: ToolChoice::Auto,
             fail_on_tool_error: true, // 后台任务严格模式
         }
     }
@@ -193,6 +201,7 @@ impl AgentRunSpec {
             temperature: None,
             max_tokens: None,
             parallel_tools: false,
+            tool_choice: ToolChoice::Auto,
             fail_on_tool_error: true,
         }
     }

@@ -2,9 +2,9 @@
 //!
 //! 内存缓存 + SQLite 持久化。写操作先更新缓存再异步写 DB。
 
+use crate::agent::messages::ChatMessage;
 use crate::error::AppError;
 use crate::models::conversation::ConversationMode;
-use crate::providers::ChatMessage;
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};

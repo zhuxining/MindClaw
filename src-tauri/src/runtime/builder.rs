@@ -3,10 +3,10 @@
 //! 从配置文件加载两层配置（UserConfig + VaultConfig），合并为运行时 AppConfig，
 //! 打开双 DB（全局 DB + vault DB），初始化所有服务。
 
-use crate::agent::{AgentLoop, AgentRegistry, ModelRouter};
+use crate::agent::{AgentLoop, AgentRegistry, AgentRunner, ModelRouter};
 use crate::bus::MessageBus;
 use crate::error::AppResult;
-use crate::providers::{Provider, ProviderRegistry};
+use crate::providers::ProviderRegistry;
 use crate::runtime::config::{AppConfig, ConfigLoader};
 use crate::runtime::services::ServiceContainer;
 use crate::runtime::AppRuntime;
@@ -125,9 +125,16 @@ impl AppRuntimeBuilder {
         // 12. 创建 MessageBus
         let bus = Arc::new(MessageBus::new(config.bus_capacity));
 
-        // 13. 初始化 Provider / AgentRegistry / ModelRouter
-        let provider = init_provider(&config)?;
-        let agent_registry = Arc::new(AgentRegistry::bootstrap(&config, provider.model_id()));
+        // 13. 初始化 ProviderRegistry（Adapter 层）
+        let provider_registry = ProviderRegistry::new();
+        let agent_models = provider_registry.create_agent_models_from_env(&config)?;
+        let runner = Arc::new(AgentRunner::new(agent_models.clone()));
+
+        let agent_registry = Arc::new(AgentRegistry::bootstrap(
+            &config,
+            &agent_models.main_model_id,
+            &agent_models.light_model_id,
+        ));
         let model_router = Arc::new(ModelRouter::new());
 
         // 14. 初始化 AgentLoop
@@ -136,7 +143,7 @@ impl AppRuntimeBuilder {
                 config.clone(),
                 bus.clone(),
                 session_mgr.clone(),
-                provider,
+                Arc::clone(&runner),
                 agent_registry.clone(),
                 model_router.clone(),
             )
@@ -165,24 +172,4 @@ impl Default for AppRuntimeBuilder {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn init_provider(config: &AppConfig) -> AppResult<Arc<dyn Provider>> {
-    let registry = ProviderRegistry::new();
-    let provider = registry
-        .create_provider_from_env(&config.provider_id, config.model_id.as_deref())
-        .map_err(|e| {
-            crate::error::AppError::Provider(format!(
-                "failed to initialize {} provider: {}",
-                config.provider_id, e
-            ))
-        })?;
-
-    tracing::info!(
-        provider = %config.provider_id,
-        model = %provider.model_id(),
-        "provider_initialized"
-    );
-
-    Ok(provider)
 }

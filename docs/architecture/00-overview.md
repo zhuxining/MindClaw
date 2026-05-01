@@ -44,17 +44,19 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
 
 ## § 关键设计决策
 
-| 决策问题 | 选择 | 放弃的替代方案 | 理由 |
-|---------|------|--------------|------|
-| Agent 是否是运行时实体？ | 否，使用 `AgentProfile` | Agent 持有 provider/session/tools | 定义与状态分离更利于复用和权限控制 |
-| 编排与执行是否分层？ | 是，Loop / Runner 分离 | 单个大 Agent 对象包办全部 | turn 级和 run 级粒度不同，混在一起会导致职责失控 |
-| 旁路观察是否进入主调用链？ | 否，作为 Review & Evolution side path | 每次输入同步观察和沉淀 | 观察和沉淀不应拉长主响应链路 |
-| 经验教训正文存在哪里？ | Markdown Vault | Agent Memory 或 SQLite 正文 | 经验教训是共同知识，必须人类可读、可审阅、可修改 |
-| Agent 记忆如何持久化？ | 受管 Markdown + Frontmatter，ContextIndex 只建索引 | SQLite 结构化运行数据作为真相源 | 记忆影响长期行为，必须可审阅、可迁移、可人工纠偏 |
-| 上下文如何统一引用？ | 使用 ContextURI + ContextFS | 各模块传递文件路径、session id 和表主键 | 记忆、演化、外部资料和会话证据需要稳定交叉引用 |
-| 待处理 Markdown 产物存在哪里？ | Inbox | 分散写入 `resources/` 或 `agent/` | Inbox 是统一待处理源，用户可以集中审核、分流；归档只作为无明确去向时的兜底 |
-| Observability 与 Evolution 是否合并？ | 否，运行观测和业务审计分离 | 把演化记录当日志 | 运行日志服务排障，演化记录影响长期行为，可信要求不同 |
-| Private 隔离在哪里强制？ | Rust PathGuard 和上下文策略双重隔离 | 专用数据库索引或仅靠前端隐藏入口 | Private 只是 Vault 文件夹，但 Agent 不可见边界必须由后端强制 |
+| 决策问题                              | 选择                                               | 放弃的替代方案                          | 理由                                                                       |
+| ------------------------------------- | -------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
+| Agent 是否是运行时实体？              | 否，使用 `AgentProfile`                            | Agent 持有 provider/session/tools       | 定义与状态分离更利于复用和权限控制                                         |
+| 编排与执行是否分层？                  | 是，Loop / Runner 分离                             | 单个大 Agent 对象包办全部               | turn 级和 run 级粒度不同，混在一起会导致职责失控                           |
+| 旁路观察是否进入主调用链？            | 否，作为 Review & Evolution side path              | 每次输入同步观察和沉淀                  | 观察和沉淀不应拉长主响应链路                                               |
+| 经验教训正文存在哪里？                | Markdown Vault                                     | Agent Memory 或 SQLite 正文             | 经验教训是共同知识，必须人类可读、可审阅、可修改                           |
+| Agent 记忆如何持久化？                | 受管 Markdown + Frontmatter，ContextIndex 只建索引 | SQLite 结构化运行数据作为真相源         | 记忆影响长期行为，必须可审阅、可迁移、可人工纠偏                           |
+| 上下文如何统一引用？                  | 使用 ContextURI + ContextFS                        | 各模块传递文件路径、session id 和表主键 | 记忆、演化、外部资料和会话证据需要稳定交叉引用                             |
+| 待处理 Markdown 产物存在哪里？        | Inbox                                              | 分散写入 `resources/` 或 `agent/`       | Inbox 是统一待处理源，用户可以集中审核、分流；归档只作为无明确去向时的兜底 |
+| Observability 与 Evolution 是否合并？ | 否，运行观测和业务审计分离                         | 把演化记录当日志                        | 运行日志服务排障，演化记录影响长期行为，可信要求不同                       |
+| Private 隔离在哪里强制？              | Rust PathGuard 和上下文策略双重隔离                | 专用数据库索引或仅靠前端隐藏入口        | Private 只是 Vault 文件夹，但 Agent 不可见边界必须由后端强制               |
+| 是否引入 rig LLM 框架？               | 是，作为 AgentRunner 执行内核支撑 Provider/Tool/Stream/MCP | 继续手写 Provider/Tool/Stream 实现 | rig 提供成熟的 AgentBuilder、streaming、tool calling 和 MCP 集成，降低维护负担 |
+| rig 替换到哪一层？                    | Runner 执行层近乎全量 Rig 化，Provider/Tool/MCP 进入 Rig 路径 | 全量替换包括 AgentProfile 和 Runtime | 业务契约由 MindClaw 定义，Rig 只接管 run 内部执行 |
 
 ---
 
@@ -75,8 +77,8 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
 │ Agent Runtime                                        │
 │ Definition: AgentProfile / AgentRegistry / Router    │
 │ Orchestration: AgentLoop / Session / Context / Spawn  │
-│ Execution: AgentRunner / ToolExecutor / RunHooks      │
-│ Adapter: Provider / MCP / Event / Storage adapters    │
+│ Execution: AgentRunner / Rig Agent / PromptHook / ToolServer │
+│ Adapter: ProviderRegistry / MCP config / Event / Storage adapters │
 └─────────────┬───────────────────────────┬───────────┘
               │                           │
               │ review trigger            │ business calls
@@ -176,13 +178,13 @@ flowchart LR
 
 ## § 安全架构
 
-| 边界 | 强制点 | 说明 |
-|------|--------|------|
-| `private/` 文件夹 | Rust PathGuard | 拒绝 Agent 读取、索引、记忆生成和知识沉淀 |
-| Provider Secret | OS Keychain | API Key 不以明文落盘 |
-| Tool 权限 | AgentProfile + Tool filtering | 工具可用性由定义层和编排层统一收敛 |
-| 文件写入 | Storage PathGuard | Agent 文件写操作只允许受控工作区路径 |
-| 候选审核 | Inbox + Review & Evolution | 未审核候选不能直接写入长期知识或稳定记忆 |
+| 边界              | 强制点                        | 说明                                      |
+| ----------------- | ----------------------------- | ----------------------------------------- |
+| `private/` 文件夹 | Rust PathGuard                | 拒绝 Agent 读取、索引、记忆生成和知识沉淀 |
+| Provider Secret   | OS Keychain                   | API Key 不以明文落盘                      |
+| Tool 权限         | AgentProfile + Tool filtering | 工具可用性由定义层和编排层统一收敛        |
+| 文件写入          | Storage PathGuard             | Agent 文件写操作只允许受控工作区路径      |
+| 候选审核          | Inbox + Review & Evolution    | 未审核候选不能直接写入长期知识或稳定记忆  |
 
 ---
 
@@ -190,36 +192,37 @@ flowchart LR
 
 ### 设计文档
 
-| 文件 | 内容 |
-|------|------|
-| [00-overview.md](./00-overview.md) | 系统架构总览 |
-| [01-channels.md](./01-channels.md) | Channels：多通道架构 |
-| [02-bus.md](./02-bus.md) | MessageBus：异步消息队列 |
-| [03-agent-runtime.md](./03-agent-runtime.md) | Agent Runtime：Definition / Orchestration / Execution / Adapter 总览 |
-| [03.01-agent-profile.md](./03.01-agent-profile.md) | AgentProfile：静态定义与策略边界 |
-| [03.02-agent-loop.md](./03.02-agent-loop.md) | AgentLoop：turn 级编排层 |
-| [03.03-agent-runner.md](./03.03-agent-runner.md) | AgentRunner：run 级执行引擎 |
-| [03.04-run-contracts.md](./03.04-run-contracts.md) | Run 契约：Spec / Result / RunHooks / InvocationMode |
-| [03.05-agent-spawn.md](./03.05-agent-spawn.md) | Agent Spawn：SubAgent 与 BackgroundAgent |
-| [03.06-context-pipeline.md](./03.06-context-pipeline.md) | ContextPipeline：上下文装配 |
-| [03.07-tool-execution.md](./03.07-tool-execution.md) | Tool Execution：工具执行系统 |
-| [03.08-mcp.md](./03.08-mcp.md) | MCP：外部能力适配 |
-| [03.09-skills.md](./03.09-skills.md) | Skills：能力定义与按需注入 |
-| [03.10-memory.md](./03.10-memory.md) | Memory：Agent 记忆与召回 |
-| [03.11-review-evolution.md](./03.11-review-evolution.md) | Review & Evolution：回顾、演化与经验教训候选 |
-| [03.12-observability.md](./03.12-observability.md) | Observability：Runtime 可观测性 |
-| [04-providers.md](./04-providers.md) | Providers：LLM Provider Adapter 层 |
-| [05-services.md](./05-services.md) | Services：业务服务层 |
-| [06-storage.md](./06-storage.md) | Storage：存储层设计 |
-| [07-runtime.md](./07-runtime.md) | AppRuntime：统一运行时与依赖注入 |
-| [08-desktop-frontend.md](./08-desktop-frontend.md) | Desktop Frontend：Ribbon、Pane 与 Content Host 架构 |
+| 文件                                                     | 内容                                                                 |
+| -------------------------------------------------------- | -------------------------------------------------------------------- |
+| [00-overview.md](./00-overview.md)                       | 系统架构总览                                                         |
+| [01-channels.md](./01-channels.md)                       | Channels：多通道架构                                                 |
+| [02-bus.md](./02-bus.md)                                 | MessageBus：异步消息队列                                             |
+| [03-agent-runtime.md](./03-agent-runtime.md)             | Agent Runtime：Definition / Orchestration / Execution / Adapter 总览 |
+| [03.01-agent-profile.md](./03.01-agent-profile.md)       | AgentProfile：静态定义与策略边界                                     |
+| [03.02-agent-loop.md](./03.02-agent-loop.md)             | AgentLoop：turn 级编排层                                             |
+| [03.03-agent-runner.md](./03.03-agent-runner.md)         | AgentRunner：run 级执行引擎                                          |
+| [03.04-run-contracts.md](./03.04-run-contracts.md)       | Run 契约：Spec / Result / RunHooks / InvocationMode                  |
+| [03.05-agent-spawn.md](./03.05-agent-spawn.md)           | Agent Spawn：SubAgent 与 BackgroundAgent                             |
+| [03.06-context-pipeline.md](./03.06-context-pipeline.md) | ContextPipeline：上下文装配                                          |
+| [03.07-tool-execution.md](./03.07-tool-execution.md)     | Tool Execution：工具执行系统                                         |
+| [03.08-mcp.md](./03.08-mcp.md)                           | MCP：外部能力适配                                                    |
+| [03.09-skills.md](./03.09-skills.md)                     | Skills：能力定义与按需注入                                           |
+| [03.10-memory.md](./03.10-memory.md)                     | Memory：Agent 记忆与召回                                             |
+| [03.11-review-evolution.md](./03.11-review-evolution.md) | Review & Evolution：回顾、演化与经验教训候选                         |
+| [03.12-observability.md](./03.12-observability.md)       | Observability：Runtime 可观测性                                      |
+| [03.13-rig-integration.md](./03.13-rig-integration.md)   | Rig Integration：LLM 框架引入决策总览                                |
+| [04-providers.md](./04-providers.md)                     | Providers：LLM Provider Adapter 层                                   |
+| [05-services.md](./05-services.md)                       | Services：业务服务层                                                 |
+| [06-storage.md](./06-storage.md)                         | Storage：存储层设计                                                  |
+| [07-runtime.md](./07-runtime.md)                         | AppRuntime：统一运行时与依赖注入                                     |
+| [08-desktop-frontend.md](./08-desktop-frontend.md)       | Desktop Frontend：Ribbon、Pane 与 Content Host 架构                  |
 
 ### 参考文档
 
-| 文件 | 内容 |
-|------|------|
-| [reference/directory-structure.md](./reference/directory-structure.md) | 代码目录结构现状 |
-| [reference/dependencies.md](./reference/dependencies.md) | Rust 和前端依赖清单 |
-| [reference/type-registry.md](./reference/type-registry.md) | 跨模块接口契约索引 |
-| [reference/config.md](./reference/config.md) | 配置项清单与加载顺序 |
-| [reference/database-notes.md](./reference/database-notes.md) | 数据库表结构与索引说明 |
+| 文件                                                                   | 内容                   |
+| ---------------------------------------------------------------------- | ---------------------- |
+| [reference/directory-structure.md](./reference/directory-structure.md) | 代码目录结构现状       |
+| [reference/dependencies.md](./reference/dependencies.md)               | Rust 和前端依赖清单    |
+| [reference/type-registry.md](./reference/type-registry.md)             | 跨模块接口契约索引     |
+| [reference/config.md](./reference/config.md)                           | 配置项清单与加载顺序   |
+| [reference/database-notes.md](./reference/database-notes.md)           | 数据库表结构与索引说明 |

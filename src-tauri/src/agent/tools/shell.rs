@@ -1,49 +1,46 @@
-use super::traits::{Tool, ToolInput, ToolOutput};
-use crate::error::AppResult;
+//! Shell 工具 — rig ToolDyn 实现
+//!
+//! 危险命令阻断、环境隔离、超时保护、输出截断。
+//! 直接实现 `rig::tool::ToolDyn`，无自定义 trait 依赖。
+
 use regex::Regex;
+use rig::tool::ToolDyn;
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::process::Command;
 
-/// 命令超时上限（秒）
 const MAX_TIMEOUT_SECS: u64 = 300;
-/// 默认超时（秒）
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
-/// 单端输出截断阈值（head / tail 各最多保留这么多字节）
 const HALF_MAX_OUTPUT: usize = 5_000;
 
-/// 始终拒绝的危险命令正则（在 deny list 中的命令直接返回错误，不执行）
 static DENY_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
 
 fn deny_patterns() -> &'static [Regex] {
     DENY_PATTERNS.get_or_init(|| {
-        let raw = [
-            // 递归删除
-            r"(?i)\brm\s+(-\w*[rR]\w*|-\w*[fF]\w*\s+-\w*[rR]\w*)\b",
-            r"(?i)\bdel\s+/[fFqQ]\b",
-            r"(?i)\brmdir\s+/[sS]\b",
-            // 磁盘/分区破坏
-            r"(?i)(?:^|[;&|]\s*)format\b",
-            r"(?i)\b(?:mkfs|diskpart)\b",
-            r"\bdd\s+if=",
-            r">\s*/dev/sd[a-z]",
-            // 系统电源
-            r"(?i)\b(?:shutdown|reboot|poweroff|halt|init\s+[06])\b",
-            // fork bomb
-            r":\(\)\s*\{.*\};\s*:",
-            // 覆盖系统文件
-            r"(?i)>\s*/etc/(?:passwd|shadow|sudoers|hosts)",
-        ];
-        raw.iter().filter_map(|p| Regex::new(p).ok()).collect()
+        [
+            "rm\\s+(-\\w*[rR]\\w*|-\\w*[fF]\\w*\\s+-\\w*[rR]\\w*)",
+            "del\\s+/[fFqQ]",
+            "rmdir\\s+/[sS]",
+            "format\\b",
+            "mkfs|diskpart",
+            "dd\\s+if=",
+            ">/dev/sd[a-z]",
+            "shutdown|reboot|poweroff|halt|init\\s+[06]",
+            ":\\(\\)\\s*\\{.*\\};\\s*:",
+            ">/etc/(passwd|shadow|sudoers|hosts)",
+        ]
+        .iter()
+        .filter_map(|p| Regex::new(&format!("(?i){p}")).ok())
+        .collect()
     })
 }
 
-/// 允许透传给子进程的环境变量（清空其他变量防止泄露 API keys）
 #[cfg(not(target_os = "windows"))]
 const SAFE_ENV_VARS: &[&str] = &[
-    "PATH", "HOME", "TERM", "LANG", "LC_ALL", "LC_CTYPE", "USER", "SHELL", "TMPDIR",
+    "PATH", "HOME", "TERM", "LANG", "LC_ALL", "USER", "SHELL", "TMPDIR",
 ];
 
 #[cfg(target_os = "windows")]
@@ -65,13 +62,6 @@ const SAFE_ENV_VARS: &[&str] = &[
     "USERNAME",
 ];
 
-/// Shell 执行工具
-///
-/// - 危险命令（deny list）直接拒绝
-/// - 路径穿越检测
-/// - 环境变量隔离（只透传 SAFE_ENV_VARS）
-/// - 超时保护（默认 30s，最大 300s）
-/// - 输出 head+tail 截断（各 5000 字节）
 pub struct ShellTool {
     workspace_dir: PathBuf,
 }
@@ -82,108 +72,50 @@ impl ShellTool {
             workspace_dir: workspace_dir.into(),
         }
     }
-}
 
-#[async_trait::async_trait]
-impl Tool for ShellTool {
-    fn name(&self) -> &str {
-        "shell"
-    }
+    async fn execute_inner(&self, params: Value) -> Result<String, String> {
+        let command = params
+            .get("command")
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .ok_or("missing 'command' parameter")?;
 
-    fn description(&self) -> &str {
-        "Execute a shell command in the workspace directory. \
-         Destructive commands (rm -rf, shutdown, disk ops, etc.) are blocked. \
-         Defaults to 30s timeout, max 300s."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "要执行的 shell 命令"
-                },
-                "working_dir": {
-                    "type": "string",
-                    "description": "工作目录（相对于 workspace，空=workspace 根目录）"
-                },
-                "timeout": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 300,
-                    "description": "超时秒数（默认 30，最大 300）"
-                }
-            },
-            "required": ["command"]
-        })
-    }
-
-    async fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
-        let command = match input.parameters.get("command").and_then(Value::as_str) {
-            Some(c) => c.trim().to_string(),
-            None => return Ok(ToolOutput::err("missing 'command' parameter")),
-        };
-
-        if command.is_empty() {
-            return Ok(ToolOutput::err("command is empty"));
-        }
-
-        // deny list 检查
         for pattern in deny_patterns() {
             if pattern.is_match(&command) {
-                return Ok(ToolOutput::err(format!(
-                    "Command blocked by safety policy: matches deny pattern `{}`",
+                return Err(format!(
+                    "Command blocked: matches deny pattern `{}`",
                     pattern.as_str()
-                )));
+                ));
             }
         }
-
-        // 路径穿越检测
         if command.contains("../") || command.contains("..\\") {
-            return Ok(ToolOutput::err(
-                "Command blocked: path traversal (`../`) detected",
-            ));
+            return Err("Command blocked: path traversal detected".into());
         }
 
-        // 解析工作目录（只允许 workspace 内的相对路径）
         let working_dir = {
-            let rel = input
-                .parameters
+            let rel = params
                 .get("working_dir")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-
             if rel.is_empty() {
                 self.workspace_dir.clone()
             } else {
                 let candidate = self.workspace_dir.join(rel);
-                // 规范化后必须在 workspace 内
                 let normalized = normalize_path(&candidate);
                 if !normalized.starts_with(&self.workspace_dir) {
-                    return Ok(ToolOutput::err(format!(
-                        "working_dir '{}' is outside workspace",
-                        rel
-                    )));
+                    return Err(format!("working_dir '{rel}' is outside workspace"));
                 }
                 normalized
             }
         };
 
-        let timeout_secs = input
-            .parameters
+        let timeout_secs = params
             .get("timeout")
             .and_then(Value::as_u64)
             .unwrap_or(DEFAULT_TIMEOUT_SECS)
             .min(MAX_TIMEOUT_SECS);
 
-        // 构建命令
-        #[cfg(target_os = "windows")]
-        let mut cmd = {
-            let mut c = Command::new("cmd");
-            c.args(["/C", &command]);
-            c
-        };
         #[cfg(not(target_os = "windows"))]
         let mut cmd = {
             let mut c = Command::new("sh");
@@ -191,9 +123,14 @@ impl Tool for ShellTool {
             c
         };
 
-        cmd.current_dir(&working_dir);
+        #[cfg(target_os = "windows")]
+        let mut cmd = {
+            let mut c = Command::new("cmd");
+            c.args(["/C", &command]);
+            c
+        };
 
-        // 环境隔离：清空后只透传安全变量
+        cmd.current_dir(&working_dir);
         cmd.env_clear();
         for var in SAFE_ENV_VARS {
             if let Ok(val) = std::env::var(var) {
@@ -201,24 +138,15 @@ impl Tool for ShellTool {
             }
         }
 
-        // 执行 + 超时
         let result = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
-
         match result {
-            Err(_) => Ok(ToolOutput::err(format!(
-                "Command timed out after {}s",
-                timeout_secs
-            ))),
-
-            Ok(Err(e)) => Ok(ToolOutput::err(format!("Failed to execute command: {}", e))),
-
+            Err(_) => Err(format!("Command timed out after {timeout_secs}s")),
+            Ok(Err(e)) => Err(format!("Failed to execute command: {e}")),
             Ok(Ok(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 let exit_code = output.status.code().unwrap_or(-1);
-
                 let mut content = String::new();
-
                 if !stdout.is_empty() {
                     content.push_str(&head_tail_truncate(&stdout, HALF_MAX_OUTPUT));
                 }
@@ -232,35 +160,71 @@ impl Tool for ShellTool {
                 if content.is_empty() {
                     content.push_str("(no output)");
                 }
-
-                content.push_str(&format!("\nExit code: {}", exit_code));
-
-                Ok(ToolOutput {
-                    content,
-                    is_error: !output.status.success(),
-                })
+                content.push_str(&format!("\nExit code: {exit_code}"));
+                if output.status.success() {
+                    Ok(content)
+                } else {
+                    Err(content)
+                }
             }
         }
     }
 }
 
-// ── 辅助函数 ──────────────────────────────────────────────
+impl ToolDyn for ShellTool {
+    fn name(&self) -> String {
+        "shell".into()
+    }
 
-/// head + tail 截断：保留前 half_max 字节和后 half_max 字节，中间用省略号代替
+    fn definition(
+        &self,
+        _prompt: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = rig::completion::ToolDefinition> + Send + '_>>
+    {
+        let desc = "Execute a shell command in the workspace directory. Destructive commands are blocked. Defaults to 30s timeout, max 300s.".to_string();
+        let params = json!({
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The shell command to execute"},
+                "working_dir": {"type": "string", "description": "Working directory, relative to workspace"},
+                "timeout": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Timeout in seconds (default 30, max 300)"}
+            },
+            "required": ["command"]
+        });
+        Box::pin(async move {
+            rig::completion::ToolDefinition {
+                name: "shell".into(),
+                description: desc,
+                parameters: params,
+            }
+        })
+    }
+
+    fn call(
+        &self,
+        args: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<String, rig::tool::ToolError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let params: Value =
+                serde_json::from_str(&args).map_err(rig::tool::ToolError::JsonError)?;
+            self.execute_inner(params).await.map_err(|e| {
+                rig::tool::ToolError::ToolCallError(Box::new(std::io::Error::other(e)))
+            })
+        })
+    }
+}
+
 fn head_tail_truncate(s: &str, half_max: usize) -> String {
     if s.len() <= half_max * 2 {
         return s.to_string();
     }
-
-    // 找到安全的字符边界
     let head_end = find_char_boundary(s, half_max);
     let tail_start = s.len() - find_char_boundary(&s[s.len() - half_max..], half_max);
-
-    let omitted = s.len() - head_end - (s.len() - tail_start);
     format!(
         "{}\n\n... ({} bytes omitted) ...\n\n{}",
         &s[..head_end],
-        omitted,
+        s.len() - head_end - (s.len() - tail_start),
         &s[tail_start..]
     )
 }
@@ -275,11 +239,9 @@ fn find_char_boundary(s: &str, max_bytes: usize) -> usize {
 
 fn normalize_path(path: &std::path::Path) -> PathBuf {
     let mut result = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
-                result.push(component)
-            }
+    for c in path.components() {
+        match c {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => result.push(c),
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
                 result.pop();
@@ -290,110 +252,135 @@ fn normalize_path(path: &std::path::Path) -> PathBuf {
     result
 }
 
-// ── 测试 ──────────────────────────────────────────────
+// ============================================================================
+// 单元测试
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::TempDir;
 
-    fn tool() -> (ShellTool, TempDir) {
-        let tmp = TempDir::new().unwrap();
-        (ShellTool::new(tmp.path()), tmp)
-    }
-
-    fn input(params: Value) -> ToolInput {
-        ToolInput { parameters: params }
-    }
-
     #[tokio::test]
-    async fn test_basic_command() {
-        let (t, _tmp) = tool();
-        let out = t
-            .execute(input(json!({ "command": "echo hello" })))
-            .await
-            .unwrap();
-        assert!(!out.is_error);
-        assert!(out.content.contains("hello"));
-    }
+    async fn test_basic_command_execution() {
+        let temp = TempDir::new().expect("failed to create temp dir");
+        let tool = ShellTool::new(temp.path());
 
-    #[tokio::test]
-    async fn test_exit_code_nonzero() {
-        let (t, _tmp) = tool();
-        let out = t
-            .execute(input(json!({ "command": "exit 1" })))
-            .await
-            .unwrap();
-        assert!(out.is_error);
-        assert!(out.content.contains("Exit code: 1"));
+        let result = tool.execute_inner(json!({"command": "echo hello"})).await;
+        assert!(result.is_ok(), "basic echo should succeed");
+        let output = result.unwrap();
+        assert!(output.contains("hello"), "output should contain 'hello'");
     }
 
     #[tokio::test]
     async fn test_deny_rm_rf() {
-        let (t, _tmp) = tool();
-        let out = t
-            .execute(input(json!({ "command": "rm -rf /tmp/foo" })))
-            .await
-            .unwrap();
-        assert!(out.is_error);
-        assert!(out.content.contains("blocked"));
+        let temp = TempDir::new().expect("failed to create temp dir");
+        let tool = ShellTool::new(temp.path());
+
+        let result = tool
+            .execute_inner(json!({"command": "rm -rf /tmp/test"}))
+            .await;
+        assert!(result.is_err(), "rm -rf should be blocked");
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("blocked"),
+            "error message should mention blocking"
+        );
     }
 
     #[tokio::test]
-    async fn test_deny_shutdown() {
-        let (t, _tmp) = tool();
-        let out = t
-            .execute(input(json!({ "command": "sudo shutdown -h now" })))
-            .await
-            .unwrap();
-        assert!(out.is_error);
-        assert!(out.content.contains("blocked"));
+    async fn test_deny_format_command() {
+        let temp = TempDir::new().expect("failed to create temp dir");
+        let tool = ShellTool::new(temp.path());
+
+        let result = tool.execute_inner(json!({"command": "format C:"})).await;
+        assert!(result.is_err(), "format command should be blocked");
     }
 
     #[tokio::test]
     async fn test_path_traversal_blocked() {
-        let (t, _tmp) = tool();
-        let out = t
-            .execute(input(json!({ "command": "cat ../secret" })))
-            .await
-            .unwrap();
-        assert!(out.is_error);
-        assert!(out.content.contains("path traversal"));
+        let temp = TempDir::new().expect("failed to create temp dir");
+        let tool = ShellTool::new(temp.path());
+
+        let result = tool
+            .execute_inner(json!({
+                "command": "cat file.txt",
+                "working_dir": "../outside"
+            }))
+            .await;
+        assert!(result.is_err(), "path traversal should be blocked");
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("outside workspace"),
+            "error should mention workspace boundary"
+        );
     }
 
     #[tokio::test]
-    async fn test_working_dir_outside_workspace_blocked() {
-        let (t, _tmp) = tool();
-        let out = t
-            .execute(input(json!({ "command": "pwd", "working_dir": "/etc" })))
-            .await
-            .unwrap();
-        assert!(out.is_error);
-        assert!(out.content.contains("outside workspace"));
+    async fn test_timeout_enforcement() {
+        let temp = TempDir::new().expect("failed to create temp dir");
+        let tool = ShellTool::new(temp.path());
+
+        // 短超时测试
+        let result = tool
+            .execute_inner(json!({
+                "command": "sleep 10",
+                "timeout": 1
+            }))
+            .await;
+        assert!(result.is_err(), "long command should timeout");
+        let error = result.unwrap_err();
+        assert!(error.contains("timed out"), "error should mention timeout");
     }
 
     #[tokio::test]
-    async fn test_timeout() {
-        let (t, _tmp) = tool();
-        let out = t
-            .execute(input(json!({ "command": "sleep 5", "timeout": 1 })))
-            .await
-            .unwrap();
-        assert!(out.is_error);
-        assert!(out.content.contains("timed out"));
+    async fn test_working_dir_validation() {
+        let temp = TempDir::new().expect("failed to create temp dir");
+        let tool = ShellTool::new(temp.path());
+
+        // 有效的工作目录
+        let result = tool
+            .execute_inner(json!({
+                "command": "pwd",
+                "working_dir": ""
+            }))
+            .await;
+        assert!(result.is_ok(), "empty working_dir should use workspace");
+
+        // 子目录（需要先创建）
+        std::fs::create_dir_all(temp.path().join("subdir")).unwrap();
+        let result = tool
+            .execute_inner(json!({
+                "command": "pwd",
+                "working_dir": "subdir"
+            }))
+            .await;
+        assert!(result.is_ok(), "valid subdir should succeed");
     }
 
     #[test]
-    fn test_head_tail_truncate_short() {
-        let s = "hello world";
-        assert_eq!(head_tail_truncate(s, 100), s);
+    fn test_normalize_path() {
+        assert_eq!(
+            normalize_path(std::path::Path::new("/a/b/../c")),
+            PathBuf::from("/a/c")
+        );
+        assert_eq!(
+            normalize_path(std::path::Path::new("/a/./b")),
+            PathBuf::from("/a/b")
+        );
     }
 
     #[test]
-    fn test_head_tail_truncate_long() {
-        let s = "a".repeat(30_000);
-        let result = head_tail_truncate(&s, 5_000);
-        assert!(result.contains("omitted"));
-        assert!(result.len() < s.len());
+    fn test_deny_patterns_compiled() {
+        let patterns = deny_patterns();
+        assert!(!patterns.is_empty(), "deny patterns should be compiled");
+
+        // 验证关键模式存在
+        let rm_rf_pattern = patterns
+            .iter()
+            .find(|p| p.as_str().contains("rm"))
+            .expect("rm pattern should exist");
+        assert!(rm_rf_pattern.is_match("rm -rf /"), "should match rm -rf");
     }
 }

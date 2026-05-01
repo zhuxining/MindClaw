@@ -1,47 +1,25 @@
-//! Agent spawn tools
+//! Agent spawn tools — rig ToolDyn 实现
 //!
-//! 将同步子代理委托和后台代理派发收敛到同一文件，
-//! 但仍保留两个独立的 tool name 和语义边界。
+//! delegate_to_agent / spawn_background_agent
 
 use crate::agent::spawn::AgentSpawnDispatcher;
-use crate::agent::tools::traits::{Tool, ToolInput, ToolOutput};
-use crate::error::AppResult;
+use rig::tool::ToolDyn;
 use serde_json::{json, Value};
+use std::pin::Pin;
 use std::sync::Arc;
 
-fn parse_task_input(input: ToolInput) -> (String, Option<String>) {
-    let task_description = input
-        .parameters
-        .get("task_description")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let label = input
-        .parameters
-        .get("label")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-
-    (task_description, label)
+fn parse_task(args: &str) -> (String, Option<String>) {
+    let v: Value = serde_json::from_str(args).unwrap_or_default();
+    let task = v["task_description"].as_str().unwrap_or("").to_string();
+    let label = v["label"].as_str().map(|s| s.to_string());
+    (task, label)
 }
 
-fn task_input_schema(label_description: &str) -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "task_description": {
-                "type": "string",
-                "description": "Full description of the task for the sub-agent to complete"
-            },
-            "label": {
-                "type": "string",
-                "description": label_description
-            }
-        },
-        "required": ["task_description"]
-    })
+fn task_schema(label_desc: &str) -> Value {
+    json!({"type":"object","properties":{"task_description":{"type":"string","description":"Full description of the task for the sub-agent to complete"},"label":{"type":"string","description":label_desc}},"required":["task_description"]})
 }
+
+// ── delegate_to_agent ────────────────────────────────────
 
 pub struct DelegateToAgentTool {
     dispatcher: Arc<AgentSpawnDispatcher>,
@@ -53,35 +31,46 @@ impl DelegateToAgentTool {
     }
 }
 
-#[async_trait::async_trait]
-impl Tool for DelegateToAgentTool {
-    fn name(&self) -> &str {
-        "delegate_to_agent"
+impl ToolDyn for DelegateToAgentTool {
+    fn name(&self) -> String {
+        "delegate_to_agent".into()
     }
-
-    fn description(&self) -> &str {
-        "Delegate a task to a sub-agent and wait for the result inline."
+    fn definition(
+        &self,
+        _: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = rig::completion::ToolDefinition> + Send + '_>>
+    {
+        let p = task_schema("Optional short label for the delegated task");
+        Box::pin(async move {
+            rig::completion::ToolDefinition {
+                name: "delegate_to_agent".into(),
+                description: "Delegate a task to a sub-agent and wait for the result inline."
+                    .into(),
+                parameters: p,
+            }
+        })
     }
-
-    fn input_schema(&self) -> Value {
-        task_input_schema("Optional short label for the delegated task")
-    }
-
-    async fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
-        let (task_description, label) = parse_task_input(input);
-
-        match self
-            .dispatcher
-            .delegate_to_agent(&task_description, label.as_deref())
-            .await
-        {
-            Ok(result) => Ok(ToolOutput::ok(result.final_text)),
-            Err(e) => Ok(ToolOutput::err(format!(
-                "Failed to delegate to sub-agent: {e}"
-            ))),
-        }
+    fn call(
+        &self,
+        args: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<String, rig::tool::ToolError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let (task, label) = parse_task(&args);
+            self.dispatcher
+                .delegate_to_agent(&task, label.as_deref())
+                .await
+                .map(|r| r.final_text)
+                .map_err(|e| {
+                    rig::tool::ToolError::ToolCallError(Box::new(std::io::Error::other(
+                        e.to_string(),
+                    )))
+                })
+        })
     }
 }
+
+// ── spawn_background_agent ───────────────────────────────
 
 pub struct SpawnBackgroundAgentTool {
     dispatcher: Arc<AgentSpawnDispatcher>,
@@ -93,37 +82,34 @@ impl SpawnBackgroundAgentTool {
     }
 }
 
-#[async_trait::async_trait]
-impl Tool for SpawnBackgroundAgentTool {
-    fn name(&self) -> &str {
-        "spawn_background_agent"
+impl ToolDyn for SpawnBackgroundAgentTool {
+    fn name(&self) -> String {
+        "spawn_background_agent".into()
     }
-
-    fn description(&self) -> &str {
-        "Spawn a background agent to handle a specific task asynchronously. \
-         The agent runs independently and reports results back when complete. \
-         Use this for time-consuming or parallel tasks that don't require immediate results."
+    fn definition(
+        &self,
+        _: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = rig::completion::ToolDefinition> + Send + '_>>
+    {
+        let p = task_schema("Optional short label for tracking progress");
+        Box::pin(async move {
+            rig::completion::ToolDefinition {
+                name: "spawn_background_agent".into(),
+                description: "Spawn a background agent to handle a task asynchronously.".into(),
+                parameters: p,
+            }
+        })
     }
-
-    fn input_schema(&self) -> Value {
-        task_input_schema("Optional short label for tracking progress (auto-generated if omitted)")
-    }
-
-    async fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
-        let (task_description, label) = parse_task_input(input);
-
-        match self
-            .dispatcher
-            .spawn_background(&task_description, label.as_deref())
-            .await
-        {
-            Ok(task_id) => Ok(ToolOutput::ok(format!(
-                "Background agent spawned (task_id: {task_id}). \
-                 It is running in the background and will report results when complete."
-            ))),
-            Err(e) => Ok(ToolOutput::err(format!(
-                "Failed to spawn background agent: {e}"
-            ))),
-        }
+    fn call(
+        &self,
+        args: String,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<String, rig::tool::ToolError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let (task, label) = parse_task(&args);
+            self.dispatcher.spawn_background(&task, label.as_deref()).await
+                .map(|task_id| format!("Background agent spawned (task_id: {task_id}). It will report results when complete."))
+                .map_err(|e| rig::tool::ToolError::ToolCallError(Box::new(std::io::Error::other(e.to_string()))))
+        })
     }
 }

@@ -28,7 +28,10 @@ pub struct VaultConfig {
 pub struct VaultAgentConfig {
     /// None = 继承全局 provider
     pub provider_id: Option<String>,
+    /// None = 使用当前 provider 的主模型 / 默认模型
     pub model_id: Option<String>,
+    /// None = 运行时回退到主模型
+    pub light_model_id: Option<String>,
     /// None = 使用内置默认提示词
     pub system_prompt: Option<String>,
     pub max_iterations: Option<usize>,
@@ -45,6 +48,7 @@ impl Default for VaultAgentConfig {
         Self {
             provider_id: None,
             model_id: None,
+            light_model_id: None,
             system_prompt: None,
             max_iterations: None,
             temperature: None,

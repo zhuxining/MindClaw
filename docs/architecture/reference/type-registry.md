@@ -10,16 +10,13 @@
 
 | Trait | 位置 | 关键约束 | 用途 |
 |-------|------|---------|------|
-| `RunHooks` | `src/agent/hooks.rs` | 七个扩展点方法，`finalize_content` 返回处理后内容 | AgentRunner 与业务层之间的生命周期桥梁 |
+| `RunHooks` | `src/agent/hooks.rs` | 12 个生命周期观察方法，`finalize_response` 返回处理后内容 | RigPromptHook 与业务层之间的 observer 契约 |
 | `RunHookPublisher` | `src/agent/hooks.rs` | 发布状态、文本分段和段结束信号 | 将 `InteractiveRunHooks` 事件桥接到 MessageBus |
-| `Tool` | `src/agent/tools/traits.rs` | `execute(&self, input: Value) -> Result<Value, ToolError>`，必须声明 `name()` 和 `schema()` | 内置工具实现统一接口 |
-| `McpTransport` | `src/agent/tools/mcp.rs` | `start()` / `stop()` / `send_request()`，支持 stdio 和 streamable-http | MCP 客户端传输层抽象 |
+| `rig::tool::ToolDyn` | `rig-core` | `definition()` / `call()`，由 Rig ToolSet / ToolServer 执行 | 内置工具、spawn 工具和 MCP 工具的唯一执行接口 |
 
 ### Provider 契约
 
-| Trait | 位置 | 关键约束 | 用途 |
-|-------|------|---------|------|
-| `Provider` | `src/providers/traits.rs` | `chat()` / `chat_stream()` 两种调用模式，返回标准 `ProviderResponse` 或流事件 | 统一 Claude / OpenAI 兼容 API 调用 |
+Provider 层不再暴露自定义 trait。`ProviderRegistry` 负责配置、密钥和主/轻量模型解析，并返回 `AgentModelSet` 给 `AgentRunner`。
 
 ### Channel 契约
 
@@ -49,21 +46,19 @@
 | `AgentProfile` | `src/agent/agents.rs` | Agent 静态定义 | 当前包含 model 与 execution 默认值，是定义层的最小可用形态 |
 | `AgentRegistry` | `src/agent/agents.rs` | AgentProfile 注册表 | 当前为轻量内存注册表，已接入 AppRuntime / AgentLoop / spawn |
 | `ModelRouter` | `src/agent/agents.rs` | 根据 profile 解析模型 | 当前为最小实现，直接返回 profile.model，已接入主执行链路 |
-| `ChatMessage` | `src/providers/traits.rs` | 单条对话消息 | System / User / Assistant / ToolResult 四种角色 |
-| `ToolCall` | `src/agent/tools/mod.rs` | LLM 请求的工具调用 | 含 `tool_call_id`，用于结果匹配 |
-| `IterationState` | `src/agent/runner.rs` | 单次迭代运行时快照 | 仅迭代期间存在，传给 Hook |
+| `ChatMessage` | `src/agent/messages.rs` | 单条对话消息 | Runtime 契约，由 AgentRunner 转换为 Rig `Message` |
+| `ToolSchema` | `src/agent/messages.rs` | 历史兼容字段 | 当前工具执行以 `ToolDyn` / `ToolSet` 为准 |
+| `ToolCallPlaceholder` | `src/agent/hooks.rs` | Hook 观测用工具调用占位 | Rig 执行工具，MindClaw 只向 observer 暴露名称和 id |
 | `AgentSpawnDispatcher` | `src/agent/spawn.rs` | 管理派生执行 | 当前已接通 inline `SubAgent` 与后台派发 |
 | `SubAgentDef` | `src/agent/spawn.rs` | 子代理静态定义 | 含 mode / model / capabilities / prompt |
-| `ProviderEvent` | `src/agent/events.rs` | Provider 到 Runner 的标准化流事件 | 只表达流式协议事件，不承载 runtime 观测语义 |
-| `ProviderUsage` | `src/agent/events.rs` | Provider 原始 token 使用量 | 与 `TokenUsage` 区分，前者是 provider 原始统计，后者是 run 聚合统计 |
-| `AgentEvent` | `src/agent/events.rs` | Runtime 内部观测事件 | 供 observability / tracing / metrics 消费 |
-| `LoopPhase` | `src/agent/events.rs` | Runtime 内部阶段机 | 不直接暴露给前端 |
 | `UserVisiblePhase` | `src/agent/events.rs` | 对外简化状态 | 通过 MessageBus / Channel 暴露给前端 |
 | `ContextUri` | `src/storage/` | 上下文稳定引用 | 跨 Vault 文件、外部资源、agent 资产和 session 证据引用 |
 | `ContextFrontmatter` | `src/storage/markdown.rs` | 可索引 Markdown 的通用 Frontmatter | 承载 `tags`、`overview`、`confidence`、`origin`、`refs` 和来源扩展 |
 | `MemoryFrontmatter` | `src/agent/memory.rs` | Agent 记忆文档的 Frontmatter 扩展 | Markdown 是记忆真相源，ContextIndex 只维护召回索引 |
 | `Memory` | `src/agent/memory.rs` | Agent 可召回记忆记录 | 对应 Vault 中的受管 Markdown 文件 |
 | `SkillManifest` | `src/agent/skills.rs` | 技能完整清单 | 启动时只索引元数据，激活时加载完整内容 |
+| `LLMCompletionModel` | `src/providers/registry.rs` | 具体 Rig completion model 枚举 | Runner 做 Rust 类型分派后进入泛型 Rig 执行路径 |
+| `AgentModelSet` | `src/providers/registry.rs` | 主模型 / 轻量模型集合 | Runner 持有；轻量模型未配置时等同主模型 |
 
 ### 消息总线
 
@@ -86,7 +81,7 @@
 | 类型 | 位置 | 用途 |
 |------|------|------|
 | `AppError` | `src/error.rs` | 全局错误类型，实现 `Serialize` 供前端消费 |
-| `ToolError` | `src/agent/tools/traits.rs` | 工具执行错误，传给 LLM 做决策 |
+| `rig::tool::ToolError` | `rig-core` | 工具执行错误，传给 Rig Agent 做决策 |
 | `StopReason` | `src/agent/spec.rs` | Agent 执行停止原因枚举：Completed / MaxIterations / ToolError / Cancelled |
 
 ---
@@ -97,28 +92,25 @@
 
 ```rust
 pub trait RunHooks: Send {
-    fn wants_streaming(&self) -> bool;
-    fn before_iteration(&mut self, state: &mut IterationState);
-    fn on_stream(&mut self, delta: &str);
-    fn on_stream_end(&mut self, resuming: bool);
-    fn before_execute_tools(&mut self, calls: &[ToolCall]);
-    fn after_iteration(&mut self, state: &IterationState);
-    fn finalize_content(&mut self, content: &str) -> String;
+    fn streaming_mode(&self) -> StreamingMode;
+    fn on_run_start(&mut self, ctx: &RunStartContext);
+    fn on_iteration_start(&mut self, ctx: &IterationStartContext);
+    fn on_model_request_start(&mut self, ctx: &ModelRequestContext);
+    fn on_model_text_delta(&mut self, delta: &str);
+    fn on_model_response_ready(&mut self, ctx: &ModelResponseContext);
+    fn on_tool_batch_start(&mut self, calls: &[ToolCallPlaceholder]);
+    fn on_tool_call_start(&mut self, call: &ToolCallPlaceholder);
+    fn on_tool_call_finish(&mut self, call: &ToolCallPlaceholder, success: bool, result_summary: &str);
+    fn on_iteration_finish(&mut self, ctx: &IterationFinishContext);
+    fn finalize_response(&mut self, content: &str) -> String;
+    fn on_finish(&mut self, result: &AgentRunResult);
+    fn on_abort(&mut self, reason: &RunAbortReason);
 }
 ```
 
 ### Provider
 
-```rust
-#[async_trait]
-pub trait Provider: Send + Sync {
-    fn name(&self) -> &str;
-    fn model_id(&self) -> &str;
-    async fn chat_stream(
-        &self, request: ChatRequest<'_>
-    ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ProviderEvent>> + Send>>>;
-}
-```
+Provider 层没有自定义 trait 签名。公开入口是 `ProviderRegistry::create_agent_models_from_env(...) -> AgentModelSet`，Runner 再按 spec model id 选择主模型或轻量模型。
 
 ### Channel
 

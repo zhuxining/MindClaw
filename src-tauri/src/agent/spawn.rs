@@ -16,13 +16,13 @@ use crate::agent::agents::{
     AgentProfile, AgentRegistry, ModelRouter, BACKGROUND_AGENT_ID, SUBAGENT_AGENT_ID,
 };
 use crate::agent::hooks::NoopRunHooks;
+use crate::agent::messages::ChatMessage;
 use crate::agent::runner::AgentRunner;
 use crate::agent::spec::{AgentRunResult, InvocationMode, ToolEvent};
-use crate::agent::tools::ToolRegistry;
 use crate::bus::events::InboundMessage;
 use crate::bus::MessageBus;
-use crate::error::AppError;
-use crate::providers::{ChatMessage, Provider};
+use crate::error::{AppError, AppResult};
+use crate::runtime::config::AppConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -162,10 +162,11 @@ pub enum SpawnSource {
 
 /// AgentSpawnDispatcher - 派生执行管理器
 pub struct AgentSpawnDispatcher {
-    /// LLM Provider
-    provider: Arc<dyn Provider>,
-    /// 工具注册表
-    tool_registry: Arc<ToolRegistry>,
+    /// 共享 AgentRunner（持有主模型 / 轻量模型）
+    runner: Arc<AgentRunner>,
+    /// 应用配置（保留供未来工具构建使用）
+    #[allow(dead_code)]
+    app_config: Arc<AppConfig>,
     /// 消息总线
     bus: Arc<MessageBus>,
     /// 工作空间路径
@@ -200,8 +201,8 @@ struct SpawnTask {
 impl AgentSpawnDispatcher {
     /// 创建新的 AgentSpawnDispatcher
     pub fn new(
-        provider: Arc<dyn Provider>,
-        tool_registry: Arc<ToolRegistry>,
+        runner: Arc<AgentRunner>,
+        app_config: Arc<AppConfig>,
         bus: Arc<MessageBus>,
         workspace: PathBuf,
         concurrency_gate: Arc<Semaphore>,
@@ -209,8 +210,8 @@ impl AgentSpawnDispatcher {
         model_router: Arc<ModelRouter>,
     ) -> Self {
         Self {
-            provider,
-            tool_registry,
+            runner,
+            app_config,
             bus,
             workspace,
             agents: HashMap::new(),
@@ -289,33 +290,31 @@ impl AgentSpawnDispatcher {
             ));
         }
 
-        let restricted_tools = self.clone_tool_registry();
-        let runner = Arc::new(AgentRunner::new(
-            self.provider.clone(),
-            restricted_tools.clone(),
-        ));
         let profile = self.resolved_profile(BACKGROUND_AGENT_ID)?;
+        let tools = self.build_restricted_tools().await?;
         let spec = profile.build_run_spec(
             task_id.clone(),
             session_key.clone(),
             InvocationMode::Detached,
             self.build_subagent_prompt(task_description),
             vec![ChatMessage::user(task_description)],
-            restricted_tools.schemas(),
+            vec![],
         );
         let bus = self.bus.clone();
         let task_id_clone = task_id.clone();
         let session_key_clone = session_key.clone();
         let concurrency_gate = Arc::clone(&self.concurrency_gate);
+        let runner = Arc::clone(&self.runner);
 
         let tasks_by_id_clone = Arc::clone(&self.tasks_by_id);
 
         let handle = tokio::spawn(async move {
             let _permit = concurrency_gate.acquire_owned().await;
-            let mut hook = NoopRunHooks;
             let cancel = CancellationToken::new();
 
-            let result = runner.run(spec, &mut hook, cancel).await;
+            let result = runner
+                .run_spec(&spec, tools, Box::new(NoopRunHooks), cancel)
+                .await;
 
             match result {
                 Ok(output) => {
@@ -382,8 +381,7 @@ impl AgentSpawnDispatcher {
 
         // 执行子代理，无论成功失败都要恢复深度
         let result = async {
-            let restricted_tools = self.clone_tool_registry();
-            let runner = AgentRunner::new(self.provider.clone(), restricted_tools.clone());
+            let tools = self.build_restricted_tools().await?;
             let profile = self.resolved_profile(SUBAGENT_AGENT_ID)?;
             let run_id = uuid::Uuid::new_v4().to_string();
             let session_id = format!("subagent-{}", &run_id[..8]);
@@ -393,13 +391,14 @@ impl AgentSpawnDispatcher {
                 InvocationMode::InlineChild,
                 self.build_subagent_prompt(task_description),
                 vec![ChatMessage::user(task_description)],
-                restricted_tools.schemas(),
+                vec![],
             );
 
             // inline sub-agent 已经运行在主 run 语境内，不再次占用全局 LLM 并发闸
-            let mut hook = NoopRunHooks;
             let cancel = CancellationToken::new();
-            runner.run(spec, &mut hook, cancel).await
+            self.runner
+                .run_spec(&spec, tools, Box::new(NoopRunHooks), cancel)
+                .await
         }
         .await;
 
@@ -436,10 +435,21 @@ impl AgentSpawnDispatcher {
 
     /// 克隆工具注册表
     ///
-    /// TODO: 当前只是简单 clone，未来应实现真正的工具限制
-    ///（子代理不应继承 spawn 工具，避免无限递归委托）
-    fn clone_tool_registry(&self) -> Arc<ToolRegistry> {
-        self.tool_registry.clone()
+    /// 构建子代理工具集（不含 spawn 工具，避免无限递归）
+    async fn build_restricted_tools(&self) -> AppResult<Vec<Box<dyn rig::tool::ToolDyn>>> {
+        use crate::agent::tools::{file_ops, find_files, path_guard, search_content, shell};
+        let guard = Arc::new(
+            path_guard::PathGuard::vault_only(self.workspace.clone()).with_denied("private"),
+        );
+        let tools: Vec<Box<dyn rig::tool::ToolDyn>> = vec![
+            Box::new(shell::ShellTool::new(self.workspace.clone())),
+            Box::new(file_ops::FileReadTool::with_guard(Arc::clone(&guard))),
+            Box::new(file_ops::FileWriteTool::with_guard(Arc::clone(&guard))),
+            Box::new(file_ops::FileEditTool::with_guard(Arc::clone(&guard))),
+            Box::new(find_files::FindFilesTool::new(Arc::clone(&guard))),
+            Box::new(search_content::SearchContentTool::new(Arc::clone(&guard))),
+        ];
+        Ok(tools)
     }
 
     fn resolved_profile(&self, profile_id: &str) -> Result<AgentProfile, AppError> {

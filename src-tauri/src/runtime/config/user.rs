@@ -45,6 +45,8 @@ impl Default for UserConfig {
                     id: "deepseek".to_string(),
                     display_name: "DeepSeek".to_string(),
                     base_url: "https://api.deepseek.com".to_string(),
+                    main_model: None,
+                    light_model: None,
                     default_model: Some("deepseek-chat".to_string()),
                     available_models: vec![
                         "deepseek-chat".to_string(),
@@ -55,6 +57,8 @@ impl Default for UserConfig {
                     id: "openai".to_string(),
                     display_name: "OpenAI".to_string(),
                     base_url: "https://api.openai.com".to_string(),
+                    main_model: None,
+                    light_model: Some("gpt-4o-mini".to_string()),
                     default_model: Some("gpt-4o".to_string()),
                     available_models: vec![
                         "gpt-4o".to_string(),
@@ -66,6 +70,8 @@ impl Default for UserConfig {
                     id: "claude".to_string(),
                     display_name: "Claude".to_string(),
                     base_url: "https://api.anthropic.com".to_string(),
+                    main_model: None,
+                    light_model: Some("claude-haiku-4-5-20251001".to_string()),
                     default_model: Some("claude-sonnet-4-6".to_string()),
                     available_models: vec![
                         "claude-opus-4-6".to_string(),
@@ -102,6 +108,12 @@ pub struct ProviderConfig {
     pub display_name: String,
     /// API base URL
     pub base_url: String,
+    /// 主模型 id；为空时使用 default_model
+    #[serde(default)]
+    pub main_model: Option<String>,
+    /// 轻量模型 id；为空时运行时回退到主模型
+    #[serde(default)]
+    pub light_model: Option<String>,
     /// 默认模型 id
     pub default_model: Option<String>,
     /// 可选的模型列表（用于 UI 下拉）

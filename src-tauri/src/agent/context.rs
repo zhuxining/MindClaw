@@ -6,10 +6,10 @@
 //! - 第 2 层 Dynamic：每次请求变化（Identity / Memory / Vault / Skills）
 //! - 第 3 层 User：运行时上下文 + 用户输入
 
+use crate::agent::messages::{ChatMessage, MessageRole as ChatMessageRole};
 use crate::agent::session::AgentSession;
 use crate::bus::events::InboundMessage;
 use crate::error::AppError;
-use crate::providers::{ChatMessage, MessageRole as ProviderMessageRole};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -459,9 +459,9 @@ impl ContextSource for ConversationHistorySource {
 
         for msg in history {
             let role = match msg.role {
-                ProviderMessageRole::System => MessageRole::System,
-                ProviderMessageRole::Assistant => MessageRole::Assistant,
-                ProviderMessageRole::User => MessageRole::User,
+                ChatMessageRole::System => MessageRole::System,
+                ChatMessageRole::Assistant => MessageRole::Assistant,
+                ChatMessageRole::User => MessageRole::User,
             };
 
             fragments.push(ContextFragment::new(

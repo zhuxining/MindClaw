@@ -19,19 +19,18 @@
 
 use crate::agent::agents::{AgentRegistry, ModelRouter, MAIN_AGENT_ID};
 use crate::agent::context::{ContextBuildContext, ContextPipeline};
-use crate::agent::events::{AgentEvent, UserVisiblePhase};
+use crate::agent::events::UserVisiblePhase;
 use crate::agent::hooks::{InteractiveRunHooks, RunHookPublisher};
-use crate::agent::observability::{AgentObserver, TracingObserver};
+use crate::agent::messages::ChatMessage;
 use crate::agent::runner::AgentRunner;
 use crate::agent::session::{SessionManager, ToolTrace};
 use crate::agent::spawn::AgentSpawnDispatcher;
-use crate::agent::spec::{AgentRunResult, InvocationMode};
+use crate::agent::spec::{AgentRunResult, InvocationMode, StopReason, ToolStatus};
 use crate::agent::tools::agent_spawn::{DelegateToAgentTool, SpawnBackgroundAgentTool};
-use crate::agent::tools::ToolRegistry;
+use crate::agent::tools::build_tools;
 use crate::bus::events::{InboundMessage, OutboundPayload};
 use crate::bus::MessageBus;
 use crate::error::{AppError, AppResult};
-use crate::providers::{ChatMessage, Provider};
 use crate::runtime::config::AppConfig;
 use dashmap::DashMap;
 use std::collections::VecDeque;
@@ -85,13 +84,12 @@ pub struct AgentLoop {
     session_mgr: Arc<SessionManager>,
     context_pipeline: Arc<ContextPipeline>,
     runner: Arc<AgentRunner>,
-    tools: Arc<ToolRegistry>,
+    app_config: Arc<AppConfig>,
     agent_registry: Arc<AgentRegistry>,
     model_router: Arc<ModelRouter>,
     spawn_dispatcher: Arc<AgentSpawnDispatcher>,
     /// Session 级串行化状态表
     sessions: DashMap<String, Mutex<SessionSlot>>,
-    observer: Arc<dyn AgentObserver>,
     /// 全局 LLM 并发闸（与 SpawnDispatcher 共享）
     concurrency_gate: Arc<Semaphore>,
 }
@@ -99,26 +97,22 @@ pub struct AgentLoop {
 impl AgentLoop {
     /// 从配置初始化完整的 AgentLoop
     ///
-    /// 唯一的构造入口。工具注册表仅初始化一次：
-    /// - `base_tools`（含 MCP）供子代理使用，不包含 spawn 工具
-    /// - `main_tools` 在 `base_tools` 基础上扩展 spawn 工具，共享已有 Arc 无需重复连接
+    /// 唯一的构造入口。SpawnDispatcher 在此时初始化，
+    /// 工具集在每次消息处理时按需构建（轻量，共享 Arc 状态）。
     pub async fn init(
         config: Arc<AppConfig>,
         bus: Arc<MessageBus>,
         session_mgr: Arc<SessionManager>,
-        provider: Arc<dyn Provider>,
+        runner: Arc<AgentRunner>,
         agent_registry: Arc<AgentRegistry>,
         model_router: Arc<ModelRouter>,
     ) -> AppResult<Self> {
         let concurrency_gate = Arc::new(Semaphore::new(config.llm_concurrency));
 
-        // 1. 基础工具集（含内置工具和 MCP，不含 spawn 工具）
-        let base_tools = ToolRegistry::init_default(&config, vec![]).await?;
-
-        // 2. SpawnDispatcher 使用 base_tools（子代理无法再次派生）
+        // SpawnDispatcher 初始化
         let spawn_dispatcher = Arc::new(AgentSpawnDispatcher::new(
-            Arc::clone(&provider),
-            Arc::clone(&base_tools),
+            Arc::clone(&runner),
+            config.clone(),
             Arc::clone(&bus),
             config.data_dir().clone(),
             Arc::clone(&concurrency_gate),
@@ -126,30 +120,18 @@ impl AgentLoop {
             Arc::clone(&model_router),
         ));
 
-        // 3. 主工具集 = base_tools 共享 Arc + spawn 工具（MCP 不重复初始化）
-        let spawn_tool = Arc::new(SpawnBackgroundAgentTool::new(Arc::clone(&spawn_dispatcher)));
-        let delegate_tool = Arc::new(DelegateToAgentTool::new(Arc::clone(&spawn_dispatcher)));
-        let main_tools = Arc::new(
-            base_tools.extend_with(vec![spawn_tool, delegate_tool], config.tool_concurrency),
-        );
-
         let context_pipeline = ContextPipeline::build_default(&config);
-        let observer: Arc<dyn AgentObserver> = Arc::new(TracingObserver::new());
 
         Ok(Self {
             bus,
             session_mgr,
             context_pipeline,
-            runner: Arc::new(AgentRunner::new(
-                Arc::clone(&provider),
-                Arc::clone(&main_tools),
-            )),
-            tools: main_tools,
+            runner,
+            app_config: config,
             agent_registry,
             model_router,
-            spawn_dispatcher,
+            spawn_dispatcher: Arc::clone(&spawn_dispatcher),
             sessions: DashMap::new(),
-            observer,
             concurrency_gate,
         })
     }
@@ -312,16 +294,15 @@ impl AgentLoop {
             .await?;
         let session_id = session.id.clone();
 
-        self.observer
-            .on_event(&AgentEvent::RunStarted {
-                session_id: session_id.clone(),
-                request_id: request_id.clone(),
-            })
-            .await;
+        tracing::info!(
+            session_id = %session_id,
+            request_id = %request_id,
+            "agent_run_started"
+        );
 
         if cancel.is_cancelled() {
             self.session_mgr.mark_cancelled(&session_id).await?;
-            self.observer.on_event(&AgentEvent::RunCancelled).await;
+            tracing::info!("agent_run_cancelled");
             return Ok(());
         }
 
@@ -337,11 +318,7 @@ impl AgentLoop {
         let ctx = ContextBuildContext::new(message.clone(), Arc::new(session.clone()));
         let built_context = self.context_pipeline.build(&ctx).await?;
 
-        self.observer
-            .on_event(&AgentEvent::ContextPrepared {
-                fragments: built_context.fragments.len(),
-            })
-            .await;
+        tracing::debug!(fragments = %built_context.fragments.len(), "agent_context_prepared");
 
         // 5. 更新派生执行路由上下文（delegation_depth 从 0 开始）
         self.spawn_dispatcher
@@ -352,30 +329,58 @@ impl AgentLoop {
             })
             .await;
 
-        // 6. 构建 run spec
+        // 6. 解析模型 + 构建 run spec
         let profile = self
             .agent_registry
             .get(MAIN_AGENT_ID)
             .ok_or_else(|| AppError::Internal("main agent profile not found".to_string()))?;
-        let run_id = uuid::Uuid::new_v4().to_string();
-        let spec = profile
-            .build_run_spec(
-                run_id,
-                session_id.clone(),
-                InvocationMode::Interactive,
-                built_context.system_prompt.clone(),
-                built_context.messages.clone(),
-                self.tools.schemas(),
-            )
-            .with_model(self.model_router.resolve(profile.as_ref()));
+        let model = self.model_router.resolve(profile.as_ref()).to_string();
+        let profile = profile.as_ref().clone().with_model(model.clone());
 
-        // 7. 创建 Hook
-        let publisher = BusPublisher::new(self.bus.clone(), request_id.clone(), session_id.clone());
-        let mut hook =
-            InteractiveRunHooks::new(Box::new(publisher), session_id.clone(), request_id.clone());
+        let spec = profile.build_run_spec(
+            uuid::Uuid::new_v4().to_string(),
+            session_id.clone(),
+            InvocationMode::Interactive,
+            built_context.system_prompt,
+            built_context.messages,
+            vec![],
+        );
 
-        // 8. 执行
-        let result = self.runner.run(spec, &mut hook, cancel.clone()).await?;
+        // 7. 构建本次 run 的工具范围（轻量，按需重建）
+        let spawn_tools: Vec<Box<dyn rig::tool::ToolDyn>> = vec![
+            Box::new(DelegateToAgentTool::new(Arc::clone(&self.spawn_dispatcher))),
+            Box::new(SpawnBackgroundAgentTool::new(Arc::clone(
+                &self.spawn_dispatcher,
+            ))),
+        ];
+        let tools = build_tools(
+            &self.app_config,
+            spawn_tools,
+            &profile.tool_policy.allowed_tools,
+        )
+        .await?;
+
+        let publisher = Box::new(BusPublisher::new(
+            self.bus.clone(),
+            request_id.clone(),
+            session_id.clone(),
+        ));
+        let hook = Box::new(InteractiveRunHooks::new(
+            publisher,
+            session_id.clone(),
+            request_id.clone(),
+        ));
+
+        // 8. 执行 run；流式输出和工具状态由 Runner 的 RigPromptHook 桥接
+        let result = self
+            .runner
+            .run_spec(&spec, tools, hook, cancel.clone())
+            .await?;
+
+        if cancel.is_cancelled() || result.stop_reason == StopReason::Cancelled {
+            self.emit_done(&request_id, &session_id).await?;
+            return Ok(());
+        }
 
         // 9. 持久化
         self.persist_turn(&session_id, &message.content, &result)
@@ -383,7 +388,7 @@ impl AgentLoop {
 
         // 10. 完成信号
         self.emit_done(&request_id, &session_id).await?;
-        self.observer.on_event(&AgentEvent::RunCompleted).await;
+        tracing::info!("agent_run_completed");
 
         Ok(())
     }
@@ -442,11 +447,7 @@ impl AgentLoop {
             return Ok(false);
         };
 
-        self.observer
-            .on_event(&AgentEvent::ControlCommandIntercepted {
-                name: cmd_name.to_string(),
-            })
-            .await;
+        tracing::info!(command = %cmd_name, "agent_control_command_intercepted");
 
         let action = self
             .resolve_agent_action(cmd_name, args, session_id, &message.sender)
@@ -460,7 +461,7 @@ impl AgentLoop {
             .await?;
         self.emit_done(&message.request_id, &response_session_id)
             .await?;
-        self.observer.on_event(&AgentEvent::RunCompleted).await;
+        tracing::info!("agent_command_run_completed");
 
         Ok(true)
     }
@@ -528,7 +529,7 @@ impl AgentLoop {
         user_content: &str,
         result: &AgentRunResult,
     ) -> Result<(), AppError> {
-        let tool_traces: Vec<ToolTrace> = result
+        let tool_trace = result
             .tool_events
             .iter()
             .map(|event| ToolTrace {
@@ -536,8 +537,8 @@ impl AgentLoop {
                 input_summary: event.input_summary.clone(),
                 output_summary: event.output_summary.clone(),
                 duration_ms: event.duration_ms,
-                success: event.status == crate::agent::spec::ToolStatus::Succeeded,
-                round: 0, // TODO: 从 context 获取
+                success: event.status == ToolStatus::Succeeded,
+                round: 0,
             })
             .collect();
 
@@ -546,7 +547,7 @@ impl AgentLoop {
                 session_id,
                 ChatMessage::user(user_content),
                 Some(ChatMessage::assistant_text(&result.final_text)),
-                tool_traces,
+                tool_trace,
             )
             .await
     }

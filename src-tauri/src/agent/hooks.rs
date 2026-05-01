@@ -15,7 +15,12 @@
 //! - 不推进迭代，只观察并做副作用桥接
 
 use crate::agent::spec::{AgentRunResult, TokenUsage};
-use crate::agent::tools::ToolCall;
+// Tool call placeholder (rig handles tool execution now)
+#[derive(Debug, Clone)]
+pub struct ToolCallPlaceholder {
+    pub name: String,
+    pub id: String,
+}
 use std::time::Instant;
 
 // ============================================================================
@@ -120,13 +125,19 @@ pub trait RunHooks: Send {
     fn on_model_response_ready(&mut self, _ctx: &ModelResponseContext) {}
 
     /// 工具调用批次开始时调用
-    fn on_tool_batch_start(&mut self, _calls: &[ToolCall]) {}
+    fn on_tool_batch_start(&mut self, _calls: &[ToolCallPlaceholder]) {}
 
     /// 单个工具调用开始时调用
-    fn on_tool_call_start(&mut self, _call: &ToolCall) {}
+    fn on_tool_call_start(&mut self, _call: &ToolCallPlaceholder) {}
 
     /// 单个工具调用完成时调用
-    fn on_tool_call_finish(&mut self, _call: &ToolCall, _success: bool, _result_summary: &str) {}
+    fn on_tool_call_finish(
+        &mut self,
+        _call: &ToolCallPlaceholder,
+        _success: bool,
+        _result_summary: &str,
+    ) {
+    }
 
     /// 每次迭代结束时调用
     fn on_iteration_finish(&mut self, _ctx: &IterationFinishContext) {}
@@ -275,7 +286,7 @@ impl RunHooks for InteractiveRunHooks {
         }
     }
 
-    fn on_tool_batch_start(&mut self, calls: &[ToolCall]) {
+    fn on_tool_batch_start(&mut self, calls: &[ToolCallPlaceholder]) {
         let tool_names: Vec<_> = calls.iter().map(|c| c.name.as_str()).collect();
         tracing::info!(tools = ?tool_names, "tool_calls_started");
     }
@@ -411,19 +422,24 @@ impl RunHooks for RecordingRunHooks {
         });
     }
 
-    fn on_tool_batch_start(&mut self, calls: &[ToolCall]) {
+    fn on_tool_batch_start(&mut self, calls: &[ToolCallPlaceholder]) {
         self.events.push(RunHookEvent::ToolBatchStart {
             tool_count: calls.len(),
         });
     }
 
-    fn on_tool_call_start(&mut self, call: &ToolCall) {
+    fn on_tool_call_start(&mut self, call: &ToolCallPlaceholder) {
         self.events.push(RunHookEvent::ToolCallStart {
             name: call.name.clone(),
         });
     }
 
-    fn on_tool_call_finish(&mut self, call: &ToolCall, success: bool, _result_summary: &str) {
+    fn on_tool_call_finish(
+        &mut self,
+        call: &ToolCallPlaceholder,
+        success: bool,
+        _result_summary: &str,
+    ) {
         self.events.push(RunHookEvent::ToolCallFinish {
             name: call.name.clone(),
             success,

@@ -71,7 +71,9 @@ UserConfig 是当前设备的本地启动配置，不代表 Vault 的产品设�
 | `id` | String | Provider 标识 |
 | `display_name` | String | 显示名称 |
 | `base_url` | String | API 基础 URL |
-| `default_model` | Option<String> | 当前设备默认模型 |
+| `main_model` | Option<String> | 当前 provider 主模型；为空时使用 `default_model` |
+| `light_model` | Option<String> | 当前 provider 轻量模型；为空时运行时回退主模型 |
+| `default_model` | Option<String> | 兼容字段，作为主模型默认值 |
 | `available_models` | Vec<String> | 可选模型列表 |
 
 API Key 不写入 UserConfig，使用 OS Keychain / Stronghold，并通过 `provider_id` 关联。
@@ -102,7 +104,8 @@ VaultConfig 是可随 Vault 打包迁移的配置，存储当前知识库的工�
   },
   "agent": {
     "provider_id": null,
-    "model_id": null
+    "model_id": null,
+    "light_model_id": null
   },
   "folder_mappings": {
     "daily": "daily",
@@ -140,7 +143,8 @@ WorkspacePrefs 属于 VaultConfig，而不是 UserConfig。原因是同一个用
 | 名称 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `provider_id` | Option<String> | `None` | 当前 Vault 首选 Provider；为空时使用 UserConfig 默认值 |
-| `model_id` | Option<String> | `None` | 当前 Vault 首选模型；为空时使用 Provider 默认模型 |
+| `model_id` | Option<String> | `None` | 当前 Vault 主模型；为空时使用 Provider 主模型或默认模型 |
+| `light_model_id` | Option<String> | `None` | 当前 Vault 轻量模型；为空时运行时回退主模型 |
 
 VaultConfig 不保存 `system_prompt`。稳定提示词由 `{vault}/.mindclaw/AGENTS.md`、`SOUL.md`、`TOOLS.md`、`USER.md`、`MEMORY.md` 承载。
 

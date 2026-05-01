@@ -1,6 +1,7 @@
-> **Status**: `draft`
+> **Status**: `active`
+> **Last updated**: 2026-05-01
 >
-> 本文档描述 MindClaw 新版需求与架构设计下的目标目录结构。当前代码尚未完全迁移到目标结构，因此本文档保持 `draft`；完成代码目录迁移并通过验证后，才能标记为 `active`。
+> 本文档描述 MindClaw 当前代码目录结构及目标差距。核心模块已完成 rig 迁移，前端工作域拆分待后续进行。
 
 # 目标目录结构
 
@@ -24,7 +25,10 @@
 
 ---
 
-## Rust 后端目标结构（`src-tauri/src/`）
+## Rust 后端当前结构（`src-tauri/src/`）
+
+> 以下结构反映当前代码状态（2026-05-01）。
+> ✅ 标记 = 已达成目标边界；🔧 标记 = 正在演进；📋 标记 = 待迁移。
 
 后端目录按架构职责组织：入口层保持薄，业务规则进入 Services，运行状态和依赖装配进入 Runtime，Agent 执行边界进入 Agent Runtime，存储细节进入 Storage。
 
@@ -46,58 +50,50 @@ src-tauri/src/
 │   ├── loop_.rs            Orchestration：AgentLoop，turn 级编排
 │   ├── runner.rs           Execution：AgentRunner，run 级 LLM 与工具迭代
 │   ├── spec.rs             Run 契约：AgentRunSpec / AgentRunResult / StopReason / TokenUsage
+│   ├── messages.rs         Runtime 消息与工具 Schema 契约
 │   ├── context.rs          ContextPipeline / ContextSource / BuiltContext
 │   ├── session.rs          AgentSession / TurnRecord / session 串行化
-│   ├── events.rs           ProviderEvent / AgentEvent / LoopPhase / UserVisiblePhase
-│   ├── hooks.rs            RunHooks 与交互式 Hook
+│   ├── events.rs           UserVisiblePhase 对外状态契约
+│   ├── hooks.rs            RunHooks observer 与交互式 Hook
 │   ├── spawn.rs            SubAgent / BackgroundAgent 派生执行
 │   ├── memory.rs           Agent 记忆召回与 Frontmatter 扩展
 │   ├── skills.rs           SkillManifest / SkillMetadata / SkillsRegistry
 │   ├── observability.rs    AgentObserver 与 tracing 适配
 │   ├── built-in/           内置技能、系统提示或运行时静态资源
-│   └── tools/              工具执行系统
-│       ├── mod.rs          ToolRegistry / ToolExecutor
-│       ├── traits.rs       Tool trait / ToolError
-│       ├── path_guard.rs   Agent 工具路径沙箱
-│       ├── shell.rs        Shell 工具
-│       ├── file_ops.rs     文件读取、写入和编辑
-│       ├── find_files.rs   文件搜索
-│       ├── search_content.rs 内容搜索
-│       ├── agent_spawn.rs  子代理工具入口
-│       └── mcp.rs          MCP 外部工具桥接
+│   └── tools/              工具执行系统 ✅
+│       ├── mod.rs          ✅ Rig ToolDyn 列表初始化与 profile 过滤
+│       ├── path_guard.rs   ✅ Agent 工具路径沙箱
+│       ├── shell.rs        ✅ Shell 工具
+│       ├── file_ops.rs     ✅ 文件读取、写入和编辑
+│       ├── find_files.rs   ✅ 文件搜索
+│       ├── search_content.rs ✅ 内容搜索
+│       ├── agent_spawn.rs  ✅ 子代理工具（delegate_to_agent / spawn_background_agent）
+│       └── mcp.rs          ✅ MCP 外部工具桥接
 │
-├── providers/              LLM Provider Adapter
-│   ├── mod.rs
-│   ├── traits.rs           Provider trait / ChatMessage / ProviderEvent 转换边界
-│   ├── config.rs           ProviderConfig / ModelConfig
-│   ├── registry.rs         ProviderRegistry
-│   ├── claude.rs           Anthropic Claude Adapter
-│   └── openai_compat.rs    OpenAI-compatible Adapter
+├── providers/              LLM Provider Adapter ✅
+│   ├── mod.rs              ✅ 导出 ProviderRegistry / AgentModelSet / LLMCompletionModel
+│   ├── config.rs           ✅ ProviderConfig / ModelConfig / 内置配置
+│   └── registry.rs         ✅ LLMClient / LLMCompletionModel / AgentModelSet / ProviderRegistry
+│                            ✅ 已删除: traits.rs, claude.rs, openai_compat.rs, rig_adapter.rs
 │
-├── services/               业务服务层
-│   ├── mod.rs
-│   ├── note.rs             NoteService：共有知识笔记与 Frontmatter 维护
-│   ├── daily.rs            DailyService：Daily Markdown
-│   ├── inbox.rs            InboxService：待处理条目生命周期、归档和目标引用
-│   ├── checklist.rs        ChecklistService：Markdown checklist 索引和更新
-│   ├── memory.rs           MemoryService：确认后的 Agent 记忆与召回
-│   ├── review.rs           ReviewService：观察、记忆建议和经验候选审核语义
-│   ├── evolution.rs        EvolutionService：演化记录追加和查询
-│   └── resource_import.rs  ResourceImportService：外部资源保存、解析和 Inbox 解析结果生成
+├── services/               业务服务层 🔧
+│   ├── mod.rs              ✅
+│   ├── note.rs             ✅ NoteService
+│   ├── daily.rs            ✅ DailyService
+│   ├── task.rs             🔧 TaskService（目标：checklist.rs）
+│   └── [待添加]            📋 inbox.rs, checklist.rs, memory.rs, review.rs, evolution.rs, resource_import.rs
 │
-├── storage/                存储能力层
-│   ├── mod.rs              ContextStore / Storage facade
-│   ├── context_fs.rs       ContextURI 与 Vault 文件能力
-│   ├── markdown.rs         Markdown + Frontmatter 读写
-│   ├── path_guard.rs       Vault / private / Agent 工具路径策略
-│   ├── keychain.rs         OS Keychain
-│   ├── archive.rs          归档写入能力
-│   ├── vector.rs           可重建向量索引或 embedding 引用
-│   ├── database/           SQLite 打开、连接池和 RuntimeStore / ContextIndex
+├── storage/                存储能力层 🔧
+│   ├── mod.rs              ✅
+│   ├── markdown.rs         ✅ Markdown + Frontmatter 读写
+│   ├── keychain.rs         📋 OS Keychain（占位）
+│   ├── archive.rs          📋 归档写入（占位）
+│   ├── vector.rs           📋 向量索引（占位）
+│   ├── database/           ✅ SQLite
 │   │   ├── mod.rs
-│   │   ├── global.rs       Global RuntimeStore
-│   │   └── vault.rs        Vault ContextIndex / Vault RuntimeStore
-│   └── migrations/         SQLite migration
+│   │   ├── global.rs       ✅ Global DB
+│   │   └── vault.rs        ✅ Vault DB
+│   └── migrations/         ✅ SQLite migration
 │
 ├── models/                 跨层共享 DTO 与轻量数据模型
 │   ├── mod.rs
@@ -106,16 +102,15 @@ src-tauri/src/
 │   ├── conversation.rs
 │   └── settings.rs
 │
-├── commands/               Tauri IPC 命令薄层
-│   ├── mod.rs
-│   ├── conversation.rs     Agent Session 命令
-│   ├── daily.rs            Daily 命令
-│   ├── inbox.rs            Inbox 命令
-│   ├── vault.rs            Vault 文件浏览、资源类型解析和笔记检索命令
-│   ├── memory.rs           Agent Memory 命令
-│   ├── review.rs           Review & Evolution 命令
-│   ├── settings.rs         设置、密钥和 WorkspacePrefs 命令
-│   └── system.rs           系统状态命令
+├── commands/               Tauri IPC 命令薄层 🔧
+│   ├── mod.rs              ✅
+│   ├── conversation.rs     ✅ Agent Session 命令
+│   ├── daily.rs            ✅ Daily 命令
+│   ├── tasks.rs            🔧 Task 命令（目标：checklist）
+│   ├── vault.rs            ✅ Vault 文件浏览/资源类型解析/笔记检索
+│   ├── settings.rs         ✅ 设置、密钥和 WorkspacePrefs 命令
+│   ├── system.rs           ✅ 系统状态命令
+│   └── [待添加]            📋 inbox.rs, memory.rs, review.rs
 │
 ├── cli/                    CLI 命令薄层
 │   ├── mod.rs
@@ -164,7 +159,8 @@ src-tauri/src/
 - 业务规则进入 `services/`，不能写入 `commands/` 或前端。
 - 文件、SQLite、Keychain、PathGuard 和 ContextIndex 细节进入 `storage/`。
 - Provider 协议差异进入 `providers/`，不能进入 `AgentLoop` 或 `AgentProfile`。
-- `agent/tools/` 保持目录结构；工具实现必须通过统一 Tool 接口注册。
+- Agent Runtime 的消息、工具 Schema 和运行事件契约进入 `agent/`；Rig 类型只能停留在 `AgentRunner`、`providers/` 和 `agent/tools/` 执行支撑边界内。
+- `agent/tools/` 保持目录结构；工具实现必须通过 Rig `ToolDyn` / `Tool` 接口注册。
 - 内置技能和提示类静态资源进入 `agent/built-in/`；只提供上下文指导的内容不能建成可调用工具。
 
 ---
@@ -307,19 +303,28 @@ Vault 目录由 Storage 架构定义，代码目录迁移时需要保持同一�
 
 ---
 
-## 当前实现差距
+## 当前实现差距（2026-05-01）
 
-当前仓库已具备主要目录边界，但尚未完全达到目标结构：
+### ✅ 已达成
 
-- `src-tauri/src/services/` 仍缺少 Inbox、Checklist、Memory、Review、Evolution、ResourceImport 等目标服务文件。
-- `src-tauri/src/storage/` 已有 `database/` 与 `migrations/`，但 ContextFS、ContextStore 和 PathGuard 目标边界尚未完全拆分为独立文件。
-- `src-tauri/src/commands/` 仍缺少 Inbox、Memory、Review 等目标命令文件。
-- 当前后端仍存在 `task.rs` / `tasks.rs` 命名；目标结构使用 checklist 表达 Markdown checklist，不把任务做成独立一等业务对象。
-- 当前后端存在 `agent/build-in/`；目标结构使用 `agent/built-in/` 命名内置静态资源目录。
-- `src/` 当前仍以 `components/chat/`、`components/layout/`、`components/tasks/` 为主，尚未拆出 `app/`、`shell/`、`workspaces/`、`features/`。
-- 当前前端存在 `components/tasks/`；目标结构使用 `workspaces/checklist/` 表达独立内容视图，使用 `features/checklist/` 表达 Markdown checklist 复用能力。
+- ✅ Providers 层已完成 rig 迁移，自定义 trait/adapters 全部删除
+- ✅ AgentRunner 持有 `AgentModelSet`，provider 选择停在 ProviderRegistry
+- ✅ Streaming 使用 rig 真实流式 API + 回调桥接
+- ✅ AgentSpawnDispatcher 已重新启用
+- ✅ 核心 agent/ 目录边界与文档一致
 
-这些差距不要求在本文档变更中解决。目录迁移实施时，应另起计划并同步更新代码、文档索引和验证命令。
+### 🔧 进行中
+
+- 🔧 `services/task.rs` 待迁移为 `services/checklist.rs`（Markdown checklist 语义）
+- 🔧 `commands/tasks.rs` 待迁移为 `commands/checklist.rs`
+
+### 📋 待启动
+
+- 📋 `services/` 待添加：inbox.rs, checklist.rs, memory.rs, review.rs, evolution.rs, resource_import.rs
+- 📋 `commands/` 待添加：inbox.rs, memory.rs, review.rs
+- 📋 `storage/` 待完善：context_fs.rs, path_guard.rs, keychain.rs, vector.rs
+- 📋 前端 `src/` 待拆分为 `app/`、`shell/`、`workspaces/`、`features/` 结构
+- 📋 前端 `components/tasks/` 待迁移为 `workspaces/checklist/` + `features/checklist/`
 
 ---
 

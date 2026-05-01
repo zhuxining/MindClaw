@@ -64,17 +64,24 @@ impl ConfigLoader {
         let a = &vault.agent;
         let d = &user.agent_defaults;
 
+        let provider_id = a
+            .provider_id
+            .clone()
+            .unwrap_or_else(|| user.active_provider_id.clone());
+        let provider_defaults = user.providers.iter().find(|p| p.id == provider_id);
+        let provider_main_model = provider_defaults
+            .and_then(|p| p.main_model.clone().or_else(|| p.default_model.clone()));
+        let provider_light_model = provider_defaults.and_then(|p| p.light_model.clone());
+
         AppConfig {
             user_data_dir,
             global_db_path,
             vault_path: entry.path.clone(),
             vault_config_dir,
             vault_db_path,
-            provider_id: a
-                .provider_id
-                .clone()
-                .unwrap_or_else(|| user.active_provider_id.clone()),
-            model_id: a.model_id.clone(),
+            provider_id,
+            model_id: a.model_id.clone().or(provider_main_model),
+            light_model_id: a.light_model_id.clone().or(provider_light_model),
             system_prompt: a
                 .system_prompt
                 .clone()

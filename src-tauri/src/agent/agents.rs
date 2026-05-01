@@ -12,8 +12,8 @@
 //!
 //! Profile 不是 Instance：Profile 描述"应该如何运行"，不是"正在运行什么"。
 
+use crate::agent::messages::{ChatMessage, ToolChoice as RunToolChoice, ToolSchema};
 use crate::agent::spec::{AgentRunSpec, InvocationMode};
-use crate::providers::{ChatMessage, ToolSchema};
 use crate::runtime::config::AppConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -495,6 +495,11 @@ impl AgentProfile {
             temperature: self.model_policy.temperature,
             max_tokens: self.model_policy.max_tokens,
             parallel_tools: self.tool_policy.parallel_tools,
+            tool_choice: match self.tool_policy.tool_choice {
+                ToolChoice::Auto => RunToolChoice::Auto,
+                ToolChoice::Required => RunToolChoice::Required,
+                ToolChoice::None => RunToolChoice::None,
+            },
             fail_on_tool_error: self.tool_policy.fail_on_tool_error,
         }
     }
@@ -550,13 +555,18 @@ impl AgentRegistry {
     }
 
     /// 启动时初始化默认 profiles
-    pub fn bootstrap(config: &AppConfig, default_model: impl Into<String>) -> Self {
-        let default_model = default_model.into();
+    pub fn bootstrap(
+        config: &AppConfig,
+        main_model: impl Into<String>,
+        light_model: impl Into<String>,
+    ) -> Self {
+        let main_model = main_model.into();
+        let light_model = light_model.into();
         let mut registry = Self::new();
 
         // Main Agent
         registry.register(Arc::new(
-            AgentProfile::new(MAIN_AGENT_ID, AgentKind::Main, default_model.clone())
+            AgentProfile::new(MAIN_AGENT_ID, AgentKind::Main, main_model)
                 .named("main")
                 .with_execution(
                     config.agent_max_iterations,
@@ -573,48 +583,40 @@ impl AgentRegistry {
 
         // SubAgent (inline)
         registry.register(Arc::new(
-            AgentProfile::new(
-                SUBAGENT_AGENT_ID,
-                AgentKind::SubAgent,
-                default_model.clone(),
-            )
-            .named("inline-subagent")
-            .with_execution(15, Some(0.0), Some(2000))
-            .with_delegation_policy(DelegationPolicy {
-                allow_subagents: true,
-                allow_background_agents: false,
-                max_child_depth: 2,
-                ..Default::default()
-            })
-            .with_invocation_policy(InvocationPolicy {
-                publish_result_to_user: false,
-                ..Default::default()
-            }),
+            AgentProfile::new(SUBAGENT_AGENT_ID, AgentKind::SubAgent, light_model.clone())
+                .named("inline-subagent")
+                .with_execution(15, Some(0.0), Some(2000))
+                .with_delegation_policy(DelegationPolicy {
+                    allow_subagents: true,
+                    allow_background_agents: false,
+                    max_child_depth: 2,
+                    ..Default::default()
+                })
+                .with_invocation_policy(InvocationPolicy {
+                    publish_result_to_user: false,
+                    ..Default::default()
+                }),
         ));
 
         // Background Agent
         registry.register(Arc::new(
-            AgentProfile::new(
-                BACKGROUND_AGENT_ID,
-                AgentKind::BackgroundAgent,
-                default_model,
-            )
-            .named("background-agent")
-            .with_execution(15, Some(0.0), Some(2000))
-            .with_tool_policy(ToolPolicy {
-                fail_on_tool_error: true,
-                ..Default::default()
-            })
-            .with_delegation_policy(DelegationPolicy {
-                allow_subagents: false,
-                allow_background_agents: false,
-                max_child_depth: 0,
-                ..Default::default()
-            })
-            .with_invocation_policy(InvocationPolicy {
-                publish_result_to_user: true,
-                ..Default::default()
-            }),
+            AgentProfile::new(BACKGROUND_AGENT_ID, AgentKind::BackgroundAgent, light_model)
+                .named("background-agent")
+                .with_execution(15, Some(0.0), Some(2000))
+                .with_tool_policy(ToolPolicy {
+                    fail_on_tool_error: true,
+                    ..Default::default()
+                })
+                .with_delegation_policy(DelegationPolicy {
+                    allow_subagents: false,
+                    allow_background_agents: false,
+                    max_child_depth: 0,
+                    ..Default::default()
+                })
+                .with_invocation_policy(InvocationPolicy {
+                    publish_result_to_user: true,
+                    ..Default::default()
+                }),
         ));
 
         registry

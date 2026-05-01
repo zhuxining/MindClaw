@@ -1,7 +1,7 @@
+use crate::agent::messages::MessageContent;
 use crate::bus::events::InboundMessage;
 use crate::error::AppResult;
 use crate::models::conversation::ConversationMode;
-use crate::providers::MessageContent;
 use crate::runtime::AppRuntime;
 use std::sync::Arc;
 

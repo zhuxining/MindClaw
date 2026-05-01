@@ -6,22 +6,18 @@
 //! - 命名空间隔离：使用 `mcp__tool` 格式避免冲突
 //! - 生命周期管理：优雅连接、错误恢复、干净关闭
 
-use crate::agent::tools::traits::{Tool, ToolInput, ToolOutput};
 use crate::error::{AppError, AppResult};
-use async_trait::async_trait;
+use rig::tool::ToolDyn;
 use rmcp::{
-    model::CallToolRequestParams,
     service::{RoleClient, RunningService},
     transport::streamable_http_client::StreamableHttpClientTransportConfig,
     transport::{StreamableHttpClientTransport, TokioChildProcess},
     ServiceExt,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
@@ -111,7 +107,7 @@ impl MCPConfig {
 
 /// MCP 管理器
 ///
-/// 管理多个 MCP server 连接，延迟加载，批量注册 proxy tools 到 ToolRegistry
+/// 管理多个 MCP server 连接，延迟加载，并通过 Rig McpTool 暴露工具。
 pub struct MCPManager {
     configs: Vec<MCPServerConfig>,
     /// 已连接的客户端
@@ -265,7 +261,7 @@ impl MCPManager {
     }
 
     /// 获取所有 MCP 工具
-    pub async fn get_tools(&self) -> Vec<MCPTool> {
+    pub async fn get_tools(&self) -> Vec<Box<dyn ToolDyn>> {
         let mut tools = Vec::new();
         let clients = self.clients.read().await;
 
@@ -278,8 +274,11 @@ impl MCPManager {
                             continue;
                         }
 
-                        let tool = MCPTool::new(server_name.clone(), mcp_tool, Arc::clone(client));
-                        tools.push(tool);
+                        let tool = rig::tool::rmcp::McpTool::from_mcp_server(
+                            mcp_tool,
+                            client.inner.peer().clone(),
+                        );
+                        tools.push(Box::new(tool) as Box<dyn ToolDyn>);
                     }
                 }
                 Err(e) => {
@@ -311,163 +310,4 @@ impl MCPManager {
         self.connected
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
-}
-
-// ============================================================================
-// MCP Tool 封装
-// ============================================================================
-
-/// MCP 工具包装
-pub struct MCPTool {
-    /// 服务器名称
-    #[allow(dead_code)]
-    server_name: String,
-    /// MCP 原始名称
-    original_name: String,
-    /// 封装后的名称（mcp__tool）
-    prefixed_name: String,
-    /// 描述
-    description: String,
-    /// 参数 Schema
-    schema: Value,
-    /// MCP 客户端
-    client: Arc<MCPClient>,
-    /// 超时
-    timeout: Duration,
-}
-
-impl MCPTool {
-    pub fn new(server_name: String, mcp_tool: rmcp::model::Tool, client: Arc<MCPClient>) -> Self {
-        let original_name = mcp_tool.name.to_string();
-        let prefixed_name = format!("mcp__{}", original_name);
-        let timeout = Duration::from_secs(client.config.timeout_secs);
-
-        Self {
-            server_name,
-            original_name,
-            prefixed_name,
-            description: mcp_tool.description.unwrap_or_default().to_string(),
-            schema: normalize_schema(&mcp_tool.input_schema),
-            client,
-            timeout,
-        }
-    }
-}
-
-#[async_trait]
-impl Tool for MCPTool {
-    fn name(&self) -> &str {
-        &self.prefixed_name
-    }
-
-    fn description(&self) -> &str {
-        &self.description
-    }
-
-    fn input_schema(&self) -> Value {
-        self.schema.clone()
-    }
-
-    async fn execute(&self, input: ToolInput) -> AppResult<ToolOutput> {
-        let args = input
-            .parameters
-            .as_object()
-            .map(|m| serde_json::Map::from_iter(m.iter().map(|(k, v)| (k.clone(), v.clone()))))
-            .unwrap_or_default();
-
-        let request = CallToolRequestParams {
-            name: self.original_name.clone().into(),
-            arguments: Some(args),
-            meta: None,
-            task: None,
-        };
-
-        // 带超时执行
-        let result =
-            match tokio::time::timeout(self.timeout, self.client.inner.call_tool(request)).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(e)) => {
-                    return Ok(ToolOutput {
-                        content: format!("MCP error: {}", e),
-                        is_error: true,
-                    });
-                }
-                Err(_) => {
-                    return Ok(ToolOutput {
-                        content: format!("Timeout after {:?}", self.timeout),
-                        is_error: true,
-                    });
-                }
-            };
-
-        // 转换结果为字符串
-        let content = format_mcp_result(&result);
-        Ok(ToolOutput {
-            content,
-            is_error: false,
-        })
-    }
-}
-
-/// 格式化 MCP 结果为字符串
-fn format_mcp_result(result: &rmcp::model::CallToolResult) -> String {
-    use rmcp::model::RawContent;
-
-    let mut outputs = Vec::new();
-
-    for annotated_content in &result.content {
-        // annotated_content 是 Annotated<RawContent> 类型
-        let text = match &annotated_content.raw {
-            RawContent::Text(t) => t.text.clone(),
-            RawContent::Image(img) => {
-                format!("![image](data:{};base64,{})", img.mime_type, img.data)
-            }
-            RawContent::Resource(r) => {
-                // 从资源中提取文本
-                serde_json::to_string(r).unwrap_or_default()
-            }
-            RawContent::Audio(a) => {
-                format!("[Audio: {}]", a.mime_type)
-            }
-            RawContent::ResourceLink(r) => {
-                format!("[Resource: {} - {}]", r.uri, r.name)
-            }
-        };
-        outputs.push(text);
-    }
-
-    if outputs.is_empty() {
-        "(no output)".to_string()
-    } else {
-        outputs.join("\n\n")
-    }
-}
-
-/// Schema 标准化
-fn normalize_schema(schema: &std::sync::Arc<serde_json::Map<String, Value>>) -> Value {
-    Value::Object(schema.as_ref().clone())
-}
-
-// ============================================================================
-// 与 ToolRegistry 集成
-// ============================================================================
-
-/// 扩展 ToolRegistry 以支持 MCP
-pub async fn register_mcp_tools(
-    registry: &mut super::ToolRegistry,
-    mcp_manager: &MCPManager,
-) -> AppResult<()> {
-    // 确保已连接
-    mcp_manager.ensure_connected().await?;
-
-    // 获取所有 MCP 工具
-    let tools = mcp_manager.get_tools().await;
-
-    // 注册到 registry
-    for tool in tools {
-        tracing::info!(tool_name = %tool.name(), "registering MCP tool");
-        registry.register(Arc::new(tool));
-    }
-
-    Ok(())
 }

@@ -35,7 +35,10 @@ pub struct AppConfig {
 
     // ── LLM / Agent 运行时参数 ──────────────────────────────────────────
     pub provider_id: String,
+    /// 主模型 ID；为空时使用当前 provider 的主模型 / 默认模型。
     pub model_id: Option<String>,
+    /// 轻量模型 ID；为空时运行时回退到主模型。
+    pub light_model_id: Option<String>,
     pub system_prompt: String,
     pub bus_capacity: usize,
     pub context_token_limit: usize,
@@ -84,6 +87,7 @@ impl Default for AppConfig {
             user_data_dir,
             provider_id: "deepseek".to_string(),
             model_id: None,
+            light_model_id: None,
             bus_capacity: 100,
             context_token_limit: 128_000,
             system_prompt: "你是一个智能助手，可以帮助用户完成各种任务。".to_string(),

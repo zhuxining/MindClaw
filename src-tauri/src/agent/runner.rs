@@ -1,463 +1,1013 @@
-//! AgentRunner — 纯执行层
+//! AgentRunner — Rig-backed run 执行内核
 //!
-//! 无状态的 LLM 迭代循环引擎，对基础设施一无所知
-//! 只依赖输入的 AgentRunSpec，通过 RunHooks 与业务层通信
-//!
-//! 当前文件只负责：
-//! - 多轮 LLM 调用
-//! - 工具调用解析与执行
-//! - 停止条件判断
-//! - 结果聚合
-//!
-//! 它不负责：
-//! - session 管理
-//! - MessageBus 发布
-//! - slash 命令
-//! - 后台任务调度
+//! MindClaw 保留 run 契约和业务编排，run 内部的 LLM/tool/streaming
+//! 循环交给 rig Agent、StreamingPromptRequest 和 PromptHook。
 
-use crate::agent::events::ProviderEvent;
 use crate::agent::hooks::{
     IterationFinishContext, IterationStartContext, ModelRequestContext, ModelResponseContext,
-    RunAbortReason, RunHooks, RunStartContext, StreamingMode,
+    RunAbortReason, RunHooks, RunStartContext, ToolCallPlaceholder,
 };
-use crate::agent::spec::{AgentRunResult, AgentRunSpec, TokenUsage, ToolEvent};
-use crate::agent::tools::{ToolCall, ToolRegistry, ToolResultMessage};
+use crate::agent::messages::{ChatMessage, MessageContent, MessageRole, ToolChoice};
+use crate::agent::spec::{
+    AgentRunResult, AgentRunSpec, StopReason, TokenUsage, ToolEvent, ToolStatus,
+};
 use crate::error::AppError;
-use crate::providers::{ChatMessage, ChatRequest, MessageContent, Provider, ToolChoice};
-use futures_util::StreamExt;
-use std::sync::Arc;
+use crate::match_completion_model;
+use crate::providers::AgentModelSet;
+use rig::agent::{
+    AgentBuilder, HookAction, MultiTurnStreamItem, PromptHook, StreamingError,
+    StreamingPromptRequest, ToolCallHookAction,
+};
+use rig::completion::request::GetTokenUsage;
+use rig::completion::{CompletionModel, PromptError};
+use rig::message::Message;
+use rig::tool::{server::ToolServer, ToolDyn, ToolSet};
+use std::collections::HashMap;
+use std::time::Instant;
+use std::{sync::Arc, time::Duration};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-/// AgentRunner - 纯执行层
-///
-/// 负责执行核心的"LLM 调用与工具执行"迭代循环。
-/// 无状态，不持有 session、message bus 或任何基础设施依赖。
 pub struct AgentRunner {
-    /// LLM Provider
-    provider: Arc<dyn Provider>,
-    /// 工具注册表
-    tool_registry: Arc<ToolRegistry>,
+    models: AgentModelSet,
 }
 
 impl AgentRunner {
-    /// 创建新的 AgentRunner
-    pub fn new(provider: Arc<dyn Provider>, tool_registry: Arc<ToolRegistry>) -> Self {
-        Self {
-            provider,
-            tool_registry,
-        }
+    pub fn new(models: AgentModelSet) -> Self {
+        Self { models }
     }
 
-    /// 获取 Provider 引用
-    pub fn provider(&self) -> Arc<dyn Provider> {
-        self.provider.clone()
-    }
-
-    /// 执行 Agent 迭代循环
-    ///
-    /// 核心流程：
-    /// 1. 遍历迭代（最多 max_iterations）
-    /// 2. 每次迭代调用 LLM（流式或非流式）
-    /// 3. 检查是否有工具调用
-    /// 4. 有工具调用则执行，追加结果，继续迭代
-    /// 5. 无工具调用则定稿内容，返回结果
-    pub async fn run(
+    pub async fn run_spec(
         &self,
-        spec: AgentRunSpec,
-        hook: &mut dyn RunHooks,
+        spec: &AgentRunSpec,
+        tools: Vec<Box<dyn ToolDyn>>,
+        hook: Box<dyn RunHooks>,
         cancel: CancellationToken,
     ) -> Result<AgentRunResult, AppError> {
-        let mut messages = spec.messages.clone();
-        let mut tools_used = Vec::new();
-        let mut tool_events = Vec::new();
-        let mut usage = TokenUsage::default();
-
-        // Run 开始钩子
-        hook.on_run_start(&RunStartContext {
-            run_id: spec.run_id.clone(),
-            session_id: spec.session_id.clone(),
-            agent_id: spec.agent_id.clone(),
-            message_count: messages.len(),
-        });
-
-        for iteration in 0..spec.max_iterations {
-            // 检查取消
-            if cancel.is_cancelled() {
-                hook.on_abort(&RunAbortReason::Cancelled);
-                return Ok(AgentRunResult::cancelled());
-            }
-
-            // 1. 迭代开始钩子
-            hook.on_iteration_start(&IterationStartContext {
+        let observer = Arc::new(Mutex::new(hook));
+        {
+            let mut observer = observer.lock().await;
+            observer.on_run_start(&RunStartContext {
                 run_id: spec.run_id.clone(),
                 session_id: spec.session_id.clone(),
                 agent_id: spec.agent_id.clone(),
-                iteration,
-                message_count: messages.len(),
+                message_count: spec.messages.len(),
             });
-
-            // 2. 模型请求开始钩子
-            let is_streaming = matches!(hook.streaming_mode(), StreamingMode::TextOnly);
-            hook.on_model_request_start(&ModelRequestContext {
-                run_id: spec.run_id.clone(),
-                session_id: spec.session_id.clone(),
-                agent_id: spec.agent_id.clone(),
-                iteration,
-                model: spec.model.clone(),
-                is_streaming,
-            });
-
-            // 3. 调用 LLM（流式或非流式）
-            let response = if is_streaming {
-                self.chat_stream(&spec, &messages, hook, cancel.clone())
-                    .await?
-            } else {
-                self.chat(&spec, &messages, cancel.clone()).await?
-            };
-
-            // 4. 更新使用量
-            usage.add(&response.usage);
-
-            // 5. 模型响应就绪钩子
-            hook.on_model_response_ready(&ModelResponseContext {
-                run_id: spec.run_id.clone(),
-                session_id: spec.session_id.clone(),
-                agent_id: spec.agent_id.clone(),
-                iteration,
-                has_tool_calls: response.has_tool_calls,
-                tool_call_count: response.tool_calls.len(),
-                usage: response.usage.clone(),
-            });
-
-            // 6. 检查是否有工具调用
-            if response.has_tool_calls {
-                // 追加 assistant 消息（含 tool_calls）
-                let assistant_msg =
-                    self.build_assistant_message(&response.content, &response.tool_calls);
-                messages.push(assistant_msg);
-
-                // 工具批次开始钩子
-                hook.on_tool_batch_start(&response.tool_calls);
-
-                // 执行工具
-                for call in &response.tool_calls {
-                    hook.on_tool_call_start(call);
-                }
-
-                let tool_batch_start = std::time::Instant::now();
-                let results = self
-                    .execute_tools(&spec, &response.tool_calls, cancel.clone())
-                    .await;
-                let batch_ms = tool_batch_start.elapsed().as_millis() as u64;
-                // 注意：这是批次内工具的平均耗时，不是单个工具的实际执行时间
-                // 实际行为取决于 parallel_tools 配置：
-                // - 并行执行时：各工具实际耗时可能差异很大，这里取平均
-                // - 顺序执行时：总时间 = 各工具时间之和，平均 = 总时间 / 工具数
-                // 如需精确耗时，需在 ToolRegistry::execute_calls 内为每个工具单独计时
-                let per_tool_ms = batch_ms / (response.tool_calls.len() as u64).max(1);
-
-                // 检查致命错误
-                if spec.fail_on_tool_error {
-                    let fatal_error = results.iter().find(|r| r.is_error);
-                    if let Some(err) = fatal_error {
-                        // 先完成所有已启动的 tool call 钩子（避免生命周期不完整）
-                        for (call, tool_result) in response.tool_calls.iter().zip(results.iter()) {
-                            let success = !tool_result.is_error;
-                            hook.on_tool_call_finish(call, success, &tool_result.content);
-                        }
-                        hook.on_abort(&RunAbortReason::Error {
-                            message: err.content.clone(),
-                        });
-                        return Ok(AgentRunResult::tool_error(err.content.clone(), messages));
-                    }
-                }
-
-                // 追加工具结果和记录事件
-                for (call, tool_result) in response.tool_calls.iter().zip(results.iter()) {
-                    messages.push(ChatMessage::tool_result(
-                        truncate(&tool_result.content, 4_000),
-                        call.id.clone(),
-                        tool_result.is_error,
-                    ));
-                    tools_used.push(call.name.clone());
-
-                    let success = !tool_result.is_error;
-                    hook.on_tool_call_finish(call, success, &tool_result.content);
-
-                    tool_events.push(ToolEvent {
-                        name: call.name.clone(),
-                        tool_call_id: call.id.clone(),
-                        status: if tool_result.is_error {
-                            crate::agent::spec::ToolStatus::Failed {
-                                error: tool_result.content.clone(),
-                            }
-                        } else {
-                            crate::agent::spec::ToolStatus::Succeeded
-                        },
-                        duration_ms: per_tool_ms,
-                        input_summary: truncate(&call.arguments.to_string(), 500),
-                        output_summary: truncate(&tool_result.content, 1_000),
-                    });
-                }
-
-                // 迭代结束钩子
-                hook.on_iteration_finish(&IterationFinishContext {
-                    run_id: spec.run_id.clone(),
-                    session_id: spec.session_id.clone(),
-                    agent_id: spec.agent_id.clone(),
-                    iteration,
-                    message_count: messages.len(),
-                    usage: response.usage,
-                });
-
-                // 继续下一轮
-                continue;
-            }
-
-            // 无工具调用 - 最终响应
-            // 最终内容定稿
-            let final_text = hook.finalize_response(&response.content);
-
-            // 追加最终 assistant 消息
-            messages.push(ChatMessage::assistant_text(&final_text));
-
-            // 构建结果（使用新的 final_text / full_message_chain 字段名）
-            let mut result = AgentRunResult::completed(final_text, messages, usage);
-            result.tools_used = tools_used;
-            result.tool_events = tool_events;
-
-            // Run 完成钩子
-            hook.on_finish(&result);
-
-            return Ok(result);
         }
 
-        // 达到最大迭代次数 - 属于异常结束，先调 on_abort 再调 on_finish
-        let max_msg = format!("Reached maximum iterations ({})", spec.max_iterations);
-        let full_message_chain = messages;
-        let mut result = AgentRunResult::max_iterations(
-            max_msg.clone(),
-            full_message_chain,
-            spec.max_iterations,
-        );
-        result.tools_used = tools_used;
-        result.tool_events = tool_events;
-        result.usage = usage;
+        if cancel.is_cancelled() {
+            notify_abort(&observer, RunAbortReason::Cancelled).await;
+            return Ok(AgentRunResult::cancelled());
+        }
 
-        hook.on_abort(&RunAbortReason::Error { message: max_msg });
-        hook.on_finish(&result);
+        let rig_hook = RigPromptHook::new(spec, Arc::clone(&observer), cancel.clone());
+        let model = self.models.model_for(&spec.model);
+        let outcome = match_completion_model!(
+            model,
+            run_with_model,
+            spec,
+            tools,
+            rig_hook.clone(),
+            cancel.clone()
+        );
+
+        let mut result = match outcome {
+            Ok(outcome) => {
+                let final_text = {
+                    let mut observer = observer.lock().await;
+                    observer.finalize_response(&outcome.final_text)
+                };
+
+                AgentRunResult {
+                    final_text,
+                    full_message_chain: outcome.messages,
+                    tools_used: Vec::new(),
+                    usage: outcome.usage,
+                    stop_reason: outcome.stop_reason,
+                    error: outcome.error,
+                    tool_events: rig_hook.tool_events().await,
+                }
+            }
+            Err(RunFailure::Cancelled) => {
+                notify_abort(&observer, RunAbortReason::Cancelled).await;
+                AgentRunResult::cancelled()
+            }
+            Err(RunFailure::MaxTurns { messages }) => {
+                AgentRunResult::max_iterations(String::new(), messages, spec.max_iterations)
+            }
+            Err(RunFailure::ToolError { error, messages }) => {
+                notify_abort(
+                    &observer,
+                    RunAbortReason::Error {
+                        message: error.clone(),
+                    },
+                )
+                .await;
+                AgentRunResult::tool_error(error, messages)
+            }
+            Err(RunFailure::Provider(error)) => {
+                notify_abort(
+                    &observer,
+                    RunAbortReason::Error {
+                        message: error.clone(),
+                    },
+                )
+                .await;
+                return Err(AppError::Provider(error));
+            }
+        };
+
+        result.tools_used = result
+            .tool_events
+            .iter()
+            .map(|event| event.name.clone())
+            .collect();
+
+        if result.stop_reason == StopReason::Completed {
+            let mut observer = observer.lock().await;
+            observer.on_finish(&result);
+        }
 
         Ok(result)
     }
+}
 
-    /// 非流式 LLM 调用
-    async fn chat(
-        &self,
-        spec: &AgentRunSpec,
-        messages: &[ChatMessage],
-        cancel: CancellationToken,
-    ) -> Result<LLMResponse, AppError> {
-        let response = self
-            .provider
-            .chat(ChatRequest {
-                model: &spec.model,
-                messages,
-                system: Some(&spec.system_prompt),
-                tools: &spec.tools,
-                tool_choice: ToolChoice::Auto,
-                max_tokens: spec.max_tokens.map(|n| n as u32),
-                cancel,
-            })
-            .await?;
+async fn run_with_model<M>(
+    model: M,
+    spec: &AgentRunSpec,
+    tools: Vec<Box<dyn ToolDyn>>,
+    hook: RigPromptHook,
+    cancel: CancellationToken,
+) -> Result<RunOutcome, RunFailure>
+where
+    M: CompletionModel + Clone + 'static,
+    M::StreamingResponse: GetTokenUsage + Clone + Unpin + Send + Sync + 'static,
+{
+    let rig_messages = to_rig_messages(&spec.messages);
+    let Some((prompt, history)) = rig_messages.split_last() else {
+        return Ok(RunOutcome::completed(
+            String::new(),
+            TokenUsage::default(),
+            Vec::new(),
+        ));
+    };
 
-        // 解析工具调用
-        let tool_calls = response
-            .message
-            .content
-            .iter()
-            .filter_map(|part| match part {
-                MessageContent::ToolUse { id, name, input } => Some(ToolCall {
-                    id: id.clone(),
-                    name: name.clone(),
-                    arguments: input.clone(),
-                }),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+    let tool_server = ToolServer::new().run();
+    tool_server
+        .append_toolset(ToolSet::from_tools_boxed(tools))
+        .await
+        .map_err(|error| RunFailure::Provider(error.to_string()))?;
 
-        let text_content = response.message.text_content();
+    let mut builder = AgentBuilder::new(model)
+        .name(&spec.agent_id)
+        .preamble(&spec.system_prompt)
+        .hook(hook.clone())
+        .tool_server_handle(tool_server)
+        .default_max_turns(spec.max_iterations);
 
-        Ok(LLMResponse {
-            content: text_content,
-            has_tool_calls: !tool_calls.is_empty(),
-            tool_calls,
-            usage: TokenUsage::new(
-                response.usage.input_tokens as usize,
-                response.usage.output_tokens as usize,
-            ),
-            finish_reason: response.stop_reason,
-        })
+    if let Some(temperature) = spec.temperature {
+        builder = builder.temperature(temperature as f64);
+    }
+    if let Some(max_tokens) = spec.max_tokens {
+        builder = builder.max_tokens(max_tokens as u64);
+    }
+    if let Some(tool_choice) = to_rig_tool_choice(&spec.tool_choice) {
+        builder = builder.tool_choice(tool_choice);
     }
 
-    /// 流式 LLM 调用
-    async fn chat_stream(
-        &self,
-        spec: &AgentRunSpec,
-        messages: &[ChatMessage],
-        hook: &mut dyn RunHooks,
-        cancel: CancellationToken,
-    ) -> Result<LLMResponse, AppError> {
-        let mut stream = self
-            .provider
-            .chat_stream(ChatRequest {
-                model: &spec.model,
-                messages,
-                system: Some(&spec.system_prompt),
-                tools: &spec.tools,
-                tool_choice: ToolChoice::Auto,
-                max_tokens: spec.max_tokens.map(|n| n as u32),
-                cancel,
-            })
-            .await?;
+    let agent = builder.build();
+    let request = StreamingPromptRequest::<M, RigPromptHook>::from_agent(&agent, prompt.clone())
+        .with_history(history.to_vec())
+        .multi_turn(spec.max_iterations)
+        .with_hook(hook.clone());
+    let mut stream = request.await;
 
-        let mut content = String::new();
-        let mut tool_calls = Vec::new();
-        let mut usage = TokenUsage::default();
-        let mut finish_reason = String::new();
+    use futures_util::StreamExt;
 
-        while let Some(event) = stream.next().await {
-            match event? {
-                ProviderEvent::TextDelta { text } => {
-                    content.push_str(&text);
-                    hook.on_model_text_delta(&text);
-                }
-                ProviderEvent::ToolCallReady {
-                    id,
-                    name,
-                    arguments_json,
-                } => {
-                    tool_calls.push(ToolCall {
-                        id,
-                        name,
-                        arguments: arguments_json,
-                    });
-                }
-                ProviderEvent::StreamFinished {
-                    usage: round_usage,
-                    stop_reason,
-                } => {
-                    usage = TokenUsage::new(
-                        round_usage.input_tokens as usize,
-                        round_usage.output_tokens as usize,
-                    );
-                    finish_reason = stop_reason;
-                    break;
-                }
-            }
+    let mut final_text = String::new();
+    let mut final_usage = TokenUsage::default();
+    let mut final_messages = Vec::new();
+
+    while let Some(item) = stream.next().await {
+        if cancel.is_cancelled() {
+            return Err(RunFailure::Cancelled);
         }
 
-        Ok(LLMResponse {
-            content,
-            has_tool_calls: !tool_calls.is_empty(),
-            tool_calls,
-            usage,
-            finish_reason,
-        })
+        match item {
+            Ok(MultiTurnStreamItem::FinalResponse(response)) => {
+                final_text = response.response().to_string();
+                final_usage = TokenUsage::new(
+                    response.usage().input_tokens as usize,
+                    response.usage().output_tokens as usize,
+                );
+                final_messages = response
+                    .history()
+                    .map(to_chat_messages)
+                    .unwrap_or_else(Vec::new);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                return handle_stream_error(error, &hook).await;
+            }
+        }
     }
 
-    /// 执行工具调用
-    async fn execute_tools(
-        &self,
-        spec: &AgentRunSpec,
-        calls: &[ToolCall],
-        cancel: CancellationToken,
-    ) -> Vec<ToolResultMessage> {
-        if spec.parallel_tools {
-            self.tool_registry
-                .execute_calls(calls.to_vec(), cancel)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::error!(error = %e, "tool_execution_failed");
-                    calls
-                        .iter()
-                        .map(|c| ToolResultMessage {
-                            tool_call_id: c.id.clone(),
-                            content: format!("Error: {}", e),
-                            is_error: true,
+    Ok(RunOutcome::completed(
+        final_text,
+        final_usage,
+        final_messages,
+    ))
+}
+
+async fn handle_stream_error(
+    error: StreamingError,
+    hook: &RigPromptHook,
+) -> Result<RunOutcome, RunFailure> {
+    match error {
+        StreamingError::Prompt(prompt_error) => match *prompt_error {
+            PromptError::MaxTurnsError { chat_history, .. } => Err(RunFailure::MaxTurns {
+                messages: to_chat_messages(&chat_history),
+            }),
+            PromptError::PromptCancelled {
+                chat_history,
+                reason,
+            } => {
+                if reason == "run cancelled" {
+                    return Err(RunFailure::Cancelled);
+                }
+                if let Some(tool_error) = hook.last_tool_error().await {
+                    Err(RunFailure::ToolError {
+                        error: tool_error,
+                        messages: to_chat_messages(&chat_history),
+                    })
+                } else {
+                    Err(RunFailure::Provider(reason))
+                }
+            }
+            other => Err(RunFailure::Provider(other.to_string())),
+        },
+        other => Err(RunFailure::Provider(other.to_string())),
+    }
+}
+
+async fn notify_abort(observer: &SharedObserver, reason: RunAbortReason) {
+    let mut observer = observer.lock().await;
+    observer.on_abort(&reason);
+}
+
+fn to_rig_tool_choice(choice: &ToolChoice) -> Option<rig::message::ToolChoice> {
+    match choice {
+        ToolChoice::Auto => Some(rig::message::ToolChoice::Auto),
+        ToolChoice::None => Some(rig::message::ToolChoice::None),
+        ToolChoice::Required => Some(rig::message::ToolChoice::Required),
+        ToolChoice::Specific(name) => Some(rig::message::ToolChoice::Specific {
+            function_names: vec![name.clone()],
+        }),
+    }
+}
+
+fn to_rig_messages(messages: &[ChatMessage]) -> Vec<Message> {
+    messages
+        .iter()
+        .map(|message| match message.role {
+            MessageRole::System => Message::system(message.text_content()),
+            MessageRole::User => Message::user(message.text_content()),
+            MessageRole::Assistant => Message::assistant(message.text_content()),
+        })
+        .collect()
+}
+
+fn to_chat_messages(messages: &[Message]) -> Vec<ChatMessage> {
+    messages.iter().map(to_chat_message).collect()
+}
+
+fn to_chat_message(message: &Message) -> ChatMessage {
+    match message {
+        Message::System { content } => ChatMessage::system(content),
+        Message::User { content } => {
+            let parts = content
+                .iter()
+                .filter_map(|item| match item {
+                    rig::message::UserContent::Text(text) => Some(MessageContent::Text {
+                        text: text.text.clone(),
+                    }),
+                    rig::message::UserContent::ToolResult(result) => {
+                        Some(MessageContent::ToolResult {
+                            tool_use_id: result.id.clone(),
+                            content: result
+                                .content
+                                .iter()
+                                .filter_map(|content| match content {
+                                    rig::message::ToolResultContent::Text(text) => {
+                                        Some(text.text.as_str())
+                                    }
+                                    rig::message::ToolResultContent::Image(_) => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                            is_error: false,
                         })
-                        .collect()
+                    }
+                    _ => None,
                 })
-        } else {
-            // 顺序执行
-            let mut results = Vec::new();
-            for call in calls {
-                let result = self.execute_single_tool(call, cancel.clone()).await;
-                results.push(result);
+                .collect();
+            ChatMessage {
+                role: MessageRole::User,
+                content: parts,
             }
-            results
+        }
+        Message::Assistant { content, .. } => {
+            let parts = content
+                .iter()
+                .filter_map(|item| match item {
+                    rig::message::AssistantContent::Text(text) => Some(MessageContent::Text {
+                        text: text.text.clone(),
+                    }),
+                    rig::message::AssistantContent::ToolCall(call) => {
+                        Some(MessageContent::ToolUse {
+                            id: call.id.clone(),
+                            name: call.function.name.clone(),
+                            input: call.function.arguments.clone(),
+                        })
+                    }
+                    _ => None,
+                })
+                .collect();
+            ChatMessage {
+                role: MessageRole::Assistant,
+                content: parts,
+            }
+        }
+    }
+}
+
+type SharedObserver = Arc<Mutex<Box<dyn RunHooks>>>;
+
+#[derive(Clone)]
+struct RigPromptHook {
+    run_id: String,
+    session_id: String,
+    agent_id: String,
+    model: String,
+    fail_on_tool_error: bool,
+    observer: SharedObserver,
+    state: Arc<Mutex<RigHookState>>,
+    cancel: CancellationToken,
+}
+
+impl RigPromptHook {
+    fn new(spec: &AgentRunSpec, observer: SharedObserver, cancel: CancellationToken) -> Self {
+        Self {
+            run_id: spec.run_id.clone(),
+            session_id: spec.session_id.clone(),
+            agent_id: spec.agent_id.clone(),
+            model: spec.model.clone(),
+            fail_on_tool_error: spec.fail_on_tool_error,
+            observer,
+            state: Arc::new(Mutex::new(RigHookState::default())),
+            cancel,
         }
     }
 
-    /// 执行单个工具
-    async fn execute_single_tool(
+    async fn tool_events(&self) -> Vec<ToolEvent> {
+        self.state.lock().await.tool_events.clone()
+    }
+
+    async fn last_tool_error(&self) -> Option<String> {
+        self.state.lock().await.last_tool_error.clone()
+    }
+}
+
+impl<M> PromptHook<M> for RigPromptHook
+where
+    M: CompletionModel,
+    M::StreamingResponse: GetTokenUsage + Send + Sync + 'static,
+{
+    async fn on_completion_call(&self, _prompt: &Message, history: &[Message]) -> HookAction {
+        if self.cancel.is_cancelled() {
+            return HookAction::terminate("run cancelled");
+        }
+
+        let iteration = {
+            let mut state = self.state.lock().await;
+            let iteration = state.current_iteration;
+            state.current_iteration += 1;
+            state.current_tool_call_count = 0;
+            state.model_response_reported = false;
+            iteration
+        };
+
+        let mut observer = self.observer.lock().await;
+        observer.on_iteration_start(&IterationStartContext {
+            run_id: self.run_id.clone(),
+            session_id: self.session_id.clone(),
+            agent_id: self.agent_id.clone(),
+            iteration,
+            message_count: history.len() + 1,
+        });
+        observer.on_model_request_start(&ModelRequestContext {
+            run_id: self.run_id.clone(),
+            session_id: self.session_id.clone(),
+            agent_id: self.agent_id.clone(),
+            iteration,
+            model: self.model.clone(),
+            is_streaming: true,
+        });
+
+        HookAction::cont()
+    }
+
+    async fn on_tool_call(
         &self,
-        call: &ToolCall,
-        cancel: CancellationToken,
-    ) -> ToolResultMessage {
-        let calls = vec![call.clone()];
-        let results = self.tool_registry.execute_calls(calls, cancel).await;
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> ToolCallHookAction {
+        if self.cancel.is_cancelled() {
+            return ToolCallHookAction::terminate("run cancelled");
+        }
 
-        match results {
-            Ok(mut r) if !r.is_empty() => r.remove(0),
-            Ok(_) => ToolResultMessage {
-                tool_call_id: call.id.clone(),
-                content: "No result".to_string(),
-                is_error: true,
-            },
-            Err(e) => ToolResultMessage {
-                tool_call_id: call.id.clone(),
-                content: format!("Error: {}", e),
-                is_error: true,
-            },
+        let call_id = tool_call_id.unwrap_or_else(|| internal_call_id.to_string());
+        let call = ToolCallPlaceholder {
+            name: tool_name.to_string(),
+            id: call_id.clone(),
+        };
+        let (iteration, first_tool_call) = {
+            let mut state = self.state.lock().await;
+            state.current_tool_call_count += 1;
+            let first_tool_call = !state.model_response_reported;
+            state.model_response_reported = true;
+            state.active_tools.insert(
+                internal_call_id.to_string(),
+                ToolStart {
+                    name: tool_name.to_string(),
+                    tool_call_id: call_id,
+                    args: args.to_string(),
+                    started_at: Instant::now(),
+                },
+            );
+            (state.current_iteration.saturating_sub(1), first_tool_call)
+        };
+
+        let mut observer = self.observer.lock().await;
+        if first_tool_call {
+            observer.on_model_response_ready(&ModelResponseContext {
+                run_id: self.run_id.clone(),
+                session_id: self.session_id.clone(),
+                agent_id: self.agent_id.clone(),
+                iteration,
+                has_tool_calls: true,
+                tool_call_count: 1,
+                usage: TokenUsage::default(),
+            });
+        }
+        observer.on_tool_batch_start(std::slice::from_ref(&call));
+        observer.on_tool_call_start(&call);
+
+        ToolCallHookAction::cont()
+    }
+
+    async fn on_tool_result(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+        result: &str,
+    ) -> HookAction {
+        if self.cancel.is_cancelled() {
+            return HookAction::terminate("run cancelled");
+        }
+
+        let success = !is_tool_failure(result);
+        let call_id = tool_call_id.unwrap_or_else(|| internal_call_id.to_string());
+        let call = ToolCallPlaceholder {
+            name: tool_name.to_string(),
+            id: call_id.clone(),
+        };
+        let event = {
+            let mut state = self.state.lock().await;
+            let start = state.active_tools.remove(internal_call_id);
+            let duration = start
+                .as_ref()
+                .map(|start| start.started_at.elapsed())
+                .unwrap_or(Duration::ZERO);
+            let event = ToolEvent {
+                name: start
+                    .as_ref()
+                    .map(|start| start.name.clone())
+                    .unwrap_or_else(|| tool_name.to_string()),
+                tool_call_id: start
+                    .as_ref()
+                    .map(|start| start.tool_call_id.clone())
+                    .unwrap_or(call_id),
+                status: if success {
+                    ToolStatus::Succeeded
+                } else {
+                    ToolStatus::Failed {
+                        error: result.to_string(),
+                    }
+                },
+                duration_ms: duration.as_millis() as u64,
+                input_summary: truncate_summary(
+                    start
+                        .as_ref()
+                        .map(|start| start.args.as_str())
+                        .unwrap_or(args),
+                ),
+                output_summary: truncate_summary(result),
+            };
+            if !success {
+                state.last_tool_error = Some(result.to_string());
+            }
+            state.tool_events.push(event.clone());
+            event
+        };
+
+        let mut observer = self.observer.lock().await;
+        observer.on_tool_call_finish(&call, success, &event.output_summary);
+
+        if self.fail_on_tool_error && !success {
+            HookAction::terminate(result.to_string())
+        } else {
+            HookAction::cont()
         }
     }
 
-    /// 构建 assistant 消息（含 tool_calls）
-    fn build_assistant_message(&self, text: &str, tool_calls: &[ToolCall]) -> ChatMessage {
-        let mut parts = Vec::new();
-
-        if !text.is_empty() {
-            parts.push(MessageContent::Text {
-                text: text.to_string(),
-            });
+    async fn on_text_delta(&self, text_delta: &str, _aggregated_text: &str) -> HookAction {
+        if self.cancel.is_cancelled() {
+            return HookAction::terminate("run cancelled");
         }
 
-        for call in tool_calls {
-            parts.push(MessageContent::ToolUse {
-                id: call.id.clone(),
-                name: call.name.clone(),
-                input: call.arguments.clone(),
-            });
+        let mut observer = self.observer.lock().await;
+        observer.on_model_text_delta(text_delta);
+        HookAction::cont()
+    }
+
+    async fn on_stream_completion_response_finish(
+        &self,
+        _prompt: &Message,
+        response: &<M as CompletionModel>::StreamingResponse,
+    ) -> HookAction {
+        if self.cancel.is_cancelled() {
+            return HookAction::terminate("run cancelled");
         }
 
-        ChatMessage::assistant_parts(parts)
+        let usage = response
+            .token_usage()
+            .map(|usage| TokenUsage::new(usage.input_tokens as usize, usage.output_tokens as usize))
+            .unwrap_or_default();
+        let (iteration, tool_call_count, should_report) = {
+            let mut state = self.state.lock().await;
+            let should_report = !state.model_response_reported;
+            state.model_response_reported = true;
+            (
+                state.current_iteration.saturating_sub(1),
+                state.current_tool_call_count,
+                should_report,
+            )
+        };
+
+        let mut observer = self.observer.lock().await;
+        if should_report {
+            observer.on_model_response_ready(&ModelResponseContext {
+                run_id: self.run_id.clone(),
+                session_id: self.session_id.clone(),
+                agent_id: self.agent_id.clone(),
+                iteration,
+                has_tool_calls: tool_call_count > 0,
+                tool_call_count,
+                usage: usage.clone(),
+            });
+        }
+        observer.on_iteration_finish(&IterationFinishContext {
+            run_id: self.run_id.clone(),
+            session_id: self.session_id.clone(),
+            agent_id: self.agent_id.clone(),
+            iteration,
+            message_count: 0,
+            usage,
+        });
+
+        HookAction::cont()
     }
 }
 
-/// LLM 响应内部结构
-struct LLMResponse {
-    content: String,
-    tool_calls: Vec<ToolCall>,
-    has_tool_calls: bool,
+#[derive(Default)]
+struct RigHookState {
+    current_iteration: usize,
+    current_tool_call_count: usize,
+    model_response_reported: bool,
+    active_tools: HashMap<String, ToolStart>,
+    tool_events: Vec<ToolEvent>,
+    last_tool_error: Option<String>,
+}
+
+struct ToolStart {
+    name: String,
+    tool_call_id: String,
+    args: String,
+    started_at: Instant,
+}
+
+#[derive(Debug)]
+struct RunOutcome {
+    final_text: String,
     usage: TokenUsage,
-    #[allow(dead_code)]
-    finish_reason: String,
+    messages: Vec<ChatMessage>,
+    stop_reason: StopReason,
+    error: Option<String>,
 }
 
-/// 截断字符串
-fn truncate(input: &str, max_len: usize) -> String {
-    if input.chars().count() <= max_len {
-        return input.to_string();
+impl RunOutcome {
+    fn completed(final_text: String, usage: TokenUsage, messages: Vec<ChatMessage>) -> Self {
+        Self {
+            final_text,
+            usage,
+            messages,
+            stop_reason: StopReason::Completed,
+            error: None,
+        }
     }
-    input.chars().take(max_len).collect()
+}
+
+#[derive(Debug)]
+enum RunFailure {
+    Cancelled,
+    MaxTurns {
+        messages: Vec<ChatMessage>,
+    },
+    ToolError {
+        error: String,
+        messages: Vec<ChatMessage>,
+    },
+    Provider(String),
+}
+
+fn is_tool_failure(result: &str) -> bool {
+    let normalized = result.trim_start().to_ascii_lowercase();
+    normalized.starts_with("[error]")
+        || normalized.starts_with("toolset error")
+        || normalized.starts_with("toolcallerror")
+        || normalized.starts_with("toolservererror")
+        || normalized.starts_with("jsonerror")
+}
+
+fn truncate_summary(value: &str) -> String {
+    const MAX_LEN: usize = 500;
+    if value.len() <= MAX_LEN {
+        return value.to_string();
+    }
+    let end = value
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .take_while(|idx| *idx <= MAX_LEN)
+        .last()
+        .unwrap_or(0);
+    format!("{}...", &value[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::hooks::NoopRunHooks;
+    use rig::completion::{
+        CompletionError, CompletionRequest, CompletionResponse, ToolDefinition, Usage,
+    };
+    use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
+    use serde::{Deserialize, Serialize};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    struct MockStreamingResponse {
+        usage: Usage,
+    }
+
+    impl MockStreamingResponse {
+        fn new(input_tokens: u64, output_tokens: u64) -> Self {
+            let mut usage = Usage::new();
+            usage.input_tokens = input_tokens;
+            usage.output_tokens = output_tokens;
+            usage.total_tokens = input_tokens + output_tokens;
+            Self { usage }
+        }
+    }
+
+    impl GetTokenUsage for MockStreamingResponse {
+        fn token_usage(&self) -> Option<Usage> {
+            Some(self.usage)
+        }
+    }
+
+    #[derive(Clone)]
+    struct TextModel;
+
+    #[allow(refining_impl_trait)]
+    impl CompletionModel for TextModel {
+        type Response = ();
+        type StreamingResponse = MockStreamingResponse;
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            Self
+        }
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+            Err(CompletionError::ProviderError(
+                "completion is unused in runner tests".to_string(),
+            ))
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            let items = vec![
+                Ok(RawStreamingChoice::Message("hello ".to_string())),
+                Ok(RawStreamingChoice::Message("world".to_string())),
+                Ok(RawStreamingChoice::FinalResponse(
+                    MockStreamingResponse::new(3, 2),
+                )),
+            ];
+            Ok(StreamingCompletionResponse::stream(Box::pin(
+                futures_util::stream::iter(items),
+            )))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ToolThenTextModel {
+        turn: Arc<AtomicUsize>,
+    }
+
+    #[allow(refining_impl_trait)]
+    impl CompletionModel for ToolThenTextModel {
+        type Response = ();
+        type StreamingResponse = MockStreamingResponse;
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            Self::default()
+        }
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+            Err(CompletionError::ProviderError(
+                "completion is unused in runner tests".to_string(),
+            ))
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            let turn = self.turn.fetch_add(1, Ordering::SeqCst);
+            let items = if turn == 0 {
+                vec![
+                    Ok(RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                        "tool_call_1".to_string(),
+                        "echo_tool".to_string(),
+                        serde_json::json!({"value": "ping"}),
+                    ))),
+                    Ok(RawStreamingChoice::FinalResponse(
+                        MockStreamingResponse::new(4, 1),
+                    )),
+                ]
+            } else {
+                vec![
+                    Ok(RawStreamingChoice::Message("tool done".to_string())),
+                    Ok(RawStreamingChoice::FinalResponse(
+                        MockStreamingResponse::new(5, 2),
+                    )),
+                ]
+            };
+            Ok(StreamingCompletionResponse::stream(Box::pin(
+                futures_util::stream::iter(items),
+            )))
+        }
+    }
+
+    #[derive(Clone)]
+    struct AlwaysToolModel;
+
+    #[allow(refining_impl_trait)]
+    impl CompletionModel for AlwaysToolModel {
+        type Response = ();
+        type StreamingResponse = MockStreamingResponse;
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            Self
+        }
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+            Err(CompletionError::ProviderError(
+                "completion is unused in runner tests".to_string(),
+            ))
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            let items = vec![
+                Ok(RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                    "tool_call_loop".to_string(),
+                    "echo_tool".to_string(),
+                    serde_json::json!({"value": "loop"}),
+                ))),
+                Ok(RawStreamingChoice::FinalResponse(
+                    MockStreamingResponse::new(1, 1),
+                )),
+            ];
+            Ok(StreamingCompletionResponse::stream(Box::pin(
+                futures_util::stream::iter(items),
+            )))
+        }
+    }
+
+    #[derive(Clone)]
+    struct EchoTool {
+        fail: bool,
+    }
+
+    impl ToolDyn for EchoTool {
+        fn name(&self) -> String {
+            "echo_tool".to_string()
+        }
+
+        fn definition(
+            &self,
+            _prompt: String,
+        ) -> Pin<Box<dyn Future<Output = ToolDefinition> + Send + '_>> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: "echo_tool".to_string(),
+                    description: "Echo test tool".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "value": {"type": "string"}
+                        }
+                    }),
+                }
+            })
+        }
+
+        fn call(
+            &self,
+            _args: String,
+        ) -> Pin<Box<dyn Future<Output = Result<String, rig::tool::ToolError>> + Send + '_>>
+        {
+            Box::pin(async move {
+                if self.fail {
+                    Err(rig::tool::ToolError::ToolCallError(Box::new(
+                        std::io::Error::other("boom"),
+                    )))
+                } else {
+                    Ok("echo ok".to_string())
+                }
+            })
+        }
+    }
+
+    fn test_spec(max_iterations: usize, fail_on_tool_error: bool) -> AgentRunSpec {
+        AgentRunSpec {
+            model: "mock-model".to_string(),
+            messages: vec![ChatMessage::user("hello")],
+            max_iterations,
+            fail_on_tool_error,
+            ..AgentRunSpec::default()
+        }
+    }
+
+    fn test_hook(spec: &AgentRunSpec, cancel: CancellationToken) -> RigPromptHook {
+        RigPromptHook::new(spec, Arc::new(Mutex::new(Box::new(NoopRunHooks))), cancel)
+    }
+
+    #[tokio::test]
+    async fn runner_streams_plain_text_response() {
+        let spec = test_spec(3, false);
+        let cancel = CancellationToken::new();
+        let hook = test_hook(&spec, cancel.clone());
+
+        let outcome = run_with_model(TextModel, &spec, vec![], hook, cancel)
+            .await
+            .expect("plain text run should succeed");
+
+        assert_eq!(outcome.final_text, "hello world");
+        assert_eq!(outcome.usage.prompt_tokens, 3);
+        assert_eq!(outcome.usage.completion_tokens, 2);
+        assert_eq!(outcome.messages.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn runner_records_successful_tool_call() {
+        let spec = test_spec(3, false);
+        let cancel = CancellationToken::new();
+        let hook = test_hook(&spec, cancel.clone());
+
+        let outcome = run_with_model(
+            ToolThenTextModel::default(),
+            &spec,
+            vec![Box::new(EchoTool { fail: false })],
+            hook.clone(),
+            cancel,
+        )
+        .await
+        .expect("tool run should succeed");
+
+        assert_eq!(outcome.final_text, "tool done");
+        let events = hook.tool_events().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, "echo_tool");
+        assert_eq!(events[0].status, ToolStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn runner_reports_max_turns() {
+        let spec = test_spec(1, false);
+        let cancel = CancellationToken::new();
+        let hook = test_hook(&spec, cancel.clone());
+
+        let failure = run_with_model(
+            AlwaysToolModel,
+            &spec,
+            vec![Box::new(EchoTool { fail: false })],
+            hook,
+            cancel,
+        )
+        .await
+        .expect_err("run should hit max turns");
+
+        assert!(matches!(failure, RunFailure::MaxTurns { .. }));
+    }
+
+    #[tokio::test]
+    async fn prompt_hook_terminates_when_cancelled() {
+        let spec = test_spec(3, false);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let hook = test_hook(&spec, cancel);
+
+        let action = <RigPromptHook as PromptHook<TextModel>>::on_completion_call(
+            &hook,
+            &Message::user("hello"),
+            &[],
+        )
+        .await;
+
+        assert!(matches!(action, HookAction::Terminate { .. }));
+    }
+
+    #[tokio::test]
+    async fn strict_tool_error_aborts_run() {
+        let spec = test_spec(3, true);
+        let cancel = CancellationToken::new();
+        let hook = test_hook(&spec, cancel.clone());
+
+        let failure = run_with_model(
+            ToolThenTextModel::default(),
+            &spec,
+            vec![Box::new(EchoTool { fail: true })],
+            hook,
+            cancel,
+        )
+        .await
+        .expect_err("strict tool failure should abort");
+
+        assert!(matches!(failure, RunFailure::ToolError { .. }));
+    }
+
+    #[tokio::test]
+    async fn lenient_tool_error_allows_model_retry() {
+        let spec = test_spec(3, false);
+        let cancel = CancellationToken::new();
+        let hook = test_hook(&spec, cancel.clone());
+
+        let outcome = run_with_model(
+            ToolThenTextModel::default(),
+            &spec,
+            vec![Box::new(EchoTool { fail: true })],
+            hook.clone(),
+            cancel,
+        )
+        .await
+        .expect("lenient tool failure should continue");
+
+        assert_eq!(outcome.final_text, "tool done");
+        let events = hook.tool_events().await;
+        assert!(matches!(events[0].status, ToolStatus::Failed { .. }));
+    }
 }

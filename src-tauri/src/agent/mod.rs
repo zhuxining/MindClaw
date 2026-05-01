@@ -2,7 +2,7 @@
 //!
 //! 双层解耦架构：
 //! - AgentLoop（业务编排层）：消息消费、会话管理、上下文构建、流式分发
-//! - AgentRunner（纯执行层）：LLM 迭代循环、工具执行
+//! - AgentRunner（Rig 执行内核）：LLM 迭代循环、工具执行
 //!
 //! 核心数据类型：
 //! - AgentRunSpec：声明式执行配置
@@ -17,7 +17,7 @@ pub mod events;
 pub mod hooks;
 pub mod loop_;
 pub mod memory;
-pub mod observability;
+pub mod messages;
 pub mod runner;
 pub mod session;
 pub mod skills;
@@ -31,15 +31,17 @@ pub use context::{
     BuiltContext, ContextBuildContext, ContextFragment, ContextLayer, ContextPipeline,
     ContextSource, ConversationHistorySource, MessageRole, SystemPromptSource, UserMessageSource,
 };
-pub use events::{AgentEvent, LoopPhase, ProviderEvent, ProviderUsage, UserVisiblePhase};
+pub use events::UserVisiblePhase;
 pub use hooks::{
     strip_think_tags, InteractiveRunHooks, IterationFinishContext, IterationStartContext,
-    ModelRequestContext, ModelResponseContext, NoopRunHooks, RecordingRunHooks, RunAbortReason,
-    RunHookEvent, RunHookPublisher, RunHooks, RunStartContext, StreamingMode,
+    ModelRequestContext, ModelResponseContext, NoopRunHooks, RunAbortReason, RunHookPublisher,
+    RunHooks, RunStartContext, StreamingMode,
 };
 pub use loop_::AgentLoop;
 pub use memory::{Memory, MemoryCategory, MemoryStore, UpsertMemoryInput};
-pub use observability::{AgentObserver, CompositeObserver, TracingObserver};
+pub use messages::{
+    ChatMessage, MessageContent, MessageRole as ChatMessageRole, ToolChoice, ToolSchema,
+};
 pub use runner::AgentRunner;
 pub use session::{AgentSession, RunStatus, SessionManager, ToolTrace, TurnRecord};
 pub use skills::{SkillManifest, SkillMetadata, SkillsRegistry};

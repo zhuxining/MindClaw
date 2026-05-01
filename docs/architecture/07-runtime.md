@@ -42,13 +42,13 @@
 1. 读取配置文件和环境变量，构建 `AppConfig`
 2. 初始化 Storage
 3. 初始化 ServiceContainer
-4. 初始化 ProviderRegistry
-5. 初始化 ToolRegistry 与 MCP adapters
+4. 初始化 ProviderRegistry，并解析 `AgentModelSet` 主模型/轻量模型
+5. 初始化共享 AgentRunner
 6. 初始化 AgentRegistry 与 ModelRouter
-7. 初始化 AgentRunner
-8. 初始化 AgentSpawnDispatcher
-9. 初始化 ContextPipeline 与 SessionManager
-10. 注入 AgentLoop
+7. 初始化 AgentSpawnDispatcher 所需共享依赖
+8. 初始化 ContextPipeline 与 SessionManager
+9. 注入 AgentLoop
+10. 每次 run 按需构建 Rig tool scope 和 MCP tools
 11. 初始化 ChannelManager
 12. 返回 AppRuntime，并由入口调用 `start()`
 

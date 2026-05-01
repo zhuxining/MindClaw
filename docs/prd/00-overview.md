@@ -20,30 +20,30 @@ MindClaw 桌面端是一个**人机知识共建与 Agent 演化工作站**。用
 
 第一版 Ribbon（工作域活动栏）只展示以下入口：
 
-| 入口 | 功能定位 |
-|------|----------|
-| Daily | 每日记录、当日回顾、轻量 checklist |
-| Inbox | 捕获、外部解析结果、审核候选与知识草稿的待处理集散地 |
-| Vault | 共享知识库浏览、编辑、搜索、Frontmatter 索引 |
-| Private | 私密内容编辑与隔离边界 |
-| Agent | Agent Session、上下文引用、执行反馈、草稿生成 |
-| Memory | Agent 记忆查看、确认、修正、删除、知识引用 |
-| Settings | 工作区设置、Vault 路径、隐私边界、基础偏好 |
+| 入口     | 功能定位                                             |
+| -------- | ---------------------------------------------------- |
+| Daily    | 每日记录、当日回顾、轻量 checklist                   |
+| Inbox    | 捕获、外部解析结果、审核候选与知识草稿的待处理集散地 |
+| Vault    | 共享知识库浏览、编辑、搜索、Frontmatter 索引         |
+| Private  | 私密内容编辑与隔离边界                               |
+| Agent    | Agent Session、上下文引用、执行反馈、草稿生成        |
+| Memory   | Agent 记忆查看、确认、修正、删除、知识引用           |
+| Settings | 工作区设置、Vault 路径、隐私边界、基础偏好           |
 
 Graph、Skills、MCP、Cron、Tasks 不作为 MVP Ribbon 主入口。Checklist 任务能力由 Daily、Inbox、Vault 与 Agent Session 承载。
 
 ## 文档导航
 
-| 文档 | Feature | 状态 |
-|------|---------|------|
-| [01-workspace-shell.md](01-workspace-shell.md) | 工作台壳层与全局交互 | `draft` |
-| [02-agent-session.md](02-agent-session.md) | Agent Session 工作域 | `draft` |
-| [03-daily-inbox.md](03-daily-inbox.md) | Daily 与 Inbox 待处理闭环 | `draft` |
-| [04-vault-knowledge.md](04-vault-knowledge.md) | Vault 共享知识空间 | `draft` |
-| [05-private-boundary.md](05-private-boundary.md) | Private 私密边界 | `draft` |
-| [06-agent-memory.md](06-agent-memory.md) | Agent 记忆管理 | `draft` |
+| 文档                                                     | Feature                          | 状态    |
+| -------------------------------------------------------- | -------------------------------- | ------- |
+| [01-workspace-shell.md](01-workspace-shell.md)           | 工作台壳层与全局交互             | `draft` |
+| [02-agent-session.md](02-agent-session.md)               | Agent Session 工作域             | `draft` |
+| [03-daily-inbox.md](03-daily-inbox.md)                   | Daily 与 Inbox 待处理闭环        | `draft` |
+| [04-vault-knowledge.md](04-vault-knowledge.md)           | Vault 共享知识空间               | `draft` |
+| [05-private-boundary.md](05-private-boundary.md)         | Private 私密边界                 | `draft` |
+| [06-agent-memory.md](06-agent-memory.md)                 | Agent 记忆管理                   | `draft` |
 | [07-reflection-evolution.md](07-reflection-evolution.md) | 反思回顾、演化路径与经验教训候选 | `draft` |
-| [08-checklist-tasks.md](08-checklist-tasks.md) | Markdown checklist 任务 | `draft` |
+| [08-checklist-tasks.md](08-checklist-tasks.md)           | Markdown checklist 任务          | `draft` |
 
 ## 范围界定
 

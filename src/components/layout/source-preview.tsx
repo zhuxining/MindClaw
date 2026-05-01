@@ -4,7 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useSettingsQuery } from "@/queries/settings";
-import { EmptyState } from "./workspace-chrome";
+import { EmptyState } from "./shell-primitives";
 
 function joinVaultPath(root: string, relativePath: string) {
 	const normalizedRoot = root.replace(/[\\/]+$/, "");

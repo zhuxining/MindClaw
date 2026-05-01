@@ -1,6 +1,6 @@
 import { DirectoryPanel } from "./DirectoryPanel";
+import { PanelFrame } from "./shell-primitives";
 import { TabNav } from "./TabNav";
-import { PanelFrame } from "./workspace-chrome";
 
 export function LeftSidebar() {
 	return (

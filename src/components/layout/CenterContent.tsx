@@ -18,17 +18,17 @@ import { todayDate } from "@/queries/daily";
 import { useSettingsQuery } from "@/queries/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 import {
+	ContentHeader,
+	EmptyState,
+	PanelFrame,
+	StatusBadge,
+} from "./shell-primitives";
+import {
 	ImagePreview,
 	openSourceExternally,
 	PdfViewer,
 	WebPreview,
 } from "./source-preview";
-import {
-	ContentHeader,
-	EmptyState,
-	PanelFrame,
-	StatusBadge,
-} from "./workspace-chrome";
 
 function offsetDate(date: string, days: number): string {
 	const current = new Date(date);

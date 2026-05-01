@@ -50,7 +50,7 @@ Services 层负责笔记、Daily、Inbox、Checklist、Agent 记忆、回顾队�
 
 | 服务 | Tauri 命令 | CLI 命令 | Agent Runtime / Tools |
 |------|------------|----------|------------------------|
-| NoteService | Vault / Knowledge 命令 | search / note 命令 | 知识检索、保存草稿、解析知识保存位置 |
+| NoteService | Vault 命令 | search / note 命令 | Vault 检索、保存草稿、解析 Vault 保存位置 |
 | DailyService | Daily 命令 | daily 命令 | Daily 读写工具 |
 | InboxService | Inbox 命令 | inbox 命令 | 待处理条目创建、归档和恢复 |
 | ChecklistService | Daily / Vault checklist 命令 | checklist 命令 | checklist 更新工具 |
@@ -82,14 +82,14 @@ ServiceContainer 在 `AppRuntimeBuilder` 中初始化。服务共享 Storage Ada
 
 ## § 关键流程
 
-### 保存知识草稿
+### 保存 Vault 草稿
 
 1. NoteService 接收标题、`tags`、`overview`、`confidence`、正文、来源链接和可选目标位置。
 2. NoteService 按用户选择、主题目录、`tags` 或 Vault 配置规则解析共有知识保存位置，Storage 原子写入 Markdown 文件。
 3. NoteService 更新 ContextIndex。
-4. 若来源是 Inbox 候选，InboxService 写入目标知识引用并将源条目移出默认待处理队列；没有明确目标或用户选择关闭时，源条目进入归档。
+4. 若来源是 Inbox 候选，InboxService 写入目标 Vault 引用并将源条目移出默认待处理队列；没有明确目标或用户选择关闭时，源条目进入归档。
 5. MemoryService 建立或更新 `shared` 记忆引用。
-6. EvolutionService 追加知识沉淀记录。
+6. EvolutionService 追加 Vault 沉淀记录。
 
 ### 确认记忆更新建议
 
@@ -104,7 +104,7 @@ ServiceContainer 在 `AppRuntimeBuilder` 中初始化。服务共享 Storage Ada
 1. ReviewService 汇总观察候选、案例、用户修正或执行失败。
 2. 可选通过 AgentSpawnDispatcher 调度后台 review run。
 3. ReviewService 请求 InboxService 保存 `LessonCandidate(Pending)` Markdown 到 `inbox/review/`。
-4. 用户确认后，候选可以转化为 Agent Memory，也可以开放 Save as Knowledge 入口。
+4. 用户确认后，候选可以转化为 Agent Memory，也可以开放 Save to Vault 入口。
 5. 保存为共有知识时，正文按主题或用户规则进入 Markdown Vault，Memory 只保留调用索引和知识引用；无目标或用户选择关闭时归档 Inbox 源条目。
 
 ### 导入外部资料

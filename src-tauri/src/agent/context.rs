@@ -3,7 +3,7 @@
 //! 核心命题：记忆是 Agent 的，知识是共同的
 //!
 //! - 第 1 层 Core：缓存稳定（SOUL.md / USER.md / AGENTS.md / 工具 Schema）
-//! - 第 2 层 Dynamic：每次请求变化（Identity / Memory / Knowledge / Skills）
+//! - 第 2 层 Dynamic：每次请求变化（Identity / Memory / Vault / Skills）
 //! - 第 3 层 User：运行时上下文 + 用户输入
 
 use crate::agent::session::AgentSession;
@@ -25,7 +25,7 @@ pub enum ContextLayer {
     Core,
 
     /// 第 2 层：动态上下文（每次请求变化）
-    /// Identity / Memory / Knowledge / Skills
+    /// Identity / Memory / Vault / Skills
     Dynamic,
 
     /// 第 3 层：用户消息
@@ -137,7 +137,7 @@ pub struct ContextBuildContext {
     pub inbound: InboundMessage,
     /// 当前会话
     pub session: Arc<AgentSession>,
-    // TODO: 添加 MemoryManager, KnowledgeStore
+    // TODO: 添加 MemoryManager, VaultStore
 }
 
 impl ContextBuildContext {

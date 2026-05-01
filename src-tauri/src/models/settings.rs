@@ -84,10 +84,12 @@ impl Default for WorkspacePanelSizes {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WorkspaceRightPanelHeights {
     pub pin: f32,
     pub tasks: f32,
-    pub relevance: f32,
+    #[serde(rename = "relatedContent", alias = "relevance")]
+    pub related_content: f32,
 }
 
 impl Default for WorkspaceRightPanelHeights {
@@ -97,7 +99,7 @@ impl Default for WorkspaceRightPanelHeights {
         Self {
             pin: 20.0,
             tasks: 50.0,
-            relevance: 30.0,
+            related_content: 30.0,
         }
     }
 }

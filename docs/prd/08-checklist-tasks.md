@@ -125,7 +125,7 @@ Then 该提醒在当天回顾中不再显示
 
 - [ ] checklist 提醒只出现在回顾视图或 Agent Session 中。
 - [ ] checklist 不触发系统级推送。
-- [ ] Tasks 不作为 MVP Ribbon 主入口。
+- [ ] Checklist 入口只打开各 Markdown 文件中 checklist 的聚合视图，不创建独立任务真相源。
 
 **优先级**：P2
 
@@ -144,7 +144,7 @@ Then 该提醒在当天回顾中不再显示
 - 独立任务对象：任务真相在 Markdown 正文中，独立对象会偏离产品定位。
 - 甘特图、依赖关系、子任务树：这些能力属于重度项目管理工具范畴。
 - 系统级通知：MVP 通过回顾和 Session 提示处理 checklist。
-- Ribbon Tasks 入口：第一版主导航聚焦知识共建和 Agent 演化。
+- 独立任务存储：Checklist 视图只能聚合、筛选和定位 Markdown checklist。
 
 ## 非功能需求
 

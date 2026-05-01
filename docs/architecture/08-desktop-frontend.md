@@ -1,218 +1,258 @@
 > **Status**: `draft`
 
-# 桌面端前端架构
+# Desktop Frontend — 桌面工作台前端架构
 
-→ 相关 PRD：[prd/00-overview.md](../prd/00-overview.md)
-→ 系统总览：[00-overview.md](00-overview.md)
+→ UI 设计源：[desktop-ui.pen](../ui/desktop-ui.pen)
+→ 相关 PRD：[01-workspace-shell.md](../prd/01-workspace-shell.md)
 → IPC 通道：[01-channels.md](01-channels.md)
 
-## 职责定位
+## § 职责定位
 
-桌面端前端负责将 AppRuntime 的服务能力呈现为用户可操作的界面，通过 Tauri IPC（`invoke`）调用后端命令、通过 Tauri 事件系统接收后端推送，不包含任何业务逻辑计算。
+桌面端前端负责把 AppRuntime 的服务能力组织成桌面工作台：Ribbon、Left Panel、Content Host、Right Panel 和 Status Bar。前端通过 Tauri IPC 调用后端命令，通过 Tauri 事件订阅接收运行时推送。
 
-**不负责**：Checklist 解析与写入规则、Agent 执行逻辑、文件读写、存储操作——这些全部由 Rust 服务层处理，前端只负责状态展示和用户交互的收集与转发。
+不负责：业务规则、Markdown checklist 解析、Agent 执行、文件读写、ContextIndex、Private 隔离和持久化真相源。这些能力属于 Rust Services、Agent Runtime 和 Storage。
 
-## 核心原则
+## § 命名规则
 
-1. **IPC 是唯一数据通道**：前端不直接读写文件系统，不持有业务数据的权威副本；所有数据来自 `invoke` 响应或后端 `emit` 事件。
+本文档同时使用两套命名：
 
-2. **UI 状态与服务器状态分离**：Zustand 管理运行时 UI 状态（当前 Tab、Chat 是否打开、流式消息缓冲），TanStack Query 管理服务器状态（Checklist 索引、日记内容、设置项）并负责缓存和失效。
+| 场景 | 规则 | 示例 |
+|------|------|------|
+| UI 设计概念 | Title Case，与 `docs/ui` 画板命名一致 | `Left Panel`、`File Explorer Pane`、`Content Host` |
+| React 组件 / 类型 | PascalCase | `LeftPanel`、`CalendarFilterPane`、`NoteOutlinePane` |
+| 代码目录 | kebab-case 小写链接符 | `left-panel/`、`calendar-filter-pane/`、`note-outline-pane/` |
+| 状态字段 / 函数 | camelCase | `activeWorkspaceId`、`openTabs` |
 
-3. **工作区偏好走后端配置**：面板尺寸、固定目录、视图模式、最近打开内容、Chat 模式等工作区偏好通过 `WorkspacePrefs` 存到 UserConfig，不再写 localStorage。
+文档描述交互和 UI 区域时使用 UI 设计概念名；描述文件路径时必须使用 kebab-case。
 
-4. **流式消息不进查询缓存**：Agent 回复的流式 chunk 实时追加到 Zustand chatStore，不经过 TanStack Query；会话历史通过独立的 `get_session_history` 查询加载。
+## § 核心原则
 
-## 边界与实体
+**工作台壳层稳定**：Ribbon、Left Panel、Content Host、Right Panel、Status Bar 是长期稳定的 UI 边界，工作域只替换这些边界内的 Pane 和内容视图。
 
-**输入**：
+**Pane 组合优先**：Left Panel 与 Right Panel 都由多个 Pane 小组件组成。Pane 负责局部筛选、导航或上下文展示，不直接拥有业务真相源。
 
-- `invoke(cmd, args)` — 用户操作触发的命令调用，返回 Promise
-- `listen(event, handler)` — 订阅后端推送事件（Agent 流式输出）
-- 用户的键盘/鼠标输入（由 React 事件系统捕获）
+**文件工作域复用同一浏览模型**：Daily、Inbox、Private、Vault 都默认使用 File Explorer Pane，并通过 Calendar Filter / Tags Filter / Type Filter / Saved Filters / File Explorer 这些 Pane Filter Toolbar 切换过滤入口。
 
-**输出**：
+**列表工作域复用同一查询模型**：Agent、Skills、Memory、MCP、Session、Cron 在 Left Panel 中都使用列表查询相关内容，点击列表项后在 Content Host 打开详情或编辑视图。
 
-- `invoke` 调用参数（发送给 Rust commands 层）
-- DOM 渲染结果（Tauri WebView 显示）
+**独立工具视图不伪装成文件工作域**：Checklist、Graph、Settings 是独立 Content View。Checklist 是各个 Markdown 文件中 checklist 的聚合视图，不成为独立任务真相源。
 
-**核心实体**（前端视角）：
+## § 工作台区域
 
-- **OpenedItem** — 当前中央区域显示的内容，使用判别联合：`daily | note | source-web | source-pdf | source-image`
-- **StreamingMessage** — 正在流式输出的 Agent 消息，包含累积的 chunk 内容和当前阶段（thinking / using_tools / streaming）
-- **WorkspacePrefs** — 工作区持久化偏好：Tab、目录视图模式、三栏尺寸、右侧区块高度、最近打开内容、Chat 模式
-
-**错误边界**：前端捕获 `invoke` 返回的 AppError（序列化的 Rust 错误），翻译为用户可读的错误提示；流式事件中的 Error payload 由 chatStore 处理并显示在消息气泡中。
-
-## 关键流程
-
-### 流程 1：用户发送 Chat 消息
-
-```
-用户按 Enter
-  → chatStore.addUserMessage(content, requestId)   // 乐观更新，立即渲染
-  → invoke('send_message', { content, sessionId })  // 通知后端开始处理
-  → chatStore.startStreaming(requestId)             // 添加 Agent 气泡占位
-
-后端 emit 'mindclaw://runtime-event'
-  → Chunk   → chatStore.appendChunk(chunk)         // 文字增量追加
-  → Status  → chatStore.setPhase(phase)            // 阶段指示更新
-  → Done    → chatStore.completeStreaming()         // 流式结束，Markdown 渲染
-  → Error   → chatStore.setError(message)          // 错误气泡
+```text
+main-window
+├── Ribbon
+├── LeftPanel
+│   ├── PanelHeader
+│   ├── PaneHost
+│   └── PaneFilterToolbar
+├── ContentHost
+│   ├── TabArea
+│   └── ContentView
+├── RightPanel
+│   ├── PanelHeader
+│   ├── PaneHost
+│   └── PaneFilterToolbar
+└── StatusBar
 ```
 
-### 流程 2：用户切换 Tab
+**Ribbon**：固定工作域与全局动作入口。工作域入口包括 Daily、Inbox、Private、Vault、Checklist、Graph、Agent、Skills、Memory、MCP、Session、Cron、Settings。Open Today、New Note、New Session、Add Link 等是全局动作，不改变工作域定义。
 
-```
-用户点击 Tab 按钮
-  → workspaceStore.setActiveTab(tab)               // 立即更新 Tab 高亮
-  → DirectoryPanel 根据 tab 选择对应子组件渲染    // 目录树切换
-  → CenterContent 根据 openedItem 决定显示内容    // 若 openedItem 为空则显示默认视图
-```
+**Left Panel**：当前工作域的导航与筛选区。它不直接等同于文件树，而是由多个 Pane 组成。
 
-### 流程 3：Checklist 状态更新（乐观更新）
+**Content Host**：中央多 Tab 内容区。所有文件、资源、Agent Session、列表详情和独立工具视图都以 Tab 形式承载。
 
-```
-用户点击 checklist 复选框
-  → 本地 state 立即标记为 done（乐观更新）
-  → invoke('update_checklist_item', { id, status: 'done' })
+**Right Panel**：当前 Content View 的 Inspector。Markdown 内容默认展示 Note Outline、Note Frontmatter、Related Content；Agent Session 展示引用上下文、执行状态和草稿；不支持上下文的视图显示空状态。
 
-成功：invalidateQueries(queryKeys.checklist.all)   // 重新获取 checklist 索引
-失败：回滚本地 state + 显示错误提示
-```
+**Status Bar**：展示编辑保存状态、当前 Vault、索引状态、Agent 运行阶段和最近错误。
 
-## 组件层次
+## § Pane 系统
 
-```
-AppShell
-├── LeftSidebar
-│   ├── TabNav                    # Daily / Private / Vault / Source + 自定义固定 Tab
-│   │   └── TabItem               # 右键菜单：固定为 Tab / 取消固定
-│   └── DirectoryPanel            # 根据 activeTab 渲染目录内容
-│       ├── SearchField           # Vault 标题/标签搜索，其他 Tab 文件名过滤
-│       ├── ViewModeToggle        # Tree / Flat 切换按钮
-│       ├── TreeView              # 树状模式：层级缩进，文件夹可折叠
-│       └── FlatView              # 平铺模式：目录范围内所有文件递归平铺，按修改时间倒序排列
-│
-├── CenterContent                 # 根据 openedItem 选择渲染
-│   ├── ContentHeader             # 标题、路径、保存状态、Pin/外部打开动作
-│   ├── NoteEditor                # Milkdown Crepe，所有 .md 文件统一使用，点击即编辑，防抖自动保存
-│   ├── WebPreview                # Tauri WebView，用于 source/ 中的链接资源
-│   ├── PdfViewer                 # PDF 渲染，用于 source/ 中的 PDF 资源
-│   ├── ImagePreview              # 图片预览
-│   └── EmptyState                # 未打开内容时的占位
-│
-├── RightPanels                   # 三个垂直堆叠、可拖拽调整高度的区块
-│   ├── PinPanel                  # 单个固定笔记的标题 + 快速打开
-│   ├── ChecklistPanel            # Checklist 分组列表 / 状态切换 / 来源笔记入口
-│   └── RelevancePanel            # 自动关联笔记列表
-│
-└── ChatOverlay                   # Portal 渲染，带 backdrop 的 fixed 覆盖层
-    ├── ChatButton                # 右上角固定按钮
-    └── ChatWindow                # 悬浮卡片
-        ├── ModeSelector          # 5 种模式切换
-        ├── MessageList           # 用户/Agent 消息列表
-        │   └── MessageBubble     # 含阶段提示和流式状态
-        └── ChatInput             # Textarea + 发送按钮
+Pane 是 Panel 内可组合的小组件。Pane 只负责展示、筛选和选择，不直接持久化业务数据。
+
+| Pane | 所属区域 | 职责 |
+|------|----------|------|
+| `CalendarFilterPane` | Left Panel | 按日期过滤文件工作域内容 |
+| `TagsFilterPane` | Left Panel | 按 Frontmatter tags 过滤文件工作域内容 |
+| `TypeFilterPane` | Left Panel | 按资源或 Markdown 类型过滤内容 |
+| `SavedFiltersPane` | Left Panel | 使用用户保存的过滤条件 |
+| `FileExplorerPane` | Left Panel | 在当前 scope 下浏览文件和目录 |
+| `AgentListPane` | Left Panel | 查询和选择自定义 Agent 角色 |
+| `SkillListPane` | Left Panel | 查询和选择 Skill |
+| `MemoryListPane` | Left Panel | 查询和选择 Agent Memory |
+| `McpServerListPane` | Left Panel | 查询和选择 MCP Server / Tool |
+| `SessionListPane` | Left Panel | 查询和选择 Agent Session |
+| `CronJobListPane` | Left Panel | 查询和选择 Cron Job |
+| `NoteOutlinePane` | Right Panel | 展示当前 Markdown 或文档结构大纲 |
+| `NoteFrontmatterPane` | Right Panel | 展示和编辑当前 Markdown Frontmatter |
+| `RelatedContentPane` | Right Panel | 展示关联笔记、来源和上下文对象 |
+
+Pane Filter Toolbar 负责在同一 Panel 中切换或过滤 Pane。文件工作域默认提供 Calendar Filter、Tags Filter、Type Filter、Saved Filters、File Explorer 五个过滤入口；Right Panel 默认提供 Note Outline、Note Frontmatter、Related Content 三个上下文入口。
+
+## § 工作域模型
+
+```text
+WorkspaceDefinition
+├── id
+├── ribbonItem
+├── leftPanelLayout
+├── defaultContentView
+├── rightPanelLayout
+└── openBehavior
 ```
 
-## 状态设计
+### 文件工作域
 
-### WorkspaceStore（Zustand）
+Daily、Inbox、Private、Vault 是同一种 File Workspace 的不同 scope。
 
-管理工作区的 UI 状态，与服务器数据无关。
+| 工作域 | 默认 Left Panel | scope | 默认 Content View |
+|--------|-----------------|-------|-------------------|
+| Daily | Calendar Filter / Tags Filter / Type Filter / Saved Filters / File Explorer | `daily/` | 今日 Daily Note |
+| Inbox | Calendar Filter / Tags Filter / Type Filter / Saved Filters / File Explorer | `inbox/` | Inbox 列表或最近条目 |
+| Private | Calendar Filter / Tags Filter / Type Filter / Saved Filters / File Explorer | `private/` | 最近私密笔记 |
+| Vault | Calendar Filter / Tags Filter / Type Filter / Saved Filters / File Explorer | `/` | 最近笔记或 Vault 首页 |
 
-```
-Tab = BuiltinTab | PinnedDirTab
+Private 工作域使用同一文件浏览模型，但所有 Agent、Memory、Vault 写入类动作在 UI 层隐藏，并由后端 PathGuard 继续强制隔离。
 
-BuiltinTab = 'daily' | 'private' | 'vault' | 'source'
+### 列表工作域
 
-PinnedDirTab = {
-  id: string          // 唯一标识
-  dirPath: string     // Vault 内相对路径
-  label: string       // 文件夹名称
-}
+Agent、Skills、Memory、MCP、Session、Cron 在 Left Panel 中使用列表查询模型。
 
-DirectoryViewMode = 'tree' | 'flat'
+| 工作域 | Left Panel | Content Host |
+|--------|------------|--------------|
+| Agent | 自定义 Agent 角色列表、搜索、状态过滤 | Agent 角色详情、编辑或默认 Agent Session |
+| Skills | Skill 列表、搜索、来源过滤 | Skill 详情、启用状态和说明 |
+| Memory | Memory 列表、分类、确认状态过滤 | Memory 详情、证据、来源和知识引用 |
+| MCP | MCP Server / Tool 列表、连接状态过滤 | MCP Server 详情、工具清单和配置 |
+| Session | Session 列表、时间和 Agent 过滤 | Agent Session 详情 |
+| Cron | Cron Job 列表、状态过滤 | Cron Job 详情、运行记录和配置 |
 
-WorkspaceStore
-  activeTabId: string
-  pinnedDirTabs: PinnedDirTab[]
-  dirViewMode: Record<string, DirectoryViewMode>
-  panelSizes: { left, center, right }
-  rightPanelHeights: { pin, checklist, relevance }
-  openedItem: OpenedItem | null
-  pinnedNote: { path, title } | null
-  chatOpen: boolean
-  isHydrated: boolean
-```
+这些工作域使用各自命名的列表 Pane，并共用列表查询、过滤、空状态和列表项选择协议；具体字段由各自 query adapter 提供。
 
-`WorkspacePrefs` 通过 `get_workspace_prefs / save_workspace_prefs` 从后端配置水合到 `WorkspaceStore`，`WorkspaceStore` 自身只保留运行时状态，不负责本地持久化。
+### 独立内容视图
 
-### AgentSessionStore（Zustand）
+Checklist、Graph、Settings 是独立 Content View。
 
-管理 Agent Session 的会话状态，包含流式消息的实时缓冲。
+| 视图 | 打开方式 | 说明 |
+|------|----------|------|
+| Checklist | Ribbon 或命令打开 Tab | 各 Markdown 文件中 checklist 的聚合视图，不拥有独立任务正文 |
+| Graph | Ribbon 或命令打开 Tab | Vault / Memory / Resource 关系图 |
+| Settings | Ribbon 打开 Tab | 工作区、Vault、Provider、隐私和快捷键设置 |
 
-```
+独立内容视图可以使用 Left Panel 提供筛选或导航，但它们的主体交互在 Content Host 中完成。
+
+## § 核心实体
+
+**WorkspaceDefinition**：描述一个 Ribbon 工作域如何装配 Left Panel、默认 Content View 和 Right Panel。
+
+**PaneDefinition**：描述 Pane 的组件、数据来源、过滤状态和适用工作域。
+
+**ContentDescriptor**：描述 Content Host 可以打开的对象，包括文件、资源、Agent Session、实体详情和独立工具视图。
+
+**OpenTab**：Content Host 中的一个 Tab，持有 `ContentDescriptor`、标题、关闭状态和保存状态。
+
+**InspectorContext**：Right Panel 根据当前 active tab 派生的上下文，包括 note outline、frontmatter、related content、Agent 状态或空状态。
+
+**WorkspacePrefs**：工作台持久化偏好，包括 active workspace、open tabs、active tab、面板宽度、Pane 展开状态、Pane Filter Toolbar 选择和最近打开内容。
+
+## § 状态设计
+
+```text
+ShellStore
+  activeWorkspaceId
+  leftPanelCollapsed
+  rightPanelCollapsed
+  panelSizes
+  statusBarState
+
+PaneStore
+  leftPaneStateByWorkspace
+  rightPaneStateByContent
+  activeLeftPaneFilter
+  activeRightPaneFilter
+
+TabStore
+  openTabs
+  activeTabId
+  dirtyTabIds
+
 AgentSessionStore
-  currentSessionId: string | null
-  mode: 'workbench' | 'research' | 'reflection' | 'knowledge' | 'review'
-  messages: (UserMessage | StreamingMessage)[]
-  streamingRequestId: string | null    // 当前正在流式的 request_id
+  currentSessionId
+  mode
+  messages
+  streamingRequestId
 ```
 
-### TanStack Query（服务器状态缓存）
+TanStack Query 只缓存后端查询结果；流式 Agent 事件继续由 `AgentSessionStore` 实时处理，不进入 query cache。
 
+## § IPC 与事件边界
+
+前端所有业务数据通过 `src/lib/ipc.ts` 调用 Rust commands。Pane 和 Content View 不直接调用 `invoke()`，而是通过 query hooks 或 feature adapter 调用统一 IPC facade。
+
+`src/lib/events.ts` 订阅 Tauri 事件，并把 runtime event 转换为 AgentSessionStore 或 StatusBar 可消费的 UI 状态。
+
+## § 目标代码结构
+
+```text
+src/
+├── app/
+│   ├── app-shell.tsx
+│   ├── main-window.tsx
+│   └── providers.tsx
+├── shell/
+│   ├── ribbon/
+│   ├── panels/
+│   │   ├── left-panel/
+│   │   ├── right-panel/
+│   │   ├── pane-host/
+│   │   └── pane-filter-toolbar/
+│   ├── panes/
+│   │   ├── calendar-filter-pane/
+│   │   ├── tags-filter-pane/
+│   │   ├── type-filter-pane/
+│   │   ├── saved-filter-pane/
+│   │   ├── file-explorer-pane/
+│   │   ├── agent-list-pane/
+│   │   ├── skill-list-pane/
+│   │   ├── memory-list-pane/
+│   │   ├── mcp-server-list-pane/
+│   │   ├── session-list-pane/
+│   │   ├── cron-job-list-pane/
+│   │   ├── note-outline-pane/
+│   │   ├── note-frontmatter-pane/
+│   │   └── related-files-pane/
+│   ├── content-host/
+│   ├── status-bar/
+│   └── shell-primitives/
+├── workspaces/
+│   ├── file-workspace/
+│   ├── agent/
+│   ├── skills/
+│   ├── memory/
+│   ├── mcp/
+│   ├── session/
+│   ├── cron/
+│   ├── checklist/
+│   ├── graph/
+│   └── settings/
+├── features/
+│   ├── editor/
+│   ├── resource-preview/
+│   ├── checklist/
+│   └── agent-session/
+├── components/ui/
+├── hooks/
+├── lib/
+├── queries/
+└── stores/
 ```
-queryKeys.checklist.list(status?)      → invoke('list_checklist_items')
-queryKeys.daily.byDate(date)           → invoke('get_daily')
-queryKeys.knowledge.search(query)      → invoke('search_knowledge')
-queryKeys.knowledge.relevant(path)     → invoke('get_relevant_notes')
-queryKeys.settings.all                 → invoke('get_settings')
-queryKeys.settings.workspace           → invoke('get_workspace_prefs')
-queryKeys.vault.flat(path)             → invoke('list_vault_files_recursive')
-```
 
-## IPC 层
-
-`src/lib/ipc.ts` 封装所有 `invoke` 调用，统一错误转换：
-
-```
-ipc.sendMessage(content, sessionId?) → call<string>('send_message', ...)
-ipc.listChecklistItems(status?)      → call<ChecklistItem[]>('list_checklist_items', ...)
-ipc.updateChecklistItem(id, status)  → call<void>('update_checklist_item', ...)
-ipc.getDaily(date)                   → call<string>('get_daily', ...)
-ipc.saveDaily(date, content)         → call<void>('save_daily', ...)
-ipc.searchKnowledge(query)           → call<KnowledgeEntry[]>('search_knowledge', ...)
-ipc.getRelevantNotes(path)           → call<KnowledgeEntry[]>('get_relevant_notes', ...)
-ipc.getWorkspacePrefs()              → call<WorkspacePrefs>('get_workspace_prefs')
-ipc.saveWorkspacePrefs(prefs)        → call<void>('save_workspace_prefs', ...)
-ipc.listVaultFilesRecursive(path?)   → call<VaultEntry[]>('list_vault_files_recursive', ...)
-ipc.resolveSourceItem(path)          → call<OpenedItem>('resolve_source_item', ...)
-ipc.getSettings()                    → call<AppSettings>('get_settings', ...)
-ipc.setApiKey(key)                   → call<void>('set_api_key', ...)
-```
-
-`src/lib/events.ts` 封装 Tauri 事件订阅：
-
-```
-listenRuntimeEvents(callback) → listen('mindclaw://runtime-event', ...)
-```
-
-事件 payload 类型（对应 Rust `OutboundPayload`）：
-
-- `{ type: 'Chunk', data: { content: string } }`
-- `{ type: 'Status', data: { status: AgentPhase } }`
-- `{ type: 'Done' }`
-- `{ type: 'Error', data: { message: string, retryable: boolean } }`
-
-## 设计决策与权衡
+## § 设计决策与权衡
 
 | 决策问题 | 选择 | 放弃的替代方案 | 理由 |
 |---------|------|--------------|------|
-| 工作区布局是否使用路由（URL）驱动？ | 用 Zustand 状态驱动布局，不用 URL 路由 | TanStack Router 路由树 | 工作区是单一视图应用，Tab 切换和笔记打开是面板内状态变化，不是页面导航；URL 路由会导致三栏布局在导航时重新挂载 |
-| Chat 是否作为独立路由/页面？ | Chat 作为悬浮覆盖层（Portal + fixed 定位） | 独立路由页面 | "对话是万能入口"要求 Chat 随时可达且不打断当前工作区状态；独立路由会失去工作区上下文 |
-| 流式消息是否进入 TanStack Query 缓存？ | 不进缓存，由 chatStore 管理 | 用 useQuery + streaming | 流式消息是实时增量数据，不是标准的请求-响应模型；强行适配 TanStack Query 会引入不必要的复杂度 |
-| Checklist 状态更新是否使用乐观更新？ | 使用乐观更新 + 失败回滚 | 等待服务器确认后更新 | Checklist 状态切换是高频操作，等待 I/O 会造成明显延迟感；本地文件操作失败率低，回滚情况罕见 |
-| 编辑器保存策略 | 防抖 1 秒自动保存 + Cmd+S 手动强制保存 | 每次输入立即保存 | 每次 keystroke 触发文件 I/O 会产生过高的写入频率；1 秒防抖在用户感知上接近实时，且大幅减少写入次数 |
-| 工作区偏好存储位置 | 独立 `WorkspacePrefs`（UserConfig）| 前端 localStorage | 工作区尺寸、Tab、最近打开内容与 Chat 模式需要跨重启保留，且应该被桌面端其它入口共享 |
-| 目录视图模式存储 | `WorkspacePrefs.dir_view_mode`，按 tabId 独立记录 | 全局单一模式 | 不同 Tab 的使用场景不同（Daily 适合平铺，Vault 适合树状导航），按 Tab 独立记忆符合实际使用习惯 |
+| Left Panel 是否等同文件树？ | 否，Left Panel 是 PaneHost | 固定 DirectoryPanel | UI 设计中 Left Panel 包含 Calendar Filter、Tags Filter、Type Filter、Saved Filters、File Explorer、Session 等多个 Pane |
+| Daily / Inbox / Private / Vault 是否各自实现导航？ | 否，共用 File Workspace + scope | 每个工作域各自实现文件树 | 四者都是文件与 Markdown 空间的不同入口，复用 Pane 能保持过滤体验一致 |
+| Agent / Skills / Memory / MCP / Session / Cron 是否共用列表模式？ | 是，共用列表 Pane 协议，各自使用精准命名的 Pane | 每个工作域自定义列表结构 | 它们都是实体查询、筛选、选中详情的交互，变更理由一致 |
+| Checklist 是否是一等业务对象？ | 否，Checklist 是独立 Content View | 独立任务工作域和真相源 | 产品原则要求任务以 Markdown checklist 表达，Checklist 只聚合和定位 |
+| 视觉规范是否写入架构文档？ | 否，架构文档引用 `docs/ui` | 在架构文档复制视觉规则 | UI 细节以 `docs/ui` 为准，架构文档只记录边界和数据流 |

@@ -107,10 +107,10 @@ When 用户选择 Move to Daily
 Then 条目内容追加到当前日期 Daily Note，并显示处理去向
 
 Given Inbox 条目已打开
-When 用户选择 Create Knowledge Draft
-Then 中央内容区打开知识草稿，草稿包含可编辑标题、`tags`、`overview`、`confidence` 和正文
+When 用户选择 Create Vault Draft
+Then 中央内容区打开 Vault 草稿，草稿包含可编辑标题、`tags`、`overview`、`confidence` 和正文
 
-Given 用户保存知识草稿
+Given 用户保存 Vault 草稿
 When 用户选择主题位置或存在匹配用户规则
 Then 内容保存到对应 Vault 位置，Inbox 条目显示目标链接
 
@@ -124,7 +124,7 @@ Then 该建议写入 Agent Memory，并生成演化记录入口
 
 Given Inbox 条目是经验教训候选
 When 用户点击 Confirm Review
-Then 该条目可以保存为 Agent Memory，或显示 Save as Knowledge 入口
+Then 该条目可以保存为 Agent Memory，或显示 Save to Vault 入口
 
 Given Inbox 条目已打开
 When 用户选择 Send to Agent

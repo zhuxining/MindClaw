@@ -102,15 +102,15 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
 
 **AgentProfile**：Agent 的静态定义，描述提示词、模型、工具、上下文和安全策略。
 
-**MemoryRecord**：Agent 为后续判断和行动保存的受管 Markdown 记忆，具有状态、来源和可选知识引用。
+**MemoryRecord**：Agent 为后续判断和行动保存的受管 Markdown 记忆，具有状态、来源和可选 Vault 引用。
 
-**ReviewItem**：回顾队列中的统一审核项，承载观察候选、记忆更新建议、经验教训候选或知识草稿入口，索引来自 Inbox Markdown 和 ContextIndex。
+**ReviewItem**：回顾队列中的统一审核项，承载观察候选、记忆更新建议、经验教训候选或 Vault 草稿入口，索引来自 Inbox Markdown 和 ContextIndex。
 
 **EvolutionLog**：记忆或策略变化的 Markdown 审计记录，解释变化原因和证据来源。
 
-**LessonCandidate**：Inbox 中可复用经验教训的 Markdown 待审核候选，确认后可以保存为共有知识或转化为 Agent Memory。
+**LessonCandidate**：Inbox 中可复用经验教训的 Markdown 待审核候选，确认后可以保存为 Vault 笔记或转化为 Agent Memory。
 
-**KnowledgeNote**：已确认共有知识，正文保存在 Markdown Vault 中，可被人和 Agent 共同引用。
+**VaultNote**：已确认 Vault 笔记，正文保存在 Markdown Vault 中，可被人和 Agent 共同引用。
 
 ```mermaid
 erDiagram
@@ -120,8 +120,8 @@ erDiagram
     REVIEW_ITEM ||--o| LESSON_CANDIDATE : proposes_lesson
     MEMORY_RECORD ||--o{ EVOLUTION_LOG : changes
     LESSON_CANDIDATE ||--o| MEMORY_RECORD : confirms_as
-    LESSON_CANDIDATE ||--o| KNOWLEDGE_NOTE : saves_as
-    KNOWLEDGE_NOTE ||--o{ MEMORY_RECORD : referenced_by
+    LESSON_CANDIDATE ||--o| VAULT_NOTE : saves_as
+    VAULT_NOTE ||--o{ MEMORY_RECORD : referenced_by
     AGENT_SESSION ||--o{ EVOLUTION_LOG : evidences
 ```
 
@@ -212,7 +212,7 @@ flowchart LR
 | [05-services.md](./05-services.md) | Services：业务服务层 |
 | [06-storage.md](./06-storage.md) | Storage：存储层设计 |
 | [07-runtime.md](./07-runtime.md) | AppRuntime：统一运行时与依赖注入 |
-| [08-desktop-frontend.md](./08-desktop-frontend.md) | Desktop Frontend：桌面端前端架构 |
+| [08-desktop-frontend.md](./08-desktop-frontend.md) | Desktop Frontend：Ribbon、Pane 与 Content Host 架构 |
 
 ### 参考文档
 

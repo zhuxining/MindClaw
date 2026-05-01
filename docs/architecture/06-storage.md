@@ -74,8 +74,8 @@ erDiagram
     RESOURCE_RAW ||--o| RESOURCE_MANIFEST : "metadata 伴随"
     RESOURCE_RAW ||--o{ INBOX_ENTRY : "解析生成"
     RESOURCE_MANIFEST ||--o{ INBOX_ENTRY : "ContextIndex 与 refs 映射"
-    INBOX_ENTRY ||--o{ KNOWLEDGE : "审核后保存为"
-    KNOWLEDGE }o--|| RESOURCE_RAW : "refs 追溯"
+    INBOX_ENTRY ||--o{ VAULT_NOTE : "审核后保存为"
+    VAULT_NOTE }o--|| RESOURCE_RAW : "refs 追溯"
 
     RESOURCE_RAW {
         string uri "mc://resource/{id}/{type}/{file}"
@@ -95,7 +95,7 @@ erDiagram
         string raw_ref "mc://resource/"
     }
 
-    KNOWLEDGE {
+    VAULT_NOTE {
         string uri "mc://vault/{id}/notes/"
         string origin "user"
         string refs "mc://resource/"
@@ -206,7 +206,7 @@ URI 规则：
 ```yaml
 ---
 title: Frontmatter 设计
-tags: [knowledge-design, context-storage]
+tags: [vault-design, context-storage]
 overview: 说明 MindClaw 如何用 Markdown Frontmatter 支持人类和 Agent 的分层知识加载。
 confidence: 0.8
 origin: user
@@ -274,7 +274,7 @@ updated_at: 2026-04-29T10:30:00+08:00
 ---
 ```
 
-`inbox.type` 支持 `capture`、`parse_result`、`knowledge_draft`、`memory_proposal`、`observation`、`lesson_candidate`、`review_note`。
+`inbox.type` 支持 `capture`、`parse_result`、`vault_draft`、`memory_proposal`、`observation`、`lesson_candidate`、`review_note`。
 
 `inbox.status` 支持 `pending`、`processing`、`reviewed`、`archived`、`rejected`。完成处理时，Inbox 条目先按用户选择、主题目录、`tags` 或 Vault 配置规则写入目标位置，并在 `inbox.target` 或 `refs` 中保留去向引用；只有没有明确目标或用户选择归档时，条目才进入 `inbox/archive/`。
 
@@ -300,7 +300,7 @@ updated_at: 2026-04-29T10:30:00+08:00
 ---
 ```
 
-`agent_asset.kind` 只支持 `memory` 和 `evolution_log`。待审核的观察、记忆建议和经验候选使用 Inbox 扩展，不直接写入 `agent/`；经验教训确认后成为 Memory 的某种类型或保存为共有知识。
+`agent_asset.kind` 只支持 `memory` 和 `evolution_log`。待审核的观察、记忆建议和经验候选使用 Inbox 扩展，不直接写入 `agent/`；经验教训确认后成为 Memory 的某种类型或保存为 Vault 笔记。
 
 `agent_asset.status` 表示确认后资产的生命周期状态；状态变更必须由对应 Service 写入，并生成必要的演化记录。
 
@@ -318,7 +318,7 @@ refs:
 ---
 ```
 
-用户将外部资料、Agent 草稿、演化记录或会话内容整理为正式知识时，`origin` 可以标记为 `user`，来源链路全部进入 `refs`。如果文档仍是 Agent 生成的候选或草稿，则保持 `origin: agent`，用户确认状态由文件位置、`status` 或对应扩展字段表达。
+用户将外部资料、Agent 草稿、演化记录或会话内容整理为正式 Vault 笔记时，`origin` 可以标记为 `user`，来源链路全部进入 `refs`。如果文档仍是 Agent 生成的候选或草稿，则保持 `origin: agent`，用户确认状态由文件位置、`status` 或对应扩展字段表达。
 
 ### Frontmatter 引用链
 
@@ -336,15 +336,15 @@ flowchart TD
         IE["---<br/>origin: external<br/>external:<br/>  kind: pdf<br/>  raw_ref: mc://resource/main/pdf/paper.pdf<br/>inbox:<br/>  type: parse_result<br/>  resource_kind: pdf<br/>refs:<br/>  - mc://resource/main/pdf/paper.pdf<br/>---<br/>正文（解析内容）"]
     end
 
-    subgraph Knowledge["notes/paper-summary.md"]
+    subgraph VaultNote["notes/paper-summary.md"]
         K["---<br/>origin: user<br/>refs:<br/>  - mc://resource/main/pdf/paper.pdf<br/>---"]
     end
 
     Raw -->|"external.raw_ref"| Inbox
     Manifest -->|"ContextIndex · refs 映射"| Inbox
     Inbox -->|"refs 可追溯"| Raw
-    Inbox -->|"用户审核"| Knowledge
-    Knowledge -->|"refs"| Raw
+    Inbox -->|"用户审核"| VaultNote
+    VaultNote -->|"refs"| Raw
 ```
 
 ---
@@ -469,7 +469,7 @@ flowchart LR
     end
 
     subgraph Vault["Vault 共有知识"]
-        V_knowledge["*.md<br/>审核后保存"]
+        V_vault_note["*.md<br/>审核后保存"]
     end
 
     S_web --> P
@@ -478,7 +478,7 @@ flowchart LR
     S_manifest --> CI
     P --> I_imports
     I_imports --> CI
-    I_imports -->|"审核确认"| V_knowledge
+    I_imports -->|"审核确认"| V_vault_note
     I_imports -->|"无明确去向"| I_archive["inbox/archive/"]
 ```
 

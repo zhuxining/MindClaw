@@ -71,14 +71,14 @@ export function ChatInput() {
 		<div className="border-t border-border/70 bg-background px-4 py-4">
 			<div
 				className={`rounded-2xl border px-3 py-3 transition-colors ${
-					mode === "vault"
+					mode === "private"
 						? "border-amber-200 bg-amber-50/70"
 						: "border-border/70 bg-background"
 				}`}
 			>
-				{mode === "vault" ? (
+				{mode === "private" ? (
 					<p className="mb-2 text-[11px] text-amber-700">
-						树洞模式：内容不会进入知识库。
+						树洞模式：内容不会进入 Vault。
 					</p>
 				) : null}
 				<div className="flex items-end gap-3">
@@ -88,8 +88,8 @@ export function ChatInput() {
 						onChange={handleChange}
 						onKeyDown={handleKeyDown}
 						placeholder={
-							mode === "vault"
-								? "把不想沉淀进知识库的内容放在这里…"
+							mode === "private"
+								? "把不想沉淀进 Vault 的内容放在这里…"
 								: "输入消息，Enter 发送，Shift+Enter 换行"
 						}
 						rows={1}

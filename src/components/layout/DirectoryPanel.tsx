@@ -15,7 +15,7 @@ import { TreeView } from "./TreeView";
 
 const TAB_META: Record<string, { title: string; description: string }> = {
 	daily: { title: "Daily Notes", description: "按日期浏览最近记录" },
-	vault: { title: "Vault Browser", description: "浏览整个知识库" },
+	vault: { title: "Vault Browser", description: "浏览整个 Vault" },
 	source: { title: "Resources", description: "外部链接、PDF 与图片" },
 	private: { title: "Private Notes", description: "仅自己可见的内容" },
 };
@@ -130,7 +130,7 @@ function VaultSearchResults({ query }: { query: string }) {
 	const openItem = useWorkspaceStore((state) => state.openItem);
 	const { data: results = [], isLoading } = useQuery({
 		queryKey: ["vault-search", query],
-		queryFn: () => ipc.searchKnowledge(query.trim()),
+		queryFn: () => ipc.searchVault(query.trim()),
 	});
 
 	if (isLoading) {

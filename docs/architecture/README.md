@@ -65,7 +65,7 @@
 
 | 文件 | 内容 |
 |------|------|
-| [08-desktop-frontend.md](./08-desktop-frontend.md) | 桌面端前端架构：组件层次、状态管理、IPC 层、事件订阅设计 |
+| [08-desktop-frontend.md](./08-desktop-frontend.md) | 桌面端前端架构：Ribbon、Pane、Content Host、状态管理、IPC 层 |
 
 ### 参考文档
 

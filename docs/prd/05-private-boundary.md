@@ -56,7 +56,7 @@ Then 状态栏显示保存失败，并保留未保存内容
 
 - [ ] Private 笔记支持与 Vault 笔记相同的基础 Markdown 编辑能力。
 - [ ] Private 笔记可包含 `tags`、`overview` 和 `confidence`，但这些字段只服务文件夹内浏览，不进入共有知识索引或 Agent 召回。
-- [ ] Private 内容不显示 Add Context、Send to Agent、Create Memory、Save as Knowledge 操作。
+- [ ] Private 内容不显示 Add Context、Send to Agent、Create Memory、Save to Vault 操作。
 
 **优先级**：P0
 

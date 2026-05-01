@@ -27,16 +27,16 @@ const MODES: {
 		accent: "data-[active=true]:bg-rose-50 data-[active=true]:text-rose-700",
 	},
 	{
-		id: "knowledge",
-		label: "知识",
+		id: "vault",
+		label: "Vault",
 		description: "共建笔记",
 		accent:
 			"data-[active=true]:bg-violet-50 data-[active=true]:text-violet-700",
 	},
 	{
-		id: "vault",
+		id: "private",
 		label: "树洞",
-		description: "不进知识库",
+		description: "不进 Vault",
 		accent: "data-[active=true]:bg-amber-50 data-[active=true]:text-amber-700",
 	},
 ];

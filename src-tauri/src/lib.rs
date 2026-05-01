@@ -90,9 +90,6 @@ pub fn run() {
             commands::tasks::delete_task,
             commands::tasks::update_task_status,
             commands::tasks::rebuild_tasks_index,
-            commands::knowledge::search_knowledge,
-            commands::knowledge::get_relevant_notes,
-            commands::knowledge::get_knowledge,
             commands::settings::get_settings,
             commands::settings::get_workspace_prefs,
             commands::settings::set_vault,
@@ -103,6 +100,9 @@ pub fn run() {
             commands::vault::list_vault_dir,
             commands::vault::list_vault_files_recursive,
             commands::vault::resolve_source_item,
+            commands::vault::search_vault,
+            commands::vault::get_relevant_notes,
+            commands::vault::get_vault_note,
             commands::vault::list_dir,
         ])
         .run(tauri::generate_context!())

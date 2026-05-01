@@ -10231,7 +10231,7 @@
                     {
                       "type": "frame",
                       "id": "y3tTi",
-                      "name": "Filter Toolbar",
+                      "name": "Pane Filter Toolbar",
                       "width": "fill_container",
                       "height": 40,
                       "stroke": {
@@ -11243,7 +11243,7 @@
                     {
                       "type": "frame",
                       "id": "FoVNr",
-                      "name": "Expand Filter Toolbar",
+                      "name": "Pane Filter Toolbar",
                       "width": "fill_container",
                       "height": 40,
                       "stroke": {

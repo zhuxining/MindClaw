@@ -146,7 +146,7 @@ Frontmatter 的基础字段：
 ```yaml
 ---
 title: 笔记标题
-tags: [agent-memory, knowledge-design]
+tags: [agent-memory, vault-design]
 overview: 一句话到一小段，说明这篇笔记解决什么问题、核心判断是什么。
 confidence: 0.8
 ---
@@ -416,7 +416,7 @@ MindClaw 的桌面界面采用知识工作站形态，而不是聊天页形态�
 | 活动栏 | 切换 Daily、Inbox、Vault、Private、Agent、Settings 等工作域 |
 | 左侧面板 | 展示当前工作域的导航、过滤、文件树、会话列表 |
 | 中央内容区 | 多标签打开笔记、资源、搜索结果、Agent 会话 |
-| 右侧上下文区 | 展示 Outline、Frontmatter、Relevance |
+| 右侧上下文区 | 展示 Note Outline、Note Frontmatter、Related Content |
 | 状态栏 | 展示保存、索引、Agent 执行等运行状态 |
 
 ### 5.2 一级工作域
@@ -452,11 +452,11 @@ MVP 不把 Graph、MCP、Cron、完整记忆分析 UI 做成主功能。第一�
 
 右侧上下文区默认聚焦三件事：
 
-- **Outline**：当前文档结构
-- **Frontmatter**：当前文档的标签和概览
-- **Relevance**：相关笔记、反向链接、语义关联、可调用经验
+- **Note Outline**：当前文档结构
+- **Note Frontmatter**：当前文档的标签和概览
+- **Related Content**：相关笔记、反向链接、语义关联、可调用经验
 
-Tasks 不作为固定右侧主面板。任务是 Markdown checklist 的派生视图，可通过过滤、搜索或 Agent 查询呈现。
+Checklist 不作为固定右侧主面板。它是各个 Markdown 文件中 checklist 的聚合视图，可通过 Ribbon 入口、过滤、搜索或 Agent 查询呈现。
 
 ---
 

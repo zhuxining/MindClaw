@@ -17,7 +17,7 @@ const BUILTIN_TABS: {
 	icon: React.ComponentType<{ className?: string }>;
 }[] = [
 	{ id: "daily", label: "日记", description: "每日记录", icon: BookOpen },
-	{ id: "vault", label: "知识库", description: "全库浏览", icon: Database },
+	{ id: "vault", label: "Vault", description: "全库浏览", icon: Database },
 	{ id: "source", label: "资源", description: "链接与附件", icon: FolderOpen },
 	{ id: "private", label: "私密", description: "Agent 不可见", icon: FileText },
 ];

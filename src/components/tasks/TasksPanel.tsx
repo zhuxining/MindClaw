@@ -13,7 +13,7 @@ import {
 	PanelFrame,
 	SectionHeader,
 	StatusBadge,
-} from "../layout/workspace-chrome";
+} from "../layout/shell-primitives";
 import { CreateTaskDialog } from "./CreateTaskDialog";
 import { TaskItem } from "./TaskItem";
 

@@ -7,9 +7,9 @@
 
 ## 背景与目标
 
-**背景**：MindClaw 的桌面端需要一个稳定工作台，让用户在 Daily、Inbox、Vault、Private、Agent、Memory 等工作域之间切换，同时保持当前内容、上下文面板和 Agent 协作入口连贯。
+**背景**：MindClaw 的桌面端需要一个稳定工作台，让用户在 Daily、Inbox、Vault、Private、Checklist、Graph、Agent、Skills、Memory、MCP、Session、Cron、Settings 等工作域之间切换，同时保持当前内容、上下文面板和 Agent 协作入口连贯。
 
-**目标**：定义 Ribbon（工作域活动栏）、左侧面板、中央多 Tab 内容区、右侧上下文面板、状态栏与全局打开逻辑。
+**目标**：定义 Ribbon（工作域活动栏）、由 Pane 组成的左侧面板、中央多 Tab 内容区、由 Pane 组成的右侧上下文面板、状态栏与全局打开逻辑。
 
 ## 功能描述
 
@@ -37,17 +37,17 @@
 **验收标准**：
 
 Given 用户处于任意工作域
-When 用户点击 Ribbon 中的 Daily、Inbox、Vault、Private、Agent、Memory、Settings 任一入口
+When 用户点击 Ribbon 中的 Daily、Inbox、Private、Vault、Checklist、Graph、Agent、Skills、Memory、MCP、Session、Cron、Settings 任一入口
 Then 被点击入口显示选中态，左侧面板切换为对应工作域内容，中央内容区打开该工作域默认 Tab
 
 Given 用户已在某个工作域打开内容
 When 用户切换到另一个工作域后再切回原工作域
 Then 原工作域保留最后打开的 Tab 和左侧面板状态
 
-- [ ] Ribbon 第一版只显示 Daily、Inbox、Vault、Private、Agent、Memory、Settings。
+- [ ] Ribbon 显示 Daily、Inbox、Private、Vault、Checklist、Graph、Agent、Skills、Memory、MCP、Session、Cron、Settings。
 - [ ] 当前工作域入口使用选中态标识。
 - [ ] Ribbon 入口 hover 时显示入口名称。
-- [ ] Tasks、Graph、Skills、MCP、Session、Cron 不显示为 MVP 主入口。
+- [ ] Open Today、New Note、New Session、Add Link 是全局动作，不作为工作域选中态。
 
 **优先级**：P0
 
@@ -55,13 +55,13 @@ Then 原工作域保留最后打开的 Tab 和左侧面板状态
 
 ### US-03 管理左侧面板
 
-作为用户，我希望左侧面板随工作域切换显示不同导航内容，以便减少无关信息干扰。
+作为用户，我希望左侧面板随工作域切换显示不同 Pane 组合，以便用一致方式完成文件过滤、列表查询和对象选择。
 
 **验收标准**：
 
 Given 用户切换工作域
 When 左侧面板加载完成
-Then 面板标题、工具按钮和内容列表与当前工作域一致
+Then 面板标题、工具按钮、Pane Filter Toolbar 和 Pane 内容与当前工作域一致
 
 Given 左侧面板已展开
 When 用户点击折叠按钮
@@ -74,6 +74,9 @@ Then 左侧面板恢复到折叠前宽度
 - [ ] 左侧面板宽度调整后持久化，应用重启后恢复。
 - [ ] 每个工作域保留独立的筛选、滚动和展开状态。
 - [ ] 左侧面板空状态显示当前工作域可执行的最小操作。
+- [ ] Daily、Inbox、Private、Vault 默认包含 Calendar Filter、Tags Filter、Type Filter、Saved Filters、File Explorer 过滤入口。
+- [ ] Daily、Inbox、Private、Vault 默认使用 File Explorer Pane 展示当前 scope 下的文件。
+- [ ] Agent、Skills、Memory、MCP、Session、Cron 默认使用列表 Pane 查询相关对象。
 
 **优先级**：P0
 
@@ -108,13 +111,13 @@ Then 系统激活关闭 Tab 左侧最近一个 Tab
 
 ### US-05 管理右侧上下文面板
 
-作为用户，我希望右侧面板显示当前内容的上下文信息，以便在编辑和协作时查看大纲、Frontmatter、关联内容和 Agent 建议。
+作为用户，我希望右侧面板通过 Pane 显示当前内容的上下文信息，以便在编辑和协作时查看大纲、Frontmatter、关联内容和 Agent 建议。
 
 **验收标准**：
 
 Given 中央内容区激活 Markdown 笔记
 When 右侧面板展开
-Then 右侧面板显示大纲、Frontmatter、关联内容三个区域
+Then 右侧面板显示 Note Outline、Note Frontmatter、Related Content 三个区域
 
 Given 中央内容区激活 Agent Session
 When 右侧面板展开
@@ -122,10 +125,11 @@ Then 右侧面板显示引用上下文、执行状态、生成草稿三个区域
 
 Given 中央内容区激活 Private 内容
 When 右侧面板展开
-Then 右侧面板不显示发送给 Agent、生成记忆、写入知识类操作
+Then 右侧面板不显示发送给 Agent、生成记忆、写入 Vault 类操作
 
 - [ ] 右侧面板可折叠，折叠状态持久化。
 - [ ] 右侧面板区域标题固定，内容区可滚动。
+- [ ] 右侧面板默认提供 Note Outline、Note Frontmatter、Related Content 三个 Pane 入口。
 - [ ] 当前内容不支持上下文区域时显示空状态，不显示无效操作。
 
 **优先级**：P0
@@ -150,28 +154,33 @@ Then 右侧面板不显示发送给 Agent、生成记忆、写入知识类操作
 
 | Ribbon 入口 | 左侧面板 | 中央默认内容 | 右侧上下文面板 |
 |-------------|----------|--------------|----------------|
-| Daily | 日期列表、当日 checklist、回顾入口 | 今日 Daily Note | 大纲、Frontmatter、关联内容 |
-| Inbox | 待处理列表、来源类型筛选、审核状态筛选 | Inbox 列表或选中条目 | 处理动作、来源引用、目标去向 |
-| Vault | 文件树、标签、搜索 | 最近打开笔记或 Vault 首页 | 大纲、Frontmatter、关联内容 |
-| Private | Private 文件树、搜索 | 最近打开私密笔记 | 大纲、Frontmatter，不显示 Agent 操作 |
-| Agent | 会话列表、上下文对象 | 最近 Agent Session | 引用上下文、执行状态、草稿 |
-| Memory | 记忆分类、确认状态筛选、回顾队列入口 | Agent Memory 列表 | 证据、来源、知识引用、候选动作 |
+| Daily | Calendar Filter / Tags Filter / Type Filter / Saved Filters / File Explorer | 今日 Daily Note | Note Outline / Note Frontmatter / Related Content |
+| Inbox | Calendar Filter / Tags Filter / Type Filter / Saved Filters / File Explorer | Inbox 列表或选中条目 | 处理动作、来源引用、目标去向 |
+| Private | Calendar Filter / Tags Filter / Type Filter / Saved Filters / File Explorer | 最近私密笔记 | Note Outline / Note Frontmatter，不显示 Agent 操作 |
+| Vault | Calendar Filter / Tags Filter / Type Filter / Saved Filters / File Explorer | 最近打开笔记或 Vault 首页 | Note Outline / Note Frontmatter / Related Content |
+| Checklist | 可选筛选 Pane | 各 Markdown 文件中 checklist 的聚合视图 | 来源、关联笔记、空状态 |
+| Graph | 可选筛选 Pane | 知识与资源关系图 | 节点详情、关联内容 |
+| Agent | 自定义 Agent 角色列表 | Agent 角色详情或最近 Agent Session | 引用上下文、执行状态、草稿 |
+| Skills | Skills 列表 | Skill 详情 | 来源、启用状态、关联能力 |
+| Memory | Memory 列表、分类、确认状态筛选 | Agent Memory 详情或列表 | 证据、来源、知识引用、候选动作 |
+| MCP | MCP Server / Tool 列表 | MCP 详情 | 连接状态、工具清单 |
+| Session | Session 列表 | Agent Session 详情 | 引用上下文、执行状态、草稿 |
+| Cron | Cron Job 列表 | Cron Job 详情 | 运行记录、结果摘要 |
 | Settings | 设置分组 | 工作区设置页 | 帮助说明或空状态 |
 
 ## 范围界定
 
 **In Scope**：
 
-- Ribbon MVP 入口与选中态。
-- 左侧面板、中央 Tab、右侧上下文面板、状态栏的基础交互。
+- Ribbon 入口与选中态。
+- 左侧 Pane、中央 Tab、右侧 Pane、状态栏的基础交互。
 - 工作域切换后的状态保留。
 - 面板折叠、展开、拖拽宽度与持久化。
-- MVP 全局快捷动作。
+- 全局快捷动作。
 
 **Out of Scope**：
 
-- 自定义 Ribbon 入口排序：MVP 入口固定，避免设置项影响核心路径验证。
-- Graph、Skills、MCP、Cron 工作域：这些能力不进入 MVP 主导航。
+- 自定义 Ribbon 入口排序：目标入口固定，避免设置项影响核心路径验证。
 - 多窗口与拖出 Tab：当前桌面端以单窗口工作台为交付边界。
 - 插件化面板系统：第一版只定义固定面板区域，插件扩展需独立架构和权限设计。
 

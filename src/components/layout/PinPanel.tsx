@@ -5,7 +5,7 @@ import {
 	PanelAction,
 	PanelFrame,
 	SectionHeader,
-} from "./workspace-chrome";
+} from "./shell-primitives";
 
 export function PinPanel() {
 	const pinnedNote = useWorkspaceStore((state) => state.pinnedNote);

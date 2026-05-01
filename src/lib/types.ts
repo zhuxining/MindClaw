@@ -77,7 +77,7 @@ export interface WorkspacePanelSizes {
 export interface WorkspaceRightPanelHeights {
 	pin: number;
 	tasks: number;
-	relevance: number;
+	relatedContent: number;
 }
 
 export interface DailyItem {
@@ -145,8 +145,8 @@ export type ConversationMode =
 	| "companion"
 	| "reflection"
 	| "challenge"
-	| "knowledge"
-	| "vault";
+	| "vault"
+	| "private";
 
 export interface UserMessage {
 	type: "user";
@@ -182,9 +182,9 @@ export interface AgentOutboundEvent {
 	payload: AgentEventPayload;
 }
 
-// ─── Knowledge ────────────────────────────────────────────────────────────────
+// ─── Vault Notes ──────────────────────────────────────────────────────────────
 
-export interface KnowledgeEntry {
+export interface VaultNote {
 	id: string;
 	title: string;
 	topic: string;

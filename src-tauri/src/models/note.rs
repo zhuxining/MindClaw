@@ -20,7 +20,7 @@ pub struct DailyNote {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KnowledgeEntry {
+pub struct VaultNote {
     pub id: String,
     pub title: String,
     pub topic: String,

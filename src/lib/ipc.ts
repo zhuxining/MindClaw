@@ -2,10 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
 	AppSettings,
 	CreateTaskParams,
-	KnowledgeEntry,
 	OpenedItem,
 	Task,
 	VaultEntry,
+	VaultNote,
 	WorkspacePrefs,
 } from "./types";
 
@@ -66,12 +66,11 @@ export const ipc = {
 	saveNote: (path: string, content: string) =>
 		call<void>("save_note", { path, content }),
 
-	// ─── Knowledge ─────────────────────────────────────────────────────────────
-	searchKnowledge: (query: string) =>
-		call<KnowledgeEntry[]>("search_knowledge", { query }),
+	// ─── Vault Notes ──────────────────────────────────────────────────────────
+	searchVault: (query: string) => call<VaultNote[]>("search_vault", { query }),
 
 	getRelevantNotes: (path: string) =>
-		call<KnowledgeEntry[]>("get_relevant_notes", { path }),
+		call<VaultNote[]>("get_relevant_notes", { path }),
 
 	// ─── Vault ─────────────────────────────────────────────────────────────────
 	listVaultDir: (path?: string) =>
@@ -85,8 +84,7 @@ export const ipc = {
 	resolveSourceItem: (path: string) =>
 		call<OpenedItem>("resolve_source_item", { path: normalizePath(path) }),
 
-	// ─── Knowledge ─────────────────────────────────────────────────────────────
-	getKnowledge: (id: string) => call<KnowledgeEntry>("get_knowledge", { id }),
+	getVaultNote: (id: string) => call<VaultNote>("get_vault_note", { id }),
 
 	// ─── Settings ──────────────────────────────────────────────────────────────
 	getSettings: () => call<AppSettings>("get_settings"),

@@ -129,17 +129,17 @@ Then 系统在 Inbox 中生成经验教训候选 Markdown，包含适用场景�
 
 Given 经验教训候选已打开
 When 用户编辑候选并点击 Confirm Review
-Then 候选显示为已审核确认，并显示 Save as Memory 和 Save as Knowledge 入口
+Then 候选显示为已审核确认，并显示 Save as Memory 和 Save to Vault 入口
 
 Given 已确认经验教训候选
 When 用户点击 Save as Memory
 Then 系统写入 Agent Memory，保留适用场景、触发条件、短摘要和来源引用，并生成对应演化记录
 
 Given 已确认经验教训候选
-When 用户点击 Save as Knowledge
-Then 中央内容区打开 Vault 知识草稿，包含标题、`tags`、`overview`、`confidence`、正文、来源链接和目标位置选择
+When 用户点击 Save to Vault
+Then 中央内容区打开 Vault 草稿，包含标题、`tags`、`overview`、`confidence`、正文、来源链接和目标位置选择
 
-Given 知识草稿保存到 Vault
+Given Vault 草稿保存到 Vault
 When 保存完成
 Then 草稿保存到所选或规则匹配的 Vault 位置，原 Inbox 候选记录目标引用并移出默认队列，相关演化记录显示已沉淀为共有知识
 

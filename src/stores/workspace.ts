@@ -70,7 +70,7 @@ function validatePanelSizes(
 const DEFAULT_RIGHT_PANEL_HEIGHTS: WorkspaceRightPanelHeights = {
 	pin: 20,
 	tasks: 50,
-	relevance: 30,
+	relatedContent: 30,
 };
 
 interface WorkspaceState {

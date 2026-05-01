@@ -137,8 +137,8 @@ pub struct ContextPolicy {
     pub memory_policy: MemoryPolicy,
     /// 压缩策略
     pub compression_policy: CompressionPolicy,
-    /// 是否包含知识库
-    pub include_knowledge: bool,
+    /// 是否包含 Vault
+    pub include_vault: bool,
     /// 是否包含技能定义
     pub include_skills: bool,
 }
@@ -174,7 +174,7 @@ impl Default for ContextPolicy {
             history_policy: HistoryPolicy::Full,
             memory_policy: MemoryPolicy::Disabled,
             compression_policy: CompressionPolicy::None,
-            include_knowledge: false,
+            include_vault: false,
             include_skills: true,
         }
     }

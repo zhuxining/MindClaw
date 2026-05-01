@@ -70,7 +70,7 @@ Review & Evolution 是 Runtime 的旁路产物处理链，不是主响应链的�
 关系：消费 `AgentRunSpec`，输出 `AgentRunResult`；不感知 Session、Bus、Channel、Memory、Review Queue。
 
 **ContextPipeline**：上下文装配器。
-关键属性：Profile 策略、Session 历史、Memory 召回、Knowledge 召回、Skill 注入。
+关键属性：Profile 策略、Session 历史、Memory 召回、Vault 召回、Skill 注入。
 关系：按预算构建本次 run 的上下文，不写入记忆或知识。
 
 **AgentSpawnDispatcher**：派生执行编排器。
@@ -127,12 +127,12 @@ sequenceDiagram
     User->>Review: confirm / reject
     Review->>Memory: apply confirmed proposal
     Review->>Memory: save confirmed lesson as memory
-    Review->>Vault: optional save lesson as knowledge
+    Review->>Vault: optional save lesson as Vault note
 ```
 
 旁路规则：
 
-- 回顾产物默认是候选，不是稳定记忆或知识。
+- 回顾产物默认是候选，不是稳定记忆或 Vault 笔记。
 - 后台 run 复用 `AgentRunner`，但审核状态由 Review & Evolution 持有。
 - Memory 只在建议确认后更新。
 - Markdown Vault 只在用户保存知识草稿后写入。

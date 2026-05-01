@@ -15,8 +15,8 @@ pub enum ConversationMode {
     Companion,
     Reflection,
     Challenge,
-    Knowledge,
     Vault,
+    Private,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

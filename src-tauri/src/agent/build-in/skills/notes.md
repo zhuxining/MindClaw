@@ -1,12 +1,12 @@
 ---
 name: notes
-description: "Knowledge base operations: create, search, get, and tag notes"
+description: "Vault note operations: create, search, get, and tag notes"
 version: "0.1.0"
 ---
 
 # Notes Skill
 
-Use the `operations` tool to manage knowledge notes.
+Use the `operations` tool to manage Vault notes.
 
 ## Available operations
 
@@ -15,7 +15,7 @@ Use the `operations` tool to manage knowledge notes.
 ```json
 {
   "action": "call",
-  "service": "knowledge",
+  "service": "vault",
   "method": "create",
   "params": {
     "title": "Note title",
@@ -30,7 +30,7 @@ Use the `operations` tool to manage knowledge notes.
 ```json
 {
   "action": "call",
-  "service": "knowledge",
+  "service": "vault",
   "method": "search",
   "params": {
     "query": "search terms"
@@ -45,7 +45,7 @@ Returns a list of matching notes with `id`, `title`, `tags`, and a content excer
 ```json
 {
   "action": "call",
-  "service": "knowledge",
+  "service": "vault",
   "method": "get",
   "params": {
     "id": "note-id"
@@ -60,7 +60,7 @@ Returns the full note with `id`, `title`, `content`, `tags`, and `created_at`.
 ```json
 {
   "action": "call",
-  "service": "knowledge",
+  "service": "vault",
   "method": "list_tags",
   "params": {}
 }

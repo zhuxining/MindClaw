@@ -145,8 +145,8 @@ When 用户返回 Vault 工作域
 Then 新笔记出现在 Vault 文件树和搜索结果中
 
 Given 经验教训候选已打开
-When 用户点击 Save as Knowledge
-Then 系统保存为 Markdown 知识笔记，并保留来源记忆、演化记录、Session 或 resources 链接
+When 用户点击 Save to Vault
+Then 系统保存为 Markdown Vault 笔记，并保留来源记忆、演化记录、Session 或 resources 链接
 
 - [ ] 草稿保存后保留来源信息链接。
 - [ ] 若来源为 Inbox 条目，保存完成后 Inbox 条目链接到新知识笔记，并从默认待处理列表移除。

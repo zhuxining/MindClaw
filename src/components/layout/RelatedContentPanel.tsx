@@ -2,9 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, Sparkles } from "lucide-react";
 import { ipc } from "@/lib/ipc";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { EmptyState, PanelFrame, SectionHeader } from "./workspace-chrome";
+import { EmptyState, PanelFrame, SectionHeader } from "./shell-primitives";
 
-export function RelevancePanel() {
+export function RelatedContentPanel() {
 	const openedItem = useWorkspaceStore((state) => state.openedItem);
 	const openItem = useWorkspaceStore((state) => state.openItem);
 	const supportedPath =
@@ -13,14 +13,17 @@ export function RelevancePanel() {
 			: null;
 
 	const { data: results = [], isLoading } = useQuery({
-		queryKey: ["relevance", supportedPath],
+		queryKey: ["related-files", supportedPath],
 		queryFn: () => ipc.getRelevantNotes(supportedPath ?? ""),
 		enabled: Boolean(supportedPath),
 	});
 
 	return (
 		<PanelFrame className="overflow-hidden">
-			<SectionHeader title="Relevance" description="围绕当前内容的关联笔记" />
+			<SectionHeader
+				title="Related Content"
+				description="围绕当前内容的关联笔记"
+			/>
 
 			<div className="min-h-0 flex-1 overflow-y-auto p-3">
 				{!supportedPath ? (

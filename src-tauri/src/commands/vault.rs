@@ -1,7 +1,10 @@
 use crate::error::{AppError, AppResult};
+use crate::models::note::VaultNote;
 use crate::models::settings::WorkspaceOpenedItem;
 use crate::runtime::AppRuntime;
+use crate::services::note::NoteIndex;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -108,6 +111,70 @@ fn display_title(path: &str) -> String {
         Some((stem, _)) if !stem.is_empty() => stem.to_string(),
         _ => file_name.to_string(),
     }
+}
+
+fn note_to_vault_note(note: NoteIndex) -> VaultNote {
+    VaultNote {
+        id: note.id,
+        title: note.title,
+        topic: note.file_path.clone(),
+        content: String::new(),
+        wikilinks: Vec::new(),
+        tags: note.tags,
+        source_url: None,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+fn stem(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(path)
+        .to_string()
+}
+
+fn title_tokens(value: &str) -> HashSet<String> {
+    value
+        .split(|c: char| !c.is_alphanumeric() && !('\u{4E00}'..='\u{9FFF}').contains(&c))
+        .map(str::trim)
+        .filter(|token| token.len() >= 2)
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn score_note(
+    current_tags: &HashSet<String>,
+    current_tokens: &HashSet<String>,
+    current_path: &str,
+    candidate: &NoteIndex,
+) -> i32 {
+    let candidate_tags: HashSet<_> = candidate
+        .tags
+        .iter()
+        .map(|tag| tag.to_ascii_lowercase())
+        .collect();
+    let shared_tags = current_tags.intersection(&candidate_tags).count() as i32;
+
+    let candidate_tokens = title_tokens(&candidate.title);
+    let shared_tokens = current_tokens.intersection(&candidate_tokens).count() as i32;
+
+    let daily_bonus =
+        if current_path.starts_with("daily/") && candidate.file_path.starts_with("daily/") {
+            2
+        } else {
+            0
+        };
+
+    let source_bonus =
+        if current_path.starts_with("source/") || candidate.file_path.starts_with("source/") {
+            1
+        } else {
+            0
+        };
+
+    shared_tags * 10 + shared_tokens * 4 + daily_bonus + source_bonus
 }
 
 /// 列出指定目录的内容（一层，不递归）
@@ -249,4 +316,95 @@ pub async fn resolve_source_item(
             }
         }
     }
+}
+
+/// 搜索 Vault 笔记（按标题/标签关键词）
+#[tauri::command]
+pub async fn search_vault(
+    runtime: tauri::State<'_, Arc<AppRuntime>>,
+    query: String,
+) -> AppResult<Vec<VaultNote>> {
+    let results = runtime.services().note.search(&query, 20).await?;
+    Ok(results.into_iter().map(note_to_vault_note).collect())
+}
+
+/// 获取与当前笔记语义上更相关的笔记
+#[tauri::command]
+pub async fn get_relevant_notes(
+    runtime: tauri::State<'_, Arc<AppRuntime>>,
+    path: String,
+) -> AppResult<Vec<VaultNote>> {
+    let all = runtime.services().note.search("", 10_000).await?;
+
+    let current = all
+        .iter()
+        .find(|entry| entry.file_path == path)
+        .cloned()
+        .unwrap_or_else(|| {
+            let file_stem = stem(&path);
+            NoteIndex {
+                id: path.clone(),
+                title: file_stem,
+                tags: Vec::new(),
+                file_path: path.clone(),
+                modified_at: String::new(),
+            }
+        });
+
+    let current_tags: HashSet<_> = current
+        .tags
+        .iter()
+        .map(|tag| tag.to_ascii_lowercase())
+        .collect();
+    let current_tokens = title_tokens(&current.title);
+
+    let mut scored = all
+        .into_iter()
+        .filter(|entry| entry.file_path != path)
+        .filter_map(|entry| {
+            let score = score_note(&current_tags, &current_tokens, &current.file_path, &entry);
+            if score <= 0 {
+                return None;
+            }
+            Some((score, entry))
+        })
+        .collect::<Vec<_>>();
+
+    scored.sort_by(|(left_score, left_entry), (right_score, right_entry)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| right_entry.modified_at.cmp(&left_entry.modified_at))
+    });
+
+    Ok(scored
+        .into_iter()
+        .take(5)
+        .map(|(_, entry)| note_to_vault_note(entry))
+        .collect())
+}
+
+/// 获取 Vault 笔记条目（含正文）
+#[tauri::command]
+pub async fn get_vault_note(
+    runtime: tauri::State<'_, Arc<AppRuntime>>,
+    id: String,
+) -> AppResult<VaultNote> {
+    let all = runtime.services().note.search("", 10_000).await?;
+    let entry = all
+        .into_iter()
+        .find(|note| note.id == id)
+        .ok_or_else(|| AppError::NotFound(format!("vault note not found: {id}")))?;
+
+    let content = runtime.services().note.read(&entry.file_path).await?;
+    Ok(VaultNote {
+        id: entry.id,
+        title: entry.title,
+        topic: entry.file_path,
+        content,
+        wikilinks: Vec::new(),
+        tags: entry.tags,
+        source_url: None,
+        created_at: 0,
+        updated_at: 0,
+    })
 }

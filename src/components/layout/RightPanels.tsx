@@ -7,20 +7,20 @@ import {
 } from "@/components/ui/resizable";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { PinPanel } from "./PinPanel";
-import { RelevancePanel } from "./RelevancePanel";
+import { RelatedContentPanel } from "./RelatedContentPanel";
 
 export function RightPanels() {
 	const rightPanelHeights = useWorkspaceStore(
 		(state) => state.rightPanelHeights,
 	);
-	const collapseRelevanceRef = useRef(false);
-	const [collapseRelevance, setCollapseRelevance] = useState(false);
+	const collapseRelatedContentRef = useRef(false);
+	const [collapseRelatedContent, setCollapseRelatedContent] = useState(false);
 
 	useEffect(() => {
 		function syncViewport() {
 			const shouldCollapse = window.innerHeight < 600;
-			collapseRelevanceRef.current = shouldCollapse;
-			setCollapseRelevance(shouldCollapse);
+			collapseRelatedContentRef.current = shouldCollapse;
+			setCollapseRelatedContent(shouldCollapse);
 		}
 
 		syncViewport();
@@ -39,9 +39,9 @@ export function RightPanels() {
 					state.setRightPanelHeights({
 						pin: layout.pin ?? heights.pin,
 						tasks: layout.tasks ?? heights.tasks,
-						relevance: collapseRelevanceRef.current
-							? heights.relevance
-							: (layout.relevance ?? heights.relevance),
+						relatedContent: collapseRelatedContentRef.current
+							? heights.relatedContent
+							: (layout.relatedContent ?? heights.relatedContent),
 					});
 				}}
 			>
@@ -58,23 +58,23 @@ export function RightPanels() {
 
 				<ResizablePanel
 					id="tasks"
-					defaultSize={`${collapseRelevance ? 80 : rightPanelHeights.tasks}`}
+					defaultSize={`${collapseRelatedContent ? 80 : rightPanelHeights.tasks}`}
 					minSize="28"
 					className="min-h-[220px]"
 				>
 					<TasksPanel />
 				</ResizablePanel>
 
-				{collapseRelevance ? null : (
+				{collapseRelatedContent ? null : (
 					<>
 						<ResizableHandle withHandle className="bg-transparent py-1" />
 						<ResizablePanel
-							id="relevance"
-							defaultSize={`${rightPanelHeights.relevance}`}
+							id="relatedContent"
+							defaultSize={`${rightPanelHeights.relatedContent}`}
 							minSize="18"
 							className="min-h-[140px]"
 						>
-							<RelevancePanel />
+							<RelatedContentPanel />
 						</ResizablePanel>
 					</>
 				)}

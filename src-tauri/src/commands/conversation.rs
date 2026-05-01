@@ -19,8 +19,8 @@ pub async fn send_message(
         Some("companion") => ConversationMode::Companion,
         Some("reflection") => ConversationMode::Reflection,
         Some("challenge") => ConversationMode::Challenge,
-        Some("knowledge") => ConversationMode::Knowledge,
         Some("vault") => ConversationMode::Vault,
+        Some("private") => ConversationMode::Private,
         _ => ConversationMode::Companion, // 默认陪伴模式
     };
 

@@ -2,6 +2,28 @@
 
 This file provides guidance to Code Agents (claude.ai/code、codex、qwen) when working with code in this repository.
 
+<!-- effect-solutions:start -->
+
+## Effect Best Practices
+
+**IMPORTANT:** Always consult effect-solutions before writing Effect code.
+
+1. Run `effect-solutions list` to see available guides
+2. Run `effect-solutions show <topic>...` for relevant patterns (supports multiple topics)
+3. Search `~/.local/share/effect-solutions/effect` for real implementations
+
+Topics: quick-start, project-setup, tsconfig, basics, services-and-layers, data-modeling, error-handling, config, testing, cli.
+
+Never guess at Effect patterns - check the guide first.
+
+## Local Effect Source
+
+The Effect v4 repository is cloned to `~/.local/share/effect-solutions/effect` for reference.
+Use this to explore APIs, find usage examples, and understand implementation
+details when the documentation isn't enough.
+
+<!-- effect-solutions:end -->
+
 ## Project Overview
 
 MindClaw is a Tauri 2.0 desktop application combining a React 19 + TypeScript frontend with a Rust backend. Package manager is **Bun**.
@@ -49,18 +71,18 @@ bun run check-types     # TypeScript type-check
 
 ### Key Locations
 
-| Path | Purpose |
-|------|---------|
-| `src/App.tsx` | Root React component |
-| `src/components/ui/` | shadcn/ui generated components |
-| `src-tauri/src/lib.rs` | Tauri Builder: plugin/command registration |
-| `src-tauri/src/main.rs` | Rust binary entry |
-| `src-tauri/tauri.conf.json` | App config (identifier, window, bundle) |
-| `src-tauri/capabilities/` | Tauri permission grants |
-| `docs/blueprint/00-overview.md` | Blueprint docs |
-| `docs/prd/` | Product Requirements Document |
-| `docs/architecture/` | Full architecture design docs |
-| `docs/ui/` | UI design documents |
+| Path                            | Purpose                                    |
+| ------------------------------- | ------------------------------------------ |
+| `src/App.tsx`                   | Root React component                       |
+| `src/components/ui/`            | shadcn/ui generated components             |
+| `src-tauri/src/lib.rs`          | Tauri Builder: plugin/command registration |
+| `src-tauri/src/main.rs`         | Rust binary entry                          |
+| `src-tauri/tauri.conf.json`     | App config (identifier, window, bundle)    |
+| `src-tauri/capabilities/`       | Tauri permission grants                    |
+| `docs/blueprint/00-overview.md` | Blueprint docs                             |
+| `docs/prd/`                     | Product Requirements Document              |
+| `docs/architecture/`            | Full architecture design docs              |
+| `docs/ui/`                      | UI design documents                        |
 
 ### Directory Structure
 

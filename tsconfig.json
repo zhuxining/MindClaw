@@ -1,6 +1,8 @@
 {
+	"$schema": "https://raw.githubusercontent.com/Effect-TS/language-service/refs/heads/main/schema.json",
 	"compilerOptions": {
 		"target": "ESNext",
+		"plugins": [{ "name": "@effect/language-service" }],
 		"useDefineForClassFields": true,
 		"lib": ["ESNext", "DOM", "DOM.Iterable"],
 		"module": "ESNext",
@@ -14,6 +16,8 @@
 		"jsx": "react-jsx",
 		/* Linting */
 		"strict": true,
+		"exactOptionalPropertyTypes": true,
+		"noImplicitOverride": true,
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
 		"noFallthroughCasesInSwitch": true,

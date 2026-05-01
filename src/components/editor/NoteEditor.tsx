@@ -151,7 +151,7 @@ export function NoteEditor({ date, path, onSaveStateChange }: NoteEditorProps) {
 					<EditorInner
 						defaultValue={content ?? ""}
 						onSave={handleSave}
-						onSaveStateChange={onSaveStateChange}
+						{...(onSaveStateChange ? { onSaveStateChange } : {})}
 					/>
 				</div>
 			</div>

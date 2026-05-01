@@ -30,7 +30,7 @@ export function CreateTaskDialog({ open, onClose }: CreateTaskDialogProps) {
 			{
 				title: title.trim(),
 				priority,
-				due_date: dueDate || undefined,
+				...(dueDate ? { due_date: dueDate } : {}),
 			},
 			{
 				onSuccess: () => {

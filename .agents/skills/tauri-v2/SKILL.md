@@ -49,6 +49,7 @@ pub fn run() {
 **Why this matters:** Commands not in `generate_handler![]` silently fail when invoked from frontend.
 
 > **`main.rs` stays thin:** `src-tauri/src/main.rs` should only be a thin passthrough — all application logic lives in `lib.rs`:
+>
 > ```rust
 > // src-tauri/src/main.rs
 > #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -56,6 +57,7 @@ pub fn run() {
 >     app_lib::run();
 > }
 > ```
+>
 > This split is required for mobile builds — Tauri replaces `main()` with `mobile_entry_point` on mobile targets.
 
 ### Step 2: Call from Frontend
@@ -104,6 +106,7 @@ console.log(greeting); // "Hello, World!"
 ### Common Mistakes
 
 **Wrong - Borrowed type in async:**
+
 ```rust
 #[tauri::command]
 async fn bad(name: &str) -> String { // Compile error!
@@ -112,6 +115,7 @@ async fn bad(name: &str) -> String { // Compile error!
 ```
 
 **Correct - Owned type:**
+
 ```rust
 #[tauri::command]
 async fn good(name: String) -> String {
@@ -181,6 +185,7 @@ async fn good(name: String) -> String {
 ```
 
 **Key settings:**
+
 - `build.devUrl`: Must match your frontend dev server port
 - `app.security.capabilities`: Array of capability file identifiers
 
@@ -227,6 +232,7 @@ serde_json = "1"
 ```
 
 **Key settings:**
+
 - `[lib]` section: Required for mobile builds
 - `crate-type`: Must include all three types for cross-platform
 
@@ -287,6 +293,7 @@ fn create_user(args: CreateUserArgs) -> Result<User, String> {
 ```
 
 **Common serde pitfalls:**
+
 - Field names are camelCase in JS, snake_case in Rust — Tauri automatically converts between them
 - `Option<T>` maps to optional JS arguments (can be `undefined` or `null`)
 - Complex enums need `#[serde(tag = "type")]` or similar to be JSON-safe
@@ -394,6 +401,7 @@ fn focus_window(app: tauri::AppHandle) {
 ### References
 
 Located in `references/`:
+
 - [`capabilities-reference.md`](references/capabilities-reference.md) - Permission patterns and examples
 - [`ipc-patterns.md`](references/ipc-patterns.md) - Complete IPC examples
 - [`plugin-reference.md`](references/plugin-reference.md) - Official plugin install, registration, and permission strings
@@ -441,6 +449,7 @@ Located in `references/`:
 **Symptoms:** App launches but shows blank white screen
 
 **Solution:**
+
 1. Verify `devUrl` matches your frontend dev server port
 2. Check `beforeDevCommand` runs your dev server
 3. Open DevTools (Cmd+Option+I / Ctrl+Shift+I) to check for errors
@@ -450,6 +459,7 @@ Located in `references/`:
 **Symptoms:** `invoke()` returns undefined instead of expected value
 
 **Solution:**
+
 1. Verify command is in `generate_handler![]`
 2. Check Rust command actually returns a value
 3. Ensure argument names match (camelCase in JS, snake_case in Rust by default)
@@ -459,6 +469,7 @@ Located in `references/`:
 **Symptoms:** Android/iOS build fails with missing target
 
 **Solution:**
+
 ```bash
 # Android targets
 rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android

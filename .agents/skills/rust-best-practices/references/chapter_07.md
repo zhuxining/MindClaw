@@ -1,6 +1,6 @@
 # Chapter 7 - Type State Pattern
 
-Models state at compile time, preventing bugs by making illegal states unrepresentable. It takes advantage of the Rust generics and type system to create sub-types that can only be reached if a certain condition is achieved, making some operations illegal at compile time. 
+Models state at compile time, preventing bugs by making illegal states unrepresentable. It takes advantage of the Rust generics and type system to create sub-types that can only be reached if a certain condition is achieved, making some operations illegal at compile time.
 
 > Recently it became the standard design pattern of Rust programming. However, it is not exclusive to Rust, as it is achievable and has inspired other languages to do the same [swift](https://swiftology.io/articles/typestate/) and [typescript](https://catchts.com/type-state).
 
@@ -21,6 +21,7 @@ Models state at compile time, preventing bugs by making illegal states unreprese
 ## 7.3 Simple Example: File State
 
 [Github Example](https://github.com/apollographql/rust-best-practices/tree/main/examples/simple-type-state)
+
 ```rust
 use std::{io, path::{Path, PathBuf}};
 
@@ -153,6 +154,7 @@ impl Builder<NameSet, AgeSet> {
 Although a bit more verbose than a usual builder, this guarantees that all necessary fields are present (note that e-mail is optional field only present in the final builder).
 
 #### Usage:
+
 ```rust
 // ✅ Valid cases
 let person: Person = Builder::new().name("name".to_string()).age(30).build();
@@ -204,6 +206,7 @@ impl Client<Connected> {
 ## 7.5 Pros and Cons
 
 ### ✅ Use Type-State Pattern When:
+
 * Your want **compile-time state safety**.
 * You need to enforce **API constraints**.
 * You are writing a library/crate that is heavy dependent on variants.
@@ -211,12 +214,14 @@ impl Client<Connected> {
 * You need compile time correctness.
 
 ### ❌ Avoid it when:
+
 * Writing trivial states like enums.
 * Don't need type-safety.
 * When it leads to overcomplicated generics.
 * When runtime flexibility is required.
 
 ### 🚨 Downsides and Cautions
+
 * Can lead to more **verbose solutions**.
 * Can lead to **complex type signatures**.
 * May require **unsafe** to return **variant outputs** based on different states.

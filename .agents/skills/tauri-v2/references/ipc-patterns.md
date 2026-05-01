@@ -15,6 +15,7 @@
 ## Overview
 
 Tauri v2+ provides three IPC primitives:
+
 1. **Commands**: Request-response (most common)
 2. **Events**: Fire-and-forget notifications
 3. **Channels**: High-frequency streaming
@@ -26,14 +27,18 @@ Tauri v2+ provides three IPC primitives:
 ## IPC Decision Framework
 
 ### Commands: Request-Response
+
 Use `invoke()` when:
+
 - Frontend needs data from Rust (fetch, compute, query)
 - Frontend triggers an action and needs a result
 - Error handling is needed (returns `Result<T, E>`)
 - **Direction: Frontend → Rust → Frontend** (request/response)
 
 ### Events: Fire-and-Forget Notifications
+
 Use `emit()`/`listen()` when:
+
 - Rust needs to notify frontend of a background event
 - Multiple windows need to receive the same notification
 - Broadcasting state changes that don't require acknowledgment
@@ -41,7 +46,9 @@ Use `emit()`/`listen()` when:
 - **Important:** Events are fire-and-forget — there is NO acknowledgment or response channel
 
 ### Channels: Typed Streaming
+
 Use `Channel<T>` when:
+
 - High-frequency progress updates from a long-running operation
 - Streaming data from Rust to frontend
 - Strongly typed discriminated message streams
@@ -53,6 +60,7 @@ Use `Channel<T>` when:
 ### Basic Command
 
 **Rust:**
+
 ```rust
 #[tauri::command]
 fn greet(name: String) -> String {
@@ -65,6 +73,7 @@ tauri::Builder::default()
 ```
 
 **Frontend:**
+
 ```typescript
 import { invoke } from '@tauri-apps/api/core';
 
@@ -74,6 +83,7 @@ const result = await invoke<string>('greet', { name: 'World' });
 ### Command with Multiple Arguments
 
 **Rust:**
+
 ```rust
 #[tauri::command]
 fn calculate(a: i32, b: i32, operation: String) -> i32 {
@@ -88,6 +98,7 @@ fn calculate(a: i32, b: i32, operation: String) -> i32 {
 ```
 
 **Frontend:**
+
 ```typescript
 const result = await invoke<number>('calculate', {
     a: 10,
@@ -99,6 +110,7 @@ const result = await invoke<number>('calculate', {
 ### Async Command
 
 **Rust:**
+
 ```rust
 #[tauri::command]
 async fn fetch_data(url: String) -> Result<String, String> {
@@ -114,6 +126,7 @@ async fn fetch_data(url: String) -> Result<String, String> {
 ```
 
 **Frontend:**
+
 ```typescript
 try {
     const data = await invoke<string>('fetch_data', { url: 'https://api.example.com' });
@@ -125,6 +138,7 @@ try {
 ### Command with Result Error Handling
 
 **Rust:**
+
 ```rust
 use thiserror::Error;
 
@@ -155,6 +169,7 @@ fn read_config(path: String) -> Result<Config, AppError> {
 ```
 
 **Frontend:**
+
 ```typescript
 try {
     const config = await invoke<Config>('read_config', { path: '/config.json' });
@@ -167,6 +182,7 @@ try {
 ### Command with State
 
 **Rust:**
+
 ```rust
 use std::sync::Mutex;
 use tauri::State;
@@ -202,6 +218,7 @@ tauri::Builder::default()
 ### Command with Window Access
 
 **Rust:**
+
 ```rust
 use tauri::{WebviewWindow, AppHandle};
 
@@ -227,6 +244,7 @@ fn create_window(app: AppHandle) -> Result<(), String> {
 ### Command with Raw Binary Data
 
 **Rust:**
+
 ```rust
 use tauri::ipc::Response;
 
@@ -246,6 +264,7 @@ fn upload_file(request: tauri::ipc::Request) -> Result<(), String> {
 ```
 
 **Frontend:**
+
 ```typescript
 // Reading binary
 const data = await invoke<ArrayBuffer>('read_binary_file', { path: '/file.bin' });
@@ -264,6 +283,7 @@ await invoke('upload_file', fileData);
 ### Emit from Rust to Frontend
 
 **Rust:**
+
 ```rust
 use tauri::Emitter;
 
@@ -286,6 +306,7 @@ fn notify_window(app: tauri::AppHandle, window_label: String, message: String) {
 ```
 
 **Frontend:**
+
 ```typescript
 import { listen, once } from '@tauri-apps/api/event';
 
@@ -306,6 +327,7 @@ unlisten();
 ### Emit from Frontend to Rust
 
 **Frontend:**
+
 ```typescript
 import { emit } from '@tauri-apps/api/event';
 
@@ -313,6 +335,7 @@ await emit('user-action', { action: 'click', target: 'button' });
 ```
 
 **Rust (in setup or command):**
+
 ```rust
 use tauri::Listener;
 
@@ -326,6 +349,7 @@ fn setup_listeners(app: &tauri::App) {
 ### Window-Specific Events
 
 **Rust:**
+
 ```rust
 use tauri::{Emitter, WebviewWindow};
 
@@ -340,11 +364,13 @@ fn emit_to_window(window: WebviewWindow, message: String) {
 ## Typed Streaming Channels
 
 `Channel<TSend>` is a typed streaming primitive. The type parameter `TSend` defines what messages can be sent. Both Rust and TypeScript must agree on the shape:
+
 - Rust: `Channel<MyEvent>` where `MyEvent: serde::Serialize + Clone`
 - Frontend: `new Channel<MyEvent>()` with matching TypeScript type
 - Use `#[serde(tag = "event", content = "data")]` on enums for discriminated union patterns.
 
 **Rust:**
+
 ```rust
 use tauri::ipc::Channel;
 
@@ -376,6 +402,7 @@ async fn process_files(
 ```
 
 **Frontend:**
+
 ```typescript
 import { invoke, Channel } from '@tauri-apps/api/core';
 
@@ -400,6 +427,7 @@ await invoke('process_files', {
 ### Tagged Union Events (Discriminated)
 
 **Rust:**
+
 ```rust
 use tauri::ipc::Channel;
 
@@ -440,6 +468,7 @@ async fn download_file(
 ```
 
 **Frontend:**
+
 ```typescript
 import { invoke, Channel } from '@tauri-apps/api/core';
 
@@ -487,18 +516,21 @@ const path = await invoke<string>('download_file', {
 ### When to Use Each
 
 **Commands (invoke)**
+
 - Fetching data from Rust
 - Performing actions that return results
 - CRUD operations
 - Most common pattern
 
 **Events (emit/listen)**
+
 - Notifying UI of background changes
 - Broadcasting to multiple windows
 - Fire-and-forget notifications
 - System events (window close, minimize)
 
 **Channels**
+
 - File download/upload progress
 - Long-running operations with updates
 - Streaming log output

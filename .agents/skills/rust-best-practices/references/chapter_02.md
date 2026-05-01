@@ -7,6 +7,7 @@ Clippy documentation can be found [here](https://doc.rust-lang.org/clippy/usage.
 ## 2.1 Why care about linting?
 
 Rust compiler is a powerful tool that catches many mistakes. However, some more in-depth analysis require extra tools, that is where `cargo clippy` clippy comes into to play. Clippy checks for:
+
 * Performance pitfalls.
 * Style issues.
 * Redundant code.
@@ -18,7 +19,7 @@ Rust compiler is a powerful tool that catches many mistakes. However, some more 
 Add the following to your daily workflow:
 
 ```shell
-$ cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo clippy --all-targets --all-features --locked -- -D warnings
 ```
 
 * `--all-targets`: checks library, tests, benches and examples.
@@ -34,7 +35,7 @@ Potential additions elements to add:
 
 > Example at ApolloGraphQL
 >
-> In the `Router` project there is a `xtask` configured for linting that can be executed with `cargo xtask lint`. 
+> In the `Router` project there is a `xtask` configured for linting that can be executed with `cargo xtask lint`.
 
 ## 2.3 Important Clippy Lints to Respect
 
@@ -69,7 +70,7 @@ enum Message {
 ```
 
 > The fix would be:
-> 
+>
 > ```rust
 > // Faster matching is preferred over size efficiency
 > #[expect(clippy::large_enum_variant)]
@@ -82,6 +83,7 @@ enum Message {
 ### Handling false positives
 
 Sometimes Clippy complains even when your code is correct, in those cases there are two solutions:
+
 1. Try to refactor the code, so it improves the warning.
 2. **Locally** override the lint with `#[expect(clippy::lint_name)]` and a comment with the reason.
 3. Avoid global overrides, unless it is core crate issue, a good example of this is the Bevy Engine that has a set of lints that should be allowed by default.

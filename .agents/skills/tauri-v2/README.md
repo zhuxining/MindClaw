@@ -8,7 +8,7 @@
 | **Version** | 1.0.1 |
 | **Last Updated** | 2026-04-02 |
 | **Confidence** | 4/5 |
-| **Production Tested** | https://v2.tauri.app/ |
+| **Production Tested** | <https://v2.tauri.app/> |
 
 ## What This Skill Does
 
@@ -27,7 +27,9 @@ Provides expert assistance for Tauri v2 application development, covering the fu
 ## Auto-Trigger Keywords
 
 ### Primary Keywords
+
 Exact terms that strongly trigger this skill:
+
 - tauri
 - tauri v2
 - tauri.conf.json
@@ -37,7 +39,9 @@ Exact terms that strongly trigger this skill:
 - capabilities.json
 
 ### Secondary Keywords
+
 Related terms that may trigger in combination:
+
 - rust backend
 - desktop app
 - cross-platform app
@@ -48,7 +52,9 @@ Related terms that may trigger in combination:
 - bundle desktop
 
 ### Error-Based Keywords
+
 Common error messages that should trigger this skill:
+
 - "Command not found"
 - "Permission denied" (in Tauri context)
 - "Failed to invoke command"
@@ -71,6 +77,7 @@ Common error messages that should trigger this skill:
 ## When to Use
 
 ### Use This Skill For
+
 - Creating new Tauri v2 projects or commands
 - Configuring permissions and capabilities
 - Setting up IPC (invoke, events, channels)
@@ -80,6 +87,7 @@ Common error messages that should trigger this skill:
 - Mobile (iOS/Android) deployment setup
 
 ### Don't Use This Skill For
+
 - Tauri v1 development (use migration guide then this skill)
 - Pure frontend development without Tauri integration
 - Native mobile development (Swift/Kotlin directly)

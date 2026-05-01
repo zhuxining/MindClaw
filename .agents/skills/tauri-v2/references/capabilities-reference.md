@@ -19,6 +19,7 @@
 Tauri v2 replaces the v1 `allowlist` with a capabilities-first security model. In v1, you listed allowed API calls in `tauri.conf.json`'s `allowlist`. In v2, permissions must be explicitly granted via capability files in `src-tauri/capabilities/`.
 
 **Three-layer security model:**
+
 - **Capability**: A named collection of permissions, scoped to specific windows/webviews. Lives in `src-tauri/capabilities/*.json`.
 - **Permission**: An identifier that grants access to a specific command or feature (e.g., `fs:allow-read-file`). Defined per-plugin.
 - **Scope**: Optional constraint on a permission that limits what it can access (e.g., only `$APPDATA/*` paths). Part of a permission object.
@@ -101,6 +102,7 @@ Location: `src-tauri/capabilities/`
 ```
 
 **With Scopes:**
+
 ```json
 {
     "permissions": [
@@ -143,6 +145,7 @@ Location: `src-tauri/capabilities/`
 ```
 
 **Scoped Execute:**
+
 ```json
 {
     "permissions": [
@@ -168,6 +171,7 @@ Location: `src-tauri/capabilities/`
 ```
 
 **With URL Scopes:**
+
 ```json
 {
     "permissions": [
@@ -300,6 +304,7 @@ Allow Tauri commands from remote URLs:
 Create custom permissions in `src-tauri/permissions/`:
 
 **`custom.toml`:**
+
 ```toml
 [[permission]]
 identifier = "allow-home-documents"
@@ -311,6 +316,7 @@ path = "$HOME/Documents/**"
 ```
 
 Reference in capability:
+
 ```json
 {
     "permissions": ["custom:allow-home-documents"]

@@ -11,6 +11,7 @@
 > *Last verified: 2026-04-02. Check official Tauri v2+ docs for updates.*
 
 **See also:**
+
 - [plugin-reference.md](plugin-reference.md) — plugin installation and permissions
 - [capabilities-reference.md](capabilities-reference.md) — capability/permission model
 
@@ -67,6 +68,7 @@ let tray = TrayIconBuilder::new()
 ```
 
 Platform notes:
+
 - **macOS:** tray icon appears in menu bar; supports template images
 - **Windows:** tray icon in system tray; click events differ from macOS
 - **Linux:** tray support varies by desktop environment (requires `libappindicator` or `libayatana-appindicator`)
@@ -121,6 +123,7 @@ async fn run_sidecar(app: tauri::AppHandle) -> Result<String, String> {
 ```
 
 Binary naming convention (for cross-platform bundling):
+
 - **macOS (Intel):** `my-sidecar-x86_64-apple-darwin`
 - **macOS (ARM):** `my-sidecar-aarch64-apple-darwin`
 - **Windows:** `my-sidecar-x86_64-pc-windows-msvc.exe`
@@ -166,6 +169,7 @@ app.deep_link().on_open_url(|event| {
 ```
 
 Platform notes:
+
 - **macOS:** registers URL scheme in Info.plist automatically
 - **Windows:** registry entry created during install
 - **Linux:** .desktop file update required

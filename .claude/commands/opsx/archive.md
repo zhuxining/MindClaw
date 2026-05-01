@@ -65,7 +65,6 @@ Archive a completed change in the experimental workflow.
 
    Create the archive directory if it doesn't exist:
 
-
    ```bash
    mkdir -p openspec/changes/archive
    ```
@@ -148,7 +147,6 @@ Target archive directory already exists.
 2. Delete the existing archive if it's a duplicate
 3. Wait until a different date to archive
 ```
-
 
 **Guardrails**
 

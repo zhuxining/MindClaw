@@ -13,7 +13,6 @@ Enter explore mode. Think deeply. Visualize freely. Follow the conversation wher
 
 **Input**: The argument after `/opsx:explore` is whatever the user wants to think about. Could be:
 
-
 - A vague idea: "real-time collaboration"
 - A specific problem: "the auth system is getting unwieldy"
 - A change name: "add-dark-mode" (to explore in context of that change)
@@ -37,14 +36,12 @@ Enter explore mode. Think deeply. Visualize freely. Follow the conversation wher
 
 Depending on what the user brings, you might:
 
-
 **Explore the problem space**
 
 - Ask clarifying questions that emerge from what they said
 - Challenge assumptions
 - Reframe the problem
 - Find analogies
-
 
 **Investigate the codebase**
 
@@ -92,11 +89,9 @@ Depending on what the user brings, you might:
 
 ## OpenSpec Awareness
 
-
 You have full context of the OpenSpec system. Use it naturally, don't force it.
 
 ### Check for context
-
 
 At the start, quickly check what exists:
 

@@ -22,7 +22,6 @@ Implement tasks from an OpenSpec change.
 
 2. **Check status to understand the schema**
 
-
    ```bash
    openspec status --change "<name>" --json
 
@@ -137,7 +136,6 @@ All tasks complete! You can archive this change with `/opsx:archive`.
 
 What would you like to do?
 ```
-
 
 **Guardrails**
 

@@ -10,11 +10,14 @@
 		"check": "biome check --write --unsafe",
 		"check-types": "tsc --noEmit",
 		"tauri": "tauri",
-		"prepare": "effect-language-service patch"
+		"prepare": "effect-language-service patch",
+		"test": "vitest run",
+		"test:watch": "vitest"
 	},
 	"dependencies": {
 		"@base-ui/react": "^1.4.1",
 		"@effect/language-service": "^0.85.1",
+		"@effect/platform-bun": "^4.0.0-beta.59",
 		"@fontsource-variable/inter": "^5.2.8",
 		"@milkdown/crepe": "^7.20.0",
 		"@milkdown/kit": "^7.20.0",
@@ -38,7 +41,7 @@
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"cmdk": "^1.1.1",
-		"effect": "4.0.0-beta.0",
+		"effect": "^4.0.0-beta.59",
 		"lucide-react": "^1.14.0",
 		"react": "^19.2.5",
 		"react-dom": "^19.2.5",
@@ -51,13 +54,15 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.13",
-		"lefthook": "^2.1.6",
-		"markdownlint-cli2": "^0.22.1",
+		"@effect/vitest": "^4.0.0-beta.59",
 		"@tauri-apps/cli": "^2.11.0",
 		"@types/react": "^19.2.14",
 		"@types/react-dom": "^19.2.3",
 		"@vitejs/plugin-react": "^6.0.1",
+		"lefthook": "^2.1.6",
+		"markdownlint-cli2": "^0.22.1",
 		"typescript": "^6.0.3",
-		"vite": "^8.0.10"
+		"vite": "^8.0.10",
+		"vitest": "^4.1.5"
 	}
 }

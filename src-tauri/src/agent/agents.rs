@@ -12,7 +12,7 @@
 //!
 //! Profile 不是 Instance：Profile 描述"应该如何运行"，不是"正在运行什么"。
 
-use crate::agent::messages::{ChatMessage, ToolChoice as RunToolChoice, ToolSchema};
+use crate::agent::messages::{ChatMessage, ToolChoice, ToolSchema};
 use crate::agent::spec::{AgentRunSpec, InvocationMode};
 use crate::runtime::config::AppConfig;
 use std::collections::HashMap;
@@ -103,14 +103,6 @@ pub struct ToolPolicy {
     pub tool_timeout_ms: Option<u64>,
     /// 工具错误是否立即中止
     pub fail_on_tool_error: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ToolChoice {
-    #[default]
-    Auto, // 模型决定是否调用工具
-    Required, // 必须调用至少一个工具
-    None,     // 禁止调用工具
 }
 
 impl Default for ToolPolicy {
@@ -495,11 +487,7 @@ impl AgentProfile {
             temperature: self.model_policy.temperature,
             max_tokens: self.model_policy.max_tokens,
             parallel_tools: self.tool_policy.parallel_tools,
-            tool_choice: match self.tool_policy.tool_choice {
-                ToolChoice::Auto => RunToolChoice::Auto,
-                ToolChoice::Required => RunToolChoice::Required,
-                ToolChoice::None => RunToolChoice::None,
-            },
+            tool_choice: self.tool_policy.tool_choice.clone(),
             fail_on_tool_error: self.tool_policy.fail_on_tool_error,
             retry_mode: crate::agent::retry::RetryMode::Standard,
         }

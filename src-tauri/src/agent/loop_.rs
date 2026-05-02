@@ -18,7 +18,7 @@
 //! - 当前阶段先稳定边界，再决定是否需要进一步细分文件
 
 use crate::agent::agents::{AgentRegistry, ModelRouter, MAIN_AGENT_ID};
-use crate::agent::context::{ContextBuildContext, ContextPipeline};
+use crate::agent::context::{ContextBuildState, ContextPipeline};
 use crate::agent::events::UserVisiblePhase;
 use crate::agent::hooks::{InteractiveRunHooks, RunHookPublisher};
 use crate::agent::messages::ChatMessage;
@@ -321,7 +321,7 @@ impl AgentLoop {
         }
 
         // 4. 构建上下文
-        let ctx = ContextBuildContext::new(message.clone(), Arc::new(session.clone()));
+        let ctx = ContextBuildState::new(message.clone(), Arc::new(session.clone()));
         let built_context = self.context_pipeline.build(&ctx).await?;
 
         tracing::debug!(fragments = %built_context.fragments.len(), "agent_context_prepared");

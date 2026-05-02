@@ -6,7 +6,7 @@
 //! - 第 2 层 Dynamic：每次请求变化（Identity / Memory / Vault / Skills）
 //! - 第 3 层 User：运行时上下文 + 用户输入
 
-use crate::agent::messages::{ChatMessage, MessageRole as ChatMessageRole};
+use crate::agent::messages::{ChatMessage, MessageRole};
 use crate::agent::session::AgentSession;
 use crate::bus::events::InboundMessage;
 use crate::error::AppError;
@@ -36,24 +36,6 @@ pub enum ContextLayer {
 // ============================================================================
 // ContextFragment - 上下文片段
 // ============================================================================
-
-/// 消息角色
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessageRole {
-    System,
-    User,
-    Assistant,
-}
-
-impl std::fmt::Display for MessageRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MessageRole::System => write!(f, "system"),
-            MessageRole::User => write!(f, "user"),
-            MessageRole::Assistant => write!(f, "assistant"),
-        }
-    }
-}
 
 /// 上下文片段
 #[derive(Debug, Clone)]
@@ -122,17 +104,17 @@ pub trait ContextSource: Send + Sync {
     }
 
     /// 注入上下文片段
-    async fn inject(&self, ctx: &ContextBuildContext) -> Result<Vec<ContextFragment>, AppError>;
+    async fn inject(&self, ctx: &ContextBuildState) -> Result<Vec<ContextFragment>, AppError>;
 }
 
 // ============================================================================
-// ContextBuildContext - 构建上下文
+// ContextBuildState - 构建上下文
 // ============================================================================
 
-/// 上下文构建上下文
+/// 上下文构建状态
 ///
 /// 使用 Arc 而非引用：避免 async_trait + 多重借用的生命周期冲突
-pub struct ContextBuildContext {
+pub struct ContextBuildState {
     /// 入站消息
     pub inbound: InboundMessage,
     /// 当前会话
@@ -140,7 +122,7 @@ pub struct ContextBuildContext {
     // TODO: 添加 MemoryManager, VaultStore
 }
 
-impl ContextBuildContext {
+impl ContextBuildState {
     pub fn new(inbound: InboundMessage, session: Arc<AgentSession>) -> Self {
         Self { inbound, session }
     }
@@ -221,7 +203,7 @@ impl ContextPipeline {
     /// 1. Core 层（缓存）
     /// 2. Dynamic 层
     /// 3. User 层
-    pub async fn build(&self, ctx: &ContextBuildContext) -> Result<BuiltContext, AppError> {
+    pub async fn build(&self, ctx: &ContextBuildState) -> Result<BuiltContext, AppError> {
         let mut fragments = Vec::new();
         let mut system_prompt = String::new();
         let mut messages = Vec::new();
@@ -372,7 +354,7 @@ impl ContextSource for SystemPromptSource {
         0
     }
 
-    async fn inject(&self, _ctx: &ContextBuildContext) -> Result<Vec<ContextFragment>, AppError> {
+    async fn inject(&self, _ctx: &ContextBuildState) -> Result<Vec<ContextFragment>, AppError> {
         Ok(vec![ContextFragment::new(
             ContextLayer::Core,
             MessageRole::System,
@@ -401,7 +383,7 @@ impl ContextSource for UserMessageSource {
         100
     }
 
-    async fn inject(&self, ctx: &ContextBuildContext) -> Result<Vec<ContextFragment>, AppError> {
+    async fn inject(&self, ctx: &ContextBuildState) -> Result<Vec<ContextFragment>, AppError> {
         // 注入运行时上下文
         let runtime_context = format!(
             "[当前时间：{}，平台：{}]",
@@ -453,20 +435,14 @@ impl ContextSource for ConversationHistorySource {
         30
     }
 
-    async fn inject(&self, ctx: &ContextBuildContext) -> Result<Vec<ContextFragment>, AppError> {
+    async fn inject(&self, ctx: &ContextBuildState) -> Result<Vec<ContextFragment>, AppError> {
         let history = ctx.session.compressed_history(self.keep_recent);
         let mut fragments = Vec::new();
 
         for msg in history {
-            let role = match msg.role {
-                ChatMessageRole::System => MessageRole::System,
-                ChatMessageRole::Assistant => MessageRole::Assistant,
-                ChatMessageRole::User => MessageRole::User,
-            };
-
             fragments.push(ContextFragment::new(
                 ContextLayer::Dynamic,
-                role,
+                msg.role,
                 msg.text_content(),
                 "history",
             ));

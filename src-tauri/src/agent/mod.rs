@@ -31,8 +31,8 @@ pub mod tools;
 pub use agents::{AgentKind, AgentProfile, AgentRegistry, ModelRouter};
 pub use compact::{AutoCompact, AutoCompactConfig, CompactResult};
 pub use context::{
-    BuiltContext, ContextBuildContext, ContextFragment, ContextLayer, ContextPipeline,
-    ContextSource, ConversationHistorySource, MessageRole, SystemPromptSource, UserMessageSource,
+    BuiltContext, ContextBuildState, ContextFragment, ContextLayer, ContextPipeline, ContextSource,
+    ConversationHistorySource, SystemPromptSource, UserMessageSource,
 };
 pub use events::UserVisiblePhase;
 pub use hooks::{
@@ -42,9 +42,7 @@ pub use hooks::{
 };
 pub use loop_::AgentLoop;
 pub use memory::{Memory, MemoryCategory, MemoryStore, UpsertMemoryInput};
-pub use messages::{
-    ChatMessage, MessageContent, MessageRole as ChatMessageRole, ToolChoice, ToolSchema,
-};
+pub use messages::{ChatMessage, MessageContent, MessageRole, ToolChoice, ToolSchema};
 pub use retry::{extract_retry_after, RetryMode, RetryPolicy};
 pub use runner::AgentRunner;
 pub use session::{
@@ -53,7 +51,7 @@ pub use session::{
 };
 pub use skills::{SkillManifest, SkillMetadata, SkillsRegistry};
 pub use spawn::{
-    AgentSpawnDispatcher, CapabilityProfile, RoutingContext, SpawnSource, SubAgentDef,
+    AgentSpawnDispatcher, CapabilityProfile, RoutingContext, SpawnSource, SubAgentDefinition,
     SubAgentInfo, SubAgentMode, SubAgentResult,
 };
 pub use spec::{

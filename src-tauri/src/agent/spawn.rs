@@ -5,7 +5,7 @@
 //!
 //! 当前文件负责：
 //! - `AgentSpawnDispatcher`
-//! - `SubAgentDef` / `SubAgentMode` / `CapabilityProfile`
+//! - `SubAgentDefinitioninition` / `SubAgentMode` / `CapabilityProfile`
 //! - 后台派发与结果回注
 //!
 //! 当前限制：
@@ -41,7 +41,7 @@ pub enum SubAgentMode {
 
 /// 从 Markdown frontmatter + body 解析的 SubAgent 定义
 #[derive(Debug, Clone)]
-pub struct SubAgentDef {
+pub struct SubAgentDefinition {
     /// 唯一名称
     pub name: String,
     /// 描述（供 LLM 和 operations list 使用）
@@ -58,7 +58,7 @@ pub struct SubAgentDef {
     pub source_path: Option<PathBuf>,
 }
 
-impl Default for SubAgentDef {
+impl Default for SubAgentDefinition {
     fn default() -> Self {
         Self {
             name: String::new(),
@@ -172,7 +172,7 @@ pub struct AgentSpawnDispatcher {
     /// 工作空间路径
     workspace: PathBuf,
     /// 已注册的 SubAgent 定义
-    agents: HashMap<String, Arc<SubAgentDef>>,
+    agents: HashMap<String, Arc<SubAgentDefinition>>,
     /// Agent profile 注册表
     agent_registry: Arc<AgentRegistry>,
     /// 模型路由
@@ -229,7 +229,7 @@ impl AgentSpawnDispatcher {
     }
 
     /// 注册 SubAgent 定义
-    pub fn register(&mut self, def: Arc<SubAgentDef>) {
+    pub fn register(&mut self, def: Arc<SubAgentDefinition>) {
         tracing::info!(
             name = %def.name,
             mode = ?def.mode,
@@ -240,7 +240,7 @@ impl AgentSpawnDispatcher {
     }
 
     /// 获取 SubAgent 定义
-    pub fn get(&self, name: &str) -> Option<&Arc<SubAgentDef>> {
+    pub fn get(&self, name: &str) -> Option<&Arc<SubAgentDefinition>> {
         self.agents.get(name)
     }
 

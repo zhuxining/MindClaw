@@ -50,7 +50,7 @@ Provider 层不再暴露自定义 trait。`ProviderRegistry` 负责配置、密�
 | `ToolSchema` | `src/agent/messages.rs` | 历史兼容字段 | 当前工具执行以 `ToolDyn` / `ToolSet` 为准 |
 | `ToolCallPlaceholder` | `src/agent/hooks.rs` | Hook 观测用工具调用占位 | Rig 执行工具，MindClaw 只向 observer 暴露名称和 id |
 | `AgentSpawnDispatcher` | `src/agent/spawn.rs` | 管理派生执行 | 当前已接通 inline `SubAgent` 与后台派发 |
-| `SubAgentDef` | `src/agent/spawn.rs` | 子代理静态定义 | 含 mode / model / capabilities / prompt |
+| `SubAgentDefinition` | `src/agent/spawn.rs` | 子代理静态定义 | 含 mode / model / capabilities / prompt |
 | `UserVisiblePhase` | `src/agent/events.rs` | 对外简化状态 | 通过 MessageBus / Channel 暴露给前端 |
 | `ContextUri` | `src/storage/` | 上下文稳定引用 | 跨 Vault 文件、外部资源、agent 资产和 session 证据引用 |
 | `ContextFrontmatter` | `src/storage/markdown.rs` | 可索引 Markdown 的通用 Frontmatter | 承载 `tags`、`overview`、`confidence`、`origin`、`refs` 和来源扩展 |

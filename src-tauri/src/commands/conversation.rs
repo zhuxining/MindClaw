@@ -33,6 +33,7 @@ pub async fn send_message(
         mode: conversation_mode,
         content,
         timestamp: chrono::Utc::now().timestamp_millis(),
+        is_injection: false,
     };
 
     runtime.bus().publish_inbound(message).await?;

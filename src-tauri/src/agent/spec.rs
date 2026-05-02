@@ -86,6 +86,10 @@ pub struct AgentRunSpec {
     /// LLM 调用重试模式
     /// 默认：Standard（最多 3 次重试）
     pub retry_mode: RetryMode,
+
+    /// 上下文窗口 Token 预算上限（None = 不限制）
+    /// 用于在 run 前裁剪历史消息，防止 token 超限
+    pub context_window_tokens: Option<usize>,
 }
 
 impl Default for AgentRunSpec {
@@ -106,6 +110,7 @@ impl Default for AgentRunSpec {
             tool_choice: ToolChoice::Auto,
             fail_on_tool_error: false,
             retry_mode: RetryMode::Standard,
+            context_window_tokens: None,
         }
     }
 }
@@ -139,6 +144,7 @@ impl AgentRunSpec {
             tool_choice: ToolChoice::Auto,
             fail_on_tool_error: false,
             retry_mode: RetryMode::Standard,
+            context_window_tokens: None,
         }
     }
 
@@ -166,6 +172,7 @@ impl AgentRunSpec {
             tool_choice: ToolChoice::Auto,
             fail_on_tool_error: false,
             retry_mode: RetryMode::Standard,
+            context_window_tokens: None,
         }
     }
 
@@ -192,6 +199,7 @@ impl AgentRunSpec {
             tool_choice: ToolChoice::Auto,
             fail_on_tool_error: true,          // 后台任务严格模式
             retry_mode: RetryMode::Persistent, // 后台任务持久重试
+            context_window_tokens: None,
         }
     }
 
@@ -213,6 +221,7 @@ impl AgentRunSpec {
             tool_choice: ToolChoice::Auto,
             fail_on_tool_error: true,
             retry_mode: RetryMode::Disabled, // 测试禁用重试
+            context_window_tokens: None,
         }
     }
 }

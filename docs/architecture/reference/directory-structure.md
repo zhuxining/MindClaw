@@ -55,13 +55,15 @@ src-tauri/src/
 │   ├── session.rs          AgentSession / TurnRecord / session 串行化
 │   ├── events.rs           UserVisiblePhase 对外状态契约
 │   ├── hooks.rs            RunHooks observer 与交互式 Hook / CompositeRunHooks
-│   ├── spawn.rs            SubAgent / BackgroundAgent 派生执行
+│   ├── subagent.rs            SubAgent 派生执行（inline / detached）
 │   ├── retry.rs            RetryPolicy / RetryMode — LLM 调用重试机制
 │   ├── compact.rs          AutoCompact — Session 历史自动压缩
 │   ├── memory.rs           Agent 记忆召回与 Frontmatter 扩展
 │   ├── skills.rs           SkillManifest / SkillMetadata / SkillsRegistry
 │   ├── observability.rs    AgentObserver 与 tracing 适配
-│   ├── built-in/           内置技能、系统提示或运行时静态资源
+│   ├── build-in/           内置技能、派生 Agent 定义和运行时静态资源
+│   │   ├── subagent/       Markdown 派生 Agent 定义
+│   │   └── skills/         内置技能 Markdown
 │   └── tools/              工具执行系统 ✅
 │       ├── mod.rs          ✅ Rig ToolDyn 列表初始化与 profile 过滤
 │       ├── path_guard.rs   ✅ Agent 工具路径沙箱
@@ -69,7 +71,7 @@ src-tauri/src/
 │       ├── file_ops.rs     ✅ 文件读取、写入和编辑
 │       ├── find_files.rs   ✅ 文件搜索
 │       ├── search_content.rs ✅ 内容搜索
-│       ├── agent_spawn.rs  ✅ 子代理工具（delegate_to_agent / spawn_background_agent）
+│       ├── spawn.rs  ✅ 子代理工具（delegate_to_agent）
 │       └── mcp.rs          ✅ MCP 外部工具桥接
 │
 ├── providers/              LLM Provider Adapter ✅
@@ -163,7 +165,7 @@ src-tauri/src/
 - Provider 协议差异进入 `providers/`，不能进入 `AgentLoop` 或 `AgentProfile`。
 - Agent Runtime 的消息、工具 Schema 和运行事件契约进入 `agent/`；Rig 类型只能停留在 `AgentRunner`、`providers/` 和 `agent/tools/` 执行支撑边界内。
 - `agent/tools/` 保持目录结构；工具实现必须通过 Rig `ToolDyn` / `Tool` 接口注册。
-- 内置技能和提示类静态资源进入 `agent/built-in/`；只提供上下文指导的内容不能建成可调用工具。
+- 内置派生 Agent 定义进入 `agent/build-in/subagent/*.md`，由 `agents.rs` 统一解析并注册；Main Agent 不进入 Markdown 自定义体系；内置技能和提示类静态资源进入 `agent/build-in/`；只提供上下文指导的内容不能建成可调用工具。
 
 ---
 

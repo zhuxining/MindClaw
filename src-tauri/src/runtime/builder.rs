@@ -3,7 +3,7 @@
 //! 从配置文件加载两层配置（UserConfig + VaultConfig），合并为运行时 AppConfig，
 //! 打开双 DB（全局 DB + vault DB），初始化所有服务。
 
-use crate::agent::{AgentLoop, AgentRegistry, AgentRunner, ModelRouter};
+use crate::agent::{Agent, AgentProfile, AgentRunner};
 use crate::bus::MessageBus;
 use crate::error::AppResult;
 use crate::providers::ProviderRegistry;
@@ -130,22 +130,21 @@ impl AppRuntimeBuilder {
         let agent_models = provider_registry.create_agent_models_from_env(&config)?;
         let runner = Arc::new(AgentRunner::new(agent_models.clone()));
 
-        let agent_registry = Arc::new(AgentRegistry::bootstrap(
+        // 14. 创建 Main Agent Profile
+        let main_agent = Arc::new(AgentProfile::main(
             &config,
-            &agent_models.main_model_id,
-            &agent_models.light_model_id,
+            agent_models.main_model_id.clone(),
         ));
-        let model_router = Arc::new(ModelRouter::new());
 
-        // 14. 初始化 AgentLoop
+        // 15. 初始化 Agent（自包含：创建 Loop、SpawnDispatcher）
         let agent = Arc::new(
-            AgentLoop::init(
+            Agent::init(
                 config.clone(),
                 bus.clone(),
                 session_mgr.clone(),
                 Arc::clone(&runner),
-                agent_registry.clone(),
-                model_router.clone(),
+                Arc::clone(&main_agent),
+                agent_models.light_model_id.clone(),
             )
             .await?,
         );
@@ -158,8 +157,6 @@ impl AppRuntimeBuilder {
             services,
             bus,
             agent,
-            agent_registry,
-            model_router,
             session_mgr,
             config,
             shutdown,

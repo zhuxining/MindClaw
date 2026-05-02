@@ -38,7 +38,7 @@
 | [03.02-agent-loop.md](./03.02-agent-loop.md) | AgentLoop：turn 级编排、spec 构建、持久化与分发 |
 | [03.03-agent-runner.md](./03.03-agent-runner.md) | AgentRunner：run 级迭代执行引擎 |
 | [03.04-run-contracts.md](./03.04-run-contracts.md) | Run Contracts：AgentRunSpec / AgentRunResult / RunHooks / InvocationMode |
-| [03.05-agent-spawn.md](./03.05-agent-spawn.md) | Agent Spawn：SubAgent 与 BackgroundAgent 的派生执行 |
+| [03.05-agent-spawn.md](./03.05-agent-spawn.md) | Agent Spawn：SubAgent 派生执行 |
 | [03.06-context-pipeline.md](./03.06-context-pipeline.md) | ContextPipeline：上下文装配与 spawn context seed |
 | [03.07-tool-execution.md](./03.07-tool-execution.md) | Tool Execution：工具执行、沙箱、并发与审计 |
 | [03.08-mcp.md](./03.08-mcp.md) | MCP：外部能力适配 |

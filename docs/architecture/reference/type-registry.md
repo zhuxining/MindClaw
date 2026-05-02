@@ -43,14 +43,15 @@ Provider 层不再暴露自定义 trait。`ProviderRegistry` 负责配置、密�
 |--------|------|------|---------|
 | `AgentRunSpec` | `src/agent/spec.rs` | 一次 Agent 执行的完整声明式配置 | 构建后不可变，Clone 实现 |
 | `AgentRunResult` | `src/agent/spec.rs` | 一次执行的完整结构化输出 | 包含完整消息链，用于 Turn 持久化 |
-| `AgentProfile` | `src/agent/agents.rs` | Agent 静态定义 | 当前包含 model 与 execution 默认值，是定义层的最小可用形态 |
-| `AgentRegistry` | `src/agent/agents.rs` | AgentProfile 注册表 | 当前为轻量内存注册表，已接入 AppRuntime / AgentLoop / spawn |
+| `AgentProfile` | `src/agent/agents.rs` | Agent 静态定义 | Main Profile 固定创建；派生 Profile 由 Markdown definition 映射到 prompt / model / tool / context / execution 等策略 |
+| `AgentMarkdownDefinition` | `src/agent/agents.rs` | Markdown 派生 Agent 定义 | frontmatter 承载 name / description / tools / model / maxTurns / skills，body 承载 system prompt |
+| `AgentDefinitionFrontmatter` | `src/agent/agents.rs` | Markdown 派生 Agent frontmatter schema | 解析 `src/agent/build-in/subagent/*.md`，缺必填字段或空 body 启动失败 |
+| `AgentRegistry` | `src/agent/agents.rs` | AgentProfile 注册表 | `bootstrap(...)` 是内置 Agent 唯一启动入口；Main Profile 固定创建，派生 Profile 从 Markdown 加载 |
 | `ModelRouter` | `src/agent/agents.rs` | 根据 profile 解析模型 | 当前为最小实现，直接返回 profile.model，已接入主执行链路 |
 | `ChatMessage` | `src/agent/messages.rs` | 单条对话消息 | Runtime 契约，由 AgentRunner 转换为 Rig `Message` |
 | `ToolSchema` | `src/agent/messages.rs` | 历史兼容字段 | 当前工具执行以 `ToolDyn` / `ToolSet` 为准 |
 | `ToolCallPlaceholder` | `src/agent/hooks.rs` | Hook 观测用工具调用占位 | Rig 执行工具，MindClaw 只向 observer 暴露名称和 id |
 | `AgentSpawnDispatcher` | `src/agent/spawn.rs` | 管理派生执行 | 当前已接通 inline `SubAgent` 与后台派发 |
-| `SubAgentDefinition` | `src/agent/spawn.rs` | 子代理静态定义 | 含 mode / model / capabilities / prompt |
 | `UserVisiblePhase` | `src/agent/events.rs` | 对外简化状态 | 通过 MessageBus / Channel 暴露给前端 |
 | `ContextUri` | `src/storage/` | 上下文稳定引用 | 跨 Vault 文件、外部资源、agent 资产和 session 证据引用 |
 | `ContextFrontmatter` | `src/storage/markdown.rs` | 可索引 Markdown 的通用 Frontmatter | 承载 `tags`、`overview`、`confidence`、`origin`、`refs` 和来源扩展 |

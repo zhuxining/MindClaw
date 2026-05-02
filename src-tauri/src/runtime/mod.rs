@@ -6,7 +6,7 @@ pub mod builder;
 pub mod config;
 pub mod services;
 
-use crate::agent::{AgentLoop, AgentRegistry, ModelRouter, SessionManager};
+use crate::agent::{Agent, SessionManager};
 use crate::bus::events::InboundMessage;
 use crate::bus::MessageBus;
 use crate::error::AppResult;
@@ -31,12 +31,8 @@ pub struct AppRuntime {
     pub(crate) services: Arc<ServiceContainer>,
     /// 消息总线
     pub(crate) bus: Arc<MessageBus>,
-    /// Agent 循环
-    pub(crate) agent: Arc<AgentLoop>,
-    /// Agent profile 注册表
-    pub(crate) agent_registry: Arc<AgentRegistry>,
-    /// 模型路由
-    pub(crate) model_router: Arc<ModelRouter>,
+    /// 主 Agent（持有 loop、runner、spawn_dispatcher）
+    pub(crate) agent: Arc<Agent>,
     /// 会话管理器
     pub(crate) session_mgr: Arc<SessionManager>,
     /// 应用配置
@@ -57,18 +53,18 @@ impl AppRuntime {
     pub async fn start(&self) -> AppResult<()> {
         let mut tasks = self.tasks.lock().await;
 
-        // 启动 AgentLoop
+        // 启动 Agent
         let agent = self.agent.clone();
         let cancel = self.shutdown.clone();
         tasks.push(tokio::spawn(async move {
             tokio::select! {
-                result = AgentLoop::run(agent) => {
+                result = Agent::run(agent) => {
                     if let Err(e) = result {
-                        tracing::error!(error = %e, "agent_loop_failed");
+                        tracing::error!(error = %e, "agent_run_failed");
                     }
                 }
                 _ = cancel.cancelled() => {
-                    tracing::info!("agent_loop_shutdown");
+                    tracing::info!("agent_shutdown");
                 }
             }
         }));
@@ -109,16 +105,8 @@ impl AppRuntime {
         &self.bus
     }
 
-    pub fn agent(&self) -> &Arc<AgentLoop> {
+    pub fn agent(&self) -> &Arc<Agent> {
         &self.agent
-    }
-
-    pub fn agent_registry(&self) -> &Arc<AgentRegistry> {
-        &self.agent_registry
-    }
-
-    pub fn model_router(&self) -> &Arc<ModelRouter> {
-        &self.model_router
     }
 
     pub fn session_mgr(&self) -> &Arc<SessionManager> {
@@ -150,6 +138,7 @@ impl AppRuntime {
             mode: ConversationMode::Companion,
             content: content.to_string(),
             timestamp: chrono::Utc::now().timestamp_millis(),
+            is_injection: false,
         };
 
         self.bus.publish_inbound(message).await?;

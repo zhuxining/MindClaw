@@ -16,6 +16,9 @@ pub struct InboundMessage {
     pub mode: ConversationMode,
     pub content: String,
     pub timestamp: i64,
+    /// 是否为系统注入消息（subagent 结果等），在当前 run 完成后自动处理
+    #[serde(default)]
+    pub is_injection: bool,
 }
 
 /// 从 MessageBus 出站的消息（Agent → Channel）

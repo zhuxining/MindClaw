@@ -31,7 +31,7 @@ Review & Evolution 是 Runtime 的旁路产物处理链，不是主响应链的�
 
 **旁路回顾不阻塞主链路**：观察、回顾和经验教训候选通过 side path 生成，不改变主对话响应时序。
 
-**概念与实现分离**：`SubAgent`、`BackgroundAgent` 和 Review 后台 run 在概念层保持区分，但实现层共用 `AgentRunner`。
+**概念与实现分离**：`SubAgent` 和 Review 后台 run 在概念层保持区分；后台委派是 SubAgent 的 detached 运行方式，不是独立 Agent 身份。
 
 ---
 
@@ -77,7 +77,7 @@ Review & Evolution 是 Runtime 的旁路产物处理链，不是主响应链的�
 
 **AgentSpawnDispatcher**：派生执行编排器。
 关键属性：spawn source 解析、权限校验、父子 run 链路、后台任务调度。
-关系：支持 inline SubAgent、detached BackgroundAgent 和 Review 后台 run。
+关系：支持 inline SubAgent、detached SubAgent 和 Review 后台 run。
 
 **Runtime Events (`events.rs`)**：运行期共享事件契约。
 关键对象：`UserVisiblePhase`。
@@ -176,7 +176,7 @@ sequenceDiagram
 | [03.02-agent-loop.md](./03.02-agent-loop.md)             | AgentLoop：turn 级编排                              |
 | [03.03-agent-runner.md](./03.03-agent-runner.md)         | AgentRunner：run 级迭代执行                         |
 | [03.04-run-contracts.md](./03.04-run-contracts.md)       | Run 契约：Spec / Result / RunHooks / InvocationMode |
-| [03.05-agent-spawn.md](./03.05-agent-spawn.md)           | Agent Spawn：SubAgent 与 BackgroundAgent            |
+| [03.05-agent-spawn.md](./03.05-agent-spawn.md)           | Agent Spawn：SubAgent 派生执行                      |
 | [03.06-context-pipeline.md](./03.06-context-pipeline.md) | ContextPipeline：上下文装配                         |
 | [03.07-tool-execution.md](./03.07-tool-execution.md)     | Tool Execution：工具注册、沙箱与执行                |
 | [03.08-mcp.md](./03.08-mcp.md)                           | MCP：外部能力适配                                   |

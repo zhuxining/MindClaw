@@ -202,7 +202,7 @@ flowchart LR
 | [03.02-agent-loop.md](./03.02-agent-loop.md)             | AgentLoop：turn 级编排层                                             |
 | [03.03-agent-runner.md](./03.03-agent-runner.md)         | AgentRunner：run 级执行引擎                                          |
 | [03.04-run-contracts.md](./03.04-run-contracts.md)       | Run 契约：Spec / Result / RunHooks / InvocationMode                  |
-| [03.05-agent-spawn.md](./03.05-agent-spawn.md)           | Agent Spawn：SubAgent 与 BackgroundAgent                             |
+| [03.05-agent-spawn.md](./03.05-agent-spawn.md)           | Agent Spawn：SubAgent 派生执行                                      |
 | [03.06-context-pipeline.md](./03.06-context-pipeline.md) | ContextPipeline：上下文装配                                          |
 | [03.07-tool-execution.md](./03.07-tool-execution.md)     | Tool Execution：工具执行系统                                         |
 | [03.08-mcp.md](./03.08-mcp.md)                           | MCP：外部能力适配                                                    |

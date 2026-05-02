@@ -17,20 +17,20 @@
 //! - loop 控制面与 turn 编排高度耦合，拆成 commands/control 子目录收益不高
 //! - 当前阶段先稳定边界，再决定是否需要进一步细分文件
 
-use crate::agent::agents::{AgentRegistry, ModelRouter, MAIN_AGENT_ID};
-use crate::agent::context::{ContextBuildState, ContextPipeline};
+use crate::agent::agent::AgentProfile;
+use crate::agent::context::{ContextBuildState, ContextPipeline, SystemPromptBuilder};
 use crate::agent::events::UserVisiblePhase;
 use crate::agent::hooks::{InteractiveRunHooks, RunHookPublisher};
 use crate::agent::messages::ChatMessage;
 use crate::agent::runner::AgentRunner;
 use crate::agent::session::{SessionManager, ToolTrace};
-use crate::agent::spawn::AgentSpawnDispatcher;
 use crate::agent::spec::{AgentRunResult, InvocationMode, StopReason, ToolStatus};
-use crate::agent::tools::agent_spawn::{DelegateToAgentTool, SpawnBackgroundAgentTool};
-use crate::agent::tools::build_tools;
+use crate::agent::subagent::AgentSpawnDispatcher;
+use crate::agent::tools::spawn::DelegateToAgentTool;
+use crate::agent::tools::{build_tools, ToolScope};
 use crate::bus::events::{InboundMessage, OutboundPayload};
 use crate::bus::MessageBus;
-use crate::error::{AppError, AppResult};
+use crate::error::AppError;
 use crate::runtime::config::AppConfig;
 use dashmap::DashMap;
 use std::collections::VecDeque;
@@ -60,8 +60,7 @@ struct SessionSlot {
     queue: VecDeque<InboundMessage>,
     /// 当前活跃的 run
     active_run: Option<RunHandle>,
-    /// Mid-turn 注入队列（用于在 run 期间接收后续消息）
-    #[allow(dead_code)]
+    /// Mid-turn 注入队列（subagent 结果等在 run 期间到达的消息）
     injection_queue: VecDeque<InboundMessage>,
 }
 
@@ -91,8 +90,7 @@ pub struct AgentLoop {
     context_pipeline: Arc<ContextPipeline>,
     runner: Arc<AgentRunner>,
     app_config: Arc<AppConfig>,
-    agent_registry: Arc<AgentRegistry>,
-    model_router: Arc<ModelRouter>,
+    main_agent: Arc<AgentProfile>,
     spawn_dispatcher: Arc<AgentSpawnDispatcher>,
     /// Session 级串行化状态表
     sessions: DashMap<String, Mutex<SessionSlot>>,
@@ -101,45 +99,31 @@ pub struct AgentLoop {
 }
 
 impl AgentLoop {
-    /// 从配置初始化完整的 AgentLoop
+    /// 创建 AgentLoop（同步，不可失败）
     ///
-    /// 唯一的构造入口。SpawnDispatcher 在此时初始化，
-    /// 工具集在每次消息处理时按需构建（轻量，共享 Arc 状态）。
-    pub async fn init(
-        config: Arc<AppConfig>,
+    /// 所有依赖由外部（Agent::init()）构建好后传入。
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
         bus: Arc<MessageBus>,
         session_mgr: Arc<SessionManager>,
+        context_pipeline: Arc<ContextPipeline>,
         runner: Arc<AgentRunner>,
-        agent_registry: Arc<AgentRegistry>,
-        model_router: Arc<ModelRouter>,
-    ) -> AppResult<Self> {
-        let concurrency_gate = Arc::new(Semaphore::new(config.llm_concurrency));
-
-        // SpawnDispatcher 初始化
-        let spawn_dispatcher = Arc::new(AgentSpawnDispatcher::new(
-            Arc::clone(&runner),
-            config.clone(),
-            Arc::clone(&bus),
-            config.data_dir().clone(),
-            Arc::clone(&concurrency_gate),
-            Arc::clone(&agent_registry),
-            Arc::clone(&model_router),
-        ));
-
-        let context_pipeline = ContextPipeline::build_default(&config);
-
-        Ok(Self {
+        app_config: Arc<AppConfig>,
+        main_agent: Arc<AgentProfile>,
+        spawn_dispatcher: Arc<AgentSpawnDispatcher>,
+        concurrency_gate: Arc<Semaphore>,
+    ) -> Self {
+        Self {
             bus,
             session_mgr,
             context_pipeline,
             runner,
-            app_config: config,
-            agent_registry,
-            model_router,
-            spawn_dispatcher: Arc::clone(&spawn_dispatcher),
+            app_config,
+            main_agent,
+            spawn_dispatcher,
             sessions: DashMap::new(),
             concurrency_gate,
-        })
+        }
     }
 
     /// 启动 AgentLoop（消费 MessageBus 入站消息）
@@ -197,12 +181,21 @@ impl AgentLoop {
         let mut slot = slot.lock().await;
 
         if slot.active_run.is_some() {
-            slot.queue.push_back(message);
-            tracing::debug!(
-                session_key = %session_key,
-                queue_len = %slot.queue.len(),
-                "message_queued"
-            );
+            if message.is_injection {
+                slot.injection_queue.push_back(message);
+                tracing::debug!(
+                    session_key = %session_key,
+                    injection_len = %slot.injection_queue.len(),
+                    "injection_queued"
+                );
+            } else {
+                slot.queue.push_back(message);
+                tracing::debug!(
+                    session_key = %session_key,
+                    queue_len = %slot.queue.len(),
+                    "message_queued"
+                );
+            }
             return;
         }
 
@@ -246,7 +239,13 @@ impl AgentLoop {
                 };
                 let mut slot = slot.lock().await;
 
-                match slot.queue.pop_front() {
+                // 注入消息优先（subagent 结果等系统消息）
+                let msg = slot
+                    .injection_queue
+                    .pop_front()
+                    .or_else(|| slot.queue.pop_front());
+
+                match msg {
                     Some(msg) => {
                         let cancel = CancellationToken::new();
                         slot.active_run = Some(RunHandle {
@@ -300,6 +299,11 @@ impl AgentLoop {
             .await?;
         let session_id = session.id.clone();
 
+        // 设置父 session，供 subagent announce 注入
+        self.spawn_dispatcher
+            .set_parent_session(session_id.clone())
+            .await;
+
         tracing::info!(
             session_id = %session_id,
             request_id = %request_id,
@@ -326,44 +330,29 @@ impl AgentLoop {
 
         tracing::debug!(fragments = %built_context.fragments.len(), "agent_context_prepared");
 
-        // 5. 更新派生执行路由上下文（delegation_depth 从 0 开始）
-        self.spawn_dispatcher
-            .update_routing_context(crate::agent::spawn::RoutingContext {
-                session_key: session_id.clone(),
-                channel: message.channel.clone(),
-                delegation_depth: 0,
-            })
-            .await;
+        // 5. 构建 run spec
+        let system_prompt =
+            compose_system_prompt(self.app_config.data_dir(), &built_context.system_prompt);
 
-        // 6. 解析模型 + 构建 run spec
-        let profile = self
-            .agent_registry
-            .get(MAIN_AGENT_ID)
-            .ok_or_else(|| AppError::Internal("main agent profile not found".to_string()))?;
-        let model = self.model_router.resolve(profile.as_ref()).to_string();
-        let profile = profile.as_ref().clone().with_model(model.clone());
-
-        let spec = profile.build_run_spec(
+        let mut spec = self.main_agent.build_run_spec(
             uuid::Uuid::new_v4().to_string(),
             session_id.clone(),
             InvocationMode::Interactive,
-            built_context.system_prompt,
+            system_prompt,
             built_context.messages,
             vec![],
         );
+        spec.context_window_tokens = Some(self.app_config.context_token_limit);
 
         // 7. 构建本次 run 的工具范围（轻量，按需重建）
-        let spawn_tools: Vec<Box<dyn rig::tool::ToolDyn>> = vec![
-            Box::new(DelegateToAgentTool::new(Arc::clone(&self.spawn_dispatcher))),
-            Box::new(SpawnBackgroundAgentTool::new(Arc::clone(
-                &self.spawn_dispatcher,
-            ))),
-        ];
-        let tools = build_tools(
-            &self.app_config,
+        let spawn_tools: Vec<Box<dyn rig::tool::ToolDyn>> = vec![Box::new(
+            DelegateToAgentTool::new(Arc::clone(&self.spawn_dispatcher)),
+        )];
+        let tools = build_tools(ToolScope::Main {
+            config: self.app_config.clone(),
             spawn_tools,
-            &profile.tool_policy.allowed_tools,
-        )
+            allowed_tools: vec![],
+        })
         .await?;
 
         let publisher = Box::new(BusPublisher::new(
@@ -617,6 +606,18 @@ fn parse_agent_command(input: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some(trimmed.split_once(' ').unwrap_or((trimmed, "")))
+}
+
+fn compose_system_prompt(workspace: &std::path::Path, context_system_prompt: &str) -> String {
+    let builder = SystemPromptBuilder::new(workspace.to_path_buf());
+    let mut parts = vec![builder.build_main_prompt(None)];
+
+    let context_prompt = context_system_prompt.trim();
+    if !context_prompt.is_empty() {
+        parts.push(context_prompt.to_string());
+    }
+
+    parts.join("\n\n---\n\n")
 }
 
 // ============================================================================

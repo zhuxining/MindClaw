@@ -11,7 +11,8 @@
 //! 桥接机制：
 //! - RunHooks：生命周期钩子，连接业务层与执行层
 
-pub mod agents;
+#[allow(clippy::module_inception)]
+pub mod agent;
 pub mod compact;
 pub mod context;
 pub mod events;
@@ -23,16 +24,16 @@ pub mod retry;
 pub mod runner;
 pub mod session;
 pub mod skills;
-pub mod spawn;
 pub mod spec;
+pub mod subagent;
 pub mod tools;
 
 // 重新导出主要类型
-pub use agents::{AgentKind, AgentProfile, AgentRegistry, ModelRouter};
+pub use agent::{Agent, AgentProfile, MAIN_AGENT_ID, SUBAGENT_AGENT_ID};
 pub use compact::{AutoCompact, AutoCompactConfig, CompactResult};
 pub use context::{
     BuiltContext, ContextBuildState, ContextFragment, ContextLayer, ContextPipeline, ContextSource,
-    ConversationHistorySource, SystemPromptSource, UserMessageSource,
+    ConversationHistorySource, SystemPromptBuilder, SystemPromptSource, UserMessageSource,
 };
 pub use events::UserVisiblePhase;
 pub use hooks::{
@@ -50,10 +51,8 @@ pub use session::{
     ToolTrace, TurnRecord,
 };
 pub use skills::{SkillManifest, SkillMetadata, SkillsRegistry};
-pub use spawn::{
-    AgentSpawnDispatcher, CapabilityProfile, RoutingContext, SpawnSource, SubAgentDefinition,
-    SubAgentInfo, SubAgentMode, SubAgentResult,
-};
 pub use spec::{
     AgentRunResult, AgentRunSpec, InvocationMode, IterationState, StopReason, TokenUsage, ToolEvent,
 };
+pub use subagent::AgentSpawnDispatcher;
+pub use tools::ToolScope;

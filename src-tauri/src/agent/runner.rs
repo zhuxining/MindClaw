@@ -12,7 +12,6 @@ use crate::agent::hooks::{
     RunAbortReason, RunHooks, RunStartContext, ToolCallPlaceholder,
 };
 use crate::agent::messages::{ChatMessage, MessageContent, MessageRole, ToolChoice};
-use crate::agent::retry::RetryPolicy;
 use crate::agent::spec::{
     AgentRunResult, AgentRunSpec, StopReason, TokenUsage, ToolEvent, ToolStatus,
 };
@@ -26,6 +25,7 @@ use rig::agent::{
 use rig::completion::request::GetTokenUsage;
 use rig::completion::{CompletionModel, PromptError};
 use rig::message::Message;
+use rig::tool::server::ToolServerHandle;
 use rig::tool::{server::ToolServer, ToolDyn, ToolSet};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -65,18 +65,23 @@ impl AgentRunner {
             return Ok(AgentRunResult::cancelled());
         }
 
+        // 构建 ToolServer 一次，handle 可 Clone 供重试复用
+        let tool_server = ToolServer::new().run();
+        tool_server
+            .append_toolset(ToolSet::from_tools_boxed(tools))
+            .await
+            .map_err(|e| AppError::Provider(format!("tool_server_init: {e}")))?;
+
         let rig_hook = RigPromptHook::new(spec, Arc::clone(&observer), cancel.clone());
         let model = self.models.model_for(&spec.model);
 
-        // 执行 run（重试逻辑在 run_with_model 内部处理）
         let outcome = match_completion_model!(
             model,
             run_with_model,
             spec,
-            tools,
+            tool_server.clone(),
             rig_hook.clone(),
-            cancel.clone(),
-            spec.retry_mode.to_policy()
+            cancel.clone()
         );
 
         let mut result = match outcome {
@@ -143,24 +148,49 @@ impl AgentRunner {
 async fn run_with_model<M>(
     model: M,
     spec: &AgentRunSpec,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tool_server: ToolServerHandle,
     hook: RigPromptHook,
     cancel: CancellationToken,
-    _retry_policy: RetryPolicy,
 ) -> Result<RunOutcome, RunFailure>
 where
     M: CompletionModel + Clone + 'static,
     M::StreamingResponse: GetTokenUsage + Clone + Unpin + Send + Sync + 'static,
 {
-    // 注意：重试逻辑在 Provider 层处理（LLMClient/CompletionModel）
-    // 这里只执行一次 run，transient error 会由 rig 内部或 Provider 层处理
-    run_with_model_once(model, spec, tools, hook, cancel).await
+    const EMPTY_RESPONSE_RETRIES: usize = 3;
+
+    let mut last_outcome = None;
+    for attempt in 0..=EMPTY_RESPONSE_RETRIES {
+        if cancel.is_cancelled() {
+            return Err(RunFailure::Cancelled);
+        }
+
+        let outcome = run_with_model_once(
+            model.clone(),
+            spec,
+            tool_server.clone(),
+            hook.clone(),
+            cancel.clone(),
+        )
+        .await?;
+
+        if !outcome.final_text.is_empty() {
+            return Ok(outcome);
+        }
+
+        tracing::warn!(attempt, "empty_model_response_retrying");
+        last_outcome = Some(outcome);
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    tracing::warn!("empty_model_response_retries_exhausted");
+    Ok(last_outcome
+        .unwrap_or_else(|| RunOutcome::completed(String::new(), TokenUsage::default(), Vec::new())))
 }
 
 async fn run_with_model_once<M>(
     model: M,
     spec: &AgentRunSpec,
-    tools: Vec<Box<dyn ToolDyn>>,
+    tool_server: ToolServerHandle,
     hook: RigPromptHook,
     cancel: CancellationToken,
 ) -> Result<RunOutcome, RunFailure>
@@ -168,7 +198,13 @@ where
     M: CompletionModel + Clone + 'static,
     M::StreamingResponse: GetTokenUsage + Clone + Unpin + Send + Sync + 'static,
 {
-    let rig_messages = to_rig_messages(&spec.messages);
+    let messages = if let Some(budget) = spec.context_window_tokens {
+        snip_history(&spec.messages, budget, &spec.system_prompt)
+    } else {
+        spec.messages.clone()
+    };
+
+    let rig_messages = to_rig_messages(&messages);
     let Some((prompt, history)) = rig_messages.split_last() else {
         return Ok(RunOutcome::completed(
             String::new(),
@@ -176,12 +212,6 @@ where
             Vec::new(),
         ));
     };
-
-    let tool_server = ToolServer::new().run();
-    tool_server
-        .append_toolset(ToolSet::from_tools_boxed(tools))
-        .await
-        .map_err(|error| RunFailure::Provider(error.to_string()))?;
 
     let mut builder = AgentBuilder::new(model)
         .name(&spec.agent_id)
@@ -693,6 +723,58 @@ fn truncate_summary(value: &str) -> String {
     format!("{}...", &value[..end])
 }
 
+// ── Context Governance ─────────────────────────────────────────────
+
+/// 粗略 token 估算（~4 字符 ≈ 1 token）
+fn estimate_tokens(text: &str) -> usize {
+    (text.chars().count() / 4).max(1)
+}
+
+/// 按 token 预算裁剪历史消息
+///
+/// 策略：保留 system prompt、最近消息，从旧到新丢弃，始终保留最后 2 条。
+fn snip_history(messages: &[ChatMessage], budget: usize, system_prompt: &str) -> Vec<ChatMessage> {
+    if messages.len() <= 2 {
+        return messages.to_vec();
+    }
+
+    let system_tokens = estimate_tokens(system_prompt);
+    let safety_margin = budget / 5; // 20% 留给模型输出
+    let available = budget.saturating_sub(system_tokens + safety_margin);
+
+    let total: usize = messages
+        .iter()
+        .map(|m| estimate_tokens(&m.text_content()))
+        .sum();
+    if total <= available {
+        return messages.to_vec();
+    }
+
+    // 从最新到最旧保留，至少保留最后 2 条
+    let mut kept: Vec<ChatMessage> = Vec::new();
+    let mut used = 0usize;
+
+    for msg in messages.iter().rev() {
+        let tokens = estimate_tokens(&msg.text_content());
+        if used + tokens <= available || kept.len() < 2 {
+            used += tokens;
+            kept.push(msg.clone());
+        } else {
+            break;
+        }
+    }
+
+    kept.reverse();
+    tracing::debug!(
+        original = messages.len(),
+        snipped = kept.len(),
+        original_tokens = total,
+        budget = budget,
+        "history_snipped"
+    );
+    kept
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -921,22 +1003,25 @@ mod tests {
         RigPromptHook::new(spec, Arc::new(Mutex::new(Box::new(NoopRunHooks))), cancel)
     }
 
+    async fn make_tool_server(tools: Vec<Box<dyn ToolDyn>>) -> ToolServerHandle {
+        let server = ToolServer::new().run();
+        server
+            .append_toolset(ToolSet::from_tools_boxed(tools))
+            .await
+            .expect("test tool server should build");
+        server
+    }
+
     #[tokio::test]
     async fn runner_streams_plain_text_response() {
         let spec = test_spec(3, false);
         let cancel = CancellationToken::new();
         let hook = test_hook(&spec, cancel.clone());
+        let ts = make_tool_server(vec![]).await;
 
-        let outcome = run_with_model(
-            TextModel,
-            &spec,
-            vec![],
-            hook,
-            cancel,
-            RetryPolicy::disabled(),
-        )
-        .await
-        .expect("plain text run should succeed");
+        let outcome = run_with_model(TextModel, &spec, ts, hook, cancel)
+            .await
+            .expect("plain text run should succeed");
 
         assert_eq!(outcome.final_text, "hello world");
         assert_eq!(outcome.usage.prompt_tokens, 3);
@@ -949,14 +1034,14 @@ mod tests {
         let spec = test_spec(3, false);
         let cancel = CancellationToken::new();
         let hook = test_hook(&spec, cancel.clone());
+        let ts = make_tool_server(vec![Box::new(EchoTool { fail: false })]).await;
 
         let outcome = run_with_model(
             ToolThenTextModel::default(),
             &spec,
-            vec![Box::new(EchoTool { fail: false })],
+            ts,
             hook.clone(),
             cancel,
-            RetryPolicy::disabled(),
         )
         .await
         .expect("tool run should succeed");
@@ -973,17 +1058,11 @@ mod tests {
         let spec = test_spec(1, false);
         let cancel = CancellationToken::new();
         let hook = test_hook(&spec, cancel.clone());
+        let ts = make_tool_server(vec![Box::new(EchoTool { fail: false })]).await;
 
-        let failure = run_with_model(
-            AlwaysToolModel,
-            &spec,
-            vec![Box::new(EchoTool { fail: false })],
-            hook,
-            cancel,
-            RetryPolicy::disabled(),
-        )
-        .await
-        .expect_err("run should hit max turns");
+        let failure = run_with_model(AlwaysToolModel, &spec, ts, hook, cancel)
+            .await
+            .expect_err("run should hit max turns");
 
         assert!(matches!(failure, RunFailure::MaxTurns { .. }));
     }
@@ -1010,17 +1089,11 @@ mod tests {
         let spec = test_spec(3, true);
         let cancel = CancellationToken::new();
         let hook = test_hook(&spec, cancel.clone());
+        let ts = make_tool_server(vec![Box::new(EchoTool { fail: true })]).await;
 
-        let failure = run_with_model(
-            ToolThenTextModel::default(),
-            &spec,
-            vec![Box::new(EchoTool { fail: true })],
-            hook,
-            cancel,
-            RetryPolicy::disabled(),
-        )
-        .await
-        .expect_err("strict tool failure should abort");
+        let failure = run_with_model(ToolThenTextModel::default(), &spec, ts, hook, cancel)
+            .await
+            .expect_err("strict tool failure should abort");
 
         assert!(matches!(failure, RunFailure::ToolError { .. }));
     }
@@ -1030,14 +1103,14 @@ mod tests {
         let spec = test_spec(3, false);
         let cancel = CancellationToken::new();
         let hook = test_hook(&spec, cancel.clone());
+        let ts = make_tool_server(vec![Box::new(EchoTool { fail: true })]).await;
 
         let outcome = run_with_model(
             ToolThenTextModel::default(),
             &spec,
-            vec![Box::new(EchoTool { fail: true })],
+            ts,
             hook.clone(),
             cancel,
-            RetryPolicy::disabled(),
         )
         .await
         .expect("lenient tool failure should continue");

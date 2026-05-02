@@ -11,6 +11,7 @@ use crate::agent::session::AgentSession;
 use crate::bus::events::InboundMessage;
 use crate::error::AppError;
 use async_trait::async_trait;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 // ============================================================================
@@ -469,5 +470,91 @@ impl ContextPipeline {
         pipeline.add_source(Arc::new(ConversationHistorySource::new(5)));
         pipeline.add_source(Arc::new(UserMessageSource));
         Arc::new(pipeline)
+    }
+}
+
+// ============================================================================
+// SystemPromptBuilder - 系统提示词构建器
+// ============================================================================
+
+/// 系统提示词构建器
+///
+/// 从 workspace 加载 bootstrap 文件组装系统提示词
+pub struct SystemPromptBuilder {
+    workspace: PathBuf,
+}
+
+impl SystemPromptBuilder {
+    pub fn new(workspace: PathBuf) -> Self {
+        Self { workspace }
+    }
+
+    /// 构建 Main Agent 系统提示词
+    pub fn build_main_prompt(&self, channel: Option<&str>) -> String {
+        let mut parts = vec![self.build_identity(channel)];
+
+        // 加载 bootstrap 文件
+        for file in ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"] {
+            let path = self.workspace.join(file);
+            if path.exists() {
+                let content = std::fs::read_to_string(&path).unwrap_or_default();
+                if !content.trim().is_empty() {
+                    parts.push(format!("## {file}\n\n{}", content.trim()));
+                }
+            }
+        }
+
+        parts.join("\n\n---\n\n")
+    }
+
+    /// 构建 Subagent 系统提示词
+    pub fn build_subagent_prompt(&self, task: &str) -> String {
+        let datetime = chrono::Local::now()
+            .format("%Y-%m-%d %H:%M %A %z")
+            .to_string();
+        let workspace = self.workspace.display();
+
+        format!(
+            "# Subagent\n\n\
+             Current Time: {datetime}\n\n\
+             You are a subagent spawned by the main agent to complete a specific task.\n\
+             Stay focused on the assigned task. Your final response will be reported back to the main agent.\n\n\
+             ## Workspace\n\n\
+             {workspace}\n\n\
+             ## Task\n\n\
+             {task}"
+        )
+    }
+
+    fn build_identity(&self, channel: Option<&str>) -> String {
+        let datetime = chrono::Local::now()
+            .format("%Y-%m-%d %H:%M %A %z")
+            .to_string();
+        let workspace = self.workspace.display();
+        let platform = if cfg!(target_os = "macos") {
+            "macOS"
+        } else if cfg!(target_os = "windows") {
+            "Windows"
+        } else if cfg!(target_os = "linux") {
+            "Linux"
+        } else {
+            "Unknown"
+        };
+
+        let format_hint = match channel {
+            Some("telegram" | "qq" | "discord") =>
+                "\n\n## Format Hint\n\nThis conversation is on a messaging app. Use short paragraphs. Avoid large headings.",
+            Some("cli") =>
+                "\n\n## Format Hint\n\nOutput is rendered in a terminal. Avoid markdown headings and tables.",
+            _ => "",
+        };
+
+        format!(
+            "## Runtime\n\n\
+             Current Time: {datetime}\n\
+             Platform: {platform}\n\n\
+             ## Workspace\n\n\
+             Your workspace is at: {workspace}\n{format_hint}"
+        )
     }
 }

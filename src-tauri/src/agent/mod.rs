@@ -12,12 +12,14 @@
 //! - RunHooks：生命周期钩子，连接业务层与执行层
 
 pub mod agents;
+pub mod compact;
 pub mod context;
 pub mod events;
 pub mod hooks;
 pub mod loop_;
 pub mod memory;
 pub mod messages;
+pub mod retry;
 pub mod runner;
 pub mod session;
 pub mod skills;
@@ -27,23 +29,28 @@ pub mod tools;
 
 // 重新导出主要类型
 pub use agents::{AgentKind, AgentProfile, AgentRegistry, ModelRouter};
+pub use compact::{AutoCompact, AutoCompactConfig, CompactResult};
 pub use context::{
     BuiltContext, ContextBuildContext, ContextFragment, ContextLayer, ContextPipeline,
     ContextSource, ConversationHistorySource, MessageRole, SystemPromptSource, UserMessageSource,
 };
 pub use events::UserVisiblePhase;
 pub use hooks::{
-    strip_think_tags, InteractiveRunHooks, IterationFinishContext, IterationStartContext,
-    ModelRequestContext, ModelResponseContext, NoopRunHooks, RunAbortReason, RunHookPublisher,
-    RunHooks, RunStartContext, StreamingMode,
+    strip_think_tags, CompositeRunHooks, InteractiveRunHooks, IterationFinishContext,
+    IterationStartContext, ModelRequestContext, ModelResponseContext, NoopRunHooks, RunAbortReason,
+    RunHookPublisher, RunHooks, RunStartContext, StreamingMode,
 };
 pub use loop_::AgentLoop;
 pub use memory::{Memory, MemoryCategory, MemoryStore, UpsertMemoryInput};
 pub use messages::{
     ChatMessage, MessageContent, MessageRole as ChatMessageRole, ToolChoice, ToolSchema,
 };
+pub use retry::{extract_retry_after, RetryMode, RetryPolicy};
 pub use runner::AgentRunner;
-pub use session::{AgentSession, RunStatus, SessionManager, ToolTrace, TurnRecord};
+pub use session::{
+    AgentSession, CheckpointPhase, PendingToolCall, RunStatus, RuntimeCheckpoint, SessionManager,
+    ToolTrace, TurnRecord,
+};
 pub use skills::{SkillManifest, SkillMetadata, SkillsRegistry};
 pub use spawn::{
     AgentSpawnDispatcher, CapabilityProfile, RoutingContext, SpawnSource, SubAgentDef,

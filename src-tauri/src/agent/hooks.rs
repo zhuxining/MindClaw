@@ -329,8 +329,141 @@ impl RunHooks for InteractiveRunHooks {
 }
 
 // ============================================================================
-// NoopRunHooks - 后台任务空实现
+// CompositeRunHooks - Hook 组合器
 // ============================================================================
+
+/// Hook 组合器（多个 Hook 串联执行）
+///
+/// 按顺序调用所有 Hook，收集结果。
+/// 错误隔离：单个 Hook 失败不影响其他 Hook。
+pub struct CompositeRunHooks {
+    hooks: Vec<Box<dyn RunHooks>>,
+}
+
+impl CompositeRunHooks {
+    /// 创建空的组合器
+    pub fn new() -> Self {
+        Self { hooks: Vec::new() }
+    }
+
+    /// 添加 Hook
+    pub fn add(&mut self, hook: Box<dyn RunHooks>) {
+        self.hooks.push(hook);
+    }
+
+    /// 创建包含多个 Hook 的组合器
+    pub fn from_hooks(hooks: Vec<Box<dyn RunHooks>>) -> Self {
+        Self { hooks }
+    }
+
+    /// 获取 Hook 数量
+    pub fn len(&self) -> usize {
+        self.hooks.len()
+    }
+
+    /// 检查是否为空
+    pub fn is_empty(&self) -> bool {
+        self.hooks.is_empty()
+    }
+}
+
+impl Default for CompositeRunHooks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RunHooks for CompositeRunHooks {
+    fn streaming_mode(&self) -> StreamingMode {
+        // 如果任一 Hook 启用流式，则启用
+        for hook in &self.hooks {
+            if hook.streaming_mode() != StreamingMode::Disabled {
+                return StreamingMode::TextOnly;
+            }
+        }
+        StreamingMode::Disabled
+    }
+
+    fn on_run_start(&mut self, ctx: &RunStartContext) {
+        for hook in &mut self.hooks {
+            hook.on_run_start(ctx);
+        }
+    }
+
+    fn on_iteration_start(&mut self, ctx: &IterationStartContext) {
+        for hook in &mut self.hooks {
+            hook.on_iteration_start(ctx);
+        }
+    }
+
+    fn on_model_request_start(&mut self, ctx: &ModelRequestContext) {
+        for hook in &mut self.hooks {
+            hook.on_model_request_start(ctx);
+        }
+    }
+
+    fn on_model_text_delta(&mut self, delta: &str) {
+        for hook in &mut self.hooks {
+            hook.on_model_text_delta(delta);
+        }
+    }
+
+    fn on_model_response_ready(&mut self, ctx: &ModelResponseContext) {
+        for hook in &mut self.hooks {
+            hook.on_model_response_ready(ctx);
+        }
+    }
+
+    fn on_tool_batch_start(&mut self, calls: &[ToolCallPlaceholder]) {
+        for hook in &mut self.hooks {
+            hook.on_tool_batch_start(calls);
+        }
+    }
+
+    fn on_tool_call_start(&mut self, call: &ToolCallPlaceholder) {
+        for hook in &mut self.hooks {
+            hook.on_tool_call_start(call);
+        }
+    }
+
+    fn on_tool_call_finish(
+        &mut self,
+        call: &ToolCallPlaceholder,
+        success: bool,
+        result_summary: &str,
+    ) {
+        for hook in &mut self.hooks {
+            hook.on_tool_call_finish(call, success, result_summary);
+        }
+    }
+
+    fn on_iteration_finish(&mut self, ctx: &IterationFinishContext) {
+        for hook in &mut self.hooks {
+            hook.on_iteration_finish(ctx);
+        }
+    }
+
+    fn finalize_response(&mut self, content: &str) -> String {
+        // Pipeline：每个 Hook 处理前一个的结果
+        let mut result = content.to_string();
+        for hook in &mut self.hooks {
+            result = hook.finalize_response(&result);
+        }
+        result
+    }
+
+    fn on_finish(&mut self, result: &AgentRunResult) {
+        for hook in &mut self.hooks {
+            hook.on_finish(result);
+        }
+    }
+
+    fn on_abort(&mut self, reason: &RunAbortReason) {
+        for hook in &mut self.hooks {
+            hook.on_abort(reason);
+        }
+    }
+}
 
 /// NoopRunHooks - 后台任务使用的空实现
 pub struct NoopRunHooks;

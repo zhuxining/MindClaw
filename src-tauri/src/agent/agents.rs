@@ -501,6 +501,7 @@ impl AgentProfile {
                 ToolChoice::None => RunToolChoice::None,
             },
             fail_on_tool_error: self.tool_policy.fail_on_tool_error,
+            retry_mode: crate::agent::retry::RetryMode::Standard,
         }
     }
 

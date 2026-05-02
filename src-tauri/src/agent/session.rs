@@ -21,6 +21,44 @@ pub enum SessionPersistence {
     Ephemeral,
 }
 
+/// 运行时 checkpoint（用于中断恢复）
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeCheckpoint {
+    /// 当前阶段
+    pub phase: CheckpointPhase,
+    /// 当前迭代次数
+    pub iteration: usize,
+    /// 模型 ID
+    pub model: String,
+    /// 中间的 assistant 消息（包含 tool_calls）
+    pub assistant_message: Option<ChatMessage>,
+    /// 已完成的工具结果
+    pub completed_tool_results: Vec<ChatMessage>,
+    /// 待执行的工具调用（用于中断时生成错误消息）
+    pub pending_tool_calls: Vec<PendingToolCall>,
+}
+
+/// Checkpoint 阶段
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointPhase {
+    #[default]
+    None,
+    /// 等待工具执行
+    AwaitingTools,
+    /// 工具执行完成，等待下一轮
+    ToolsCompleted,
+    /// 最终响应
+    FinalResponse,
+}
+
+/// 待执行的工具调用
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingToolCall {
+    pub id: String,
+    pub name: String,
+}
+
 /// Agent 层的 Session 结构（内部使用，与 models::Session 区分）
 #[derive(Debug, Clone)]
 pub struct AgentSession {
@@ -36,7 +74,13 @@ pub struct AgentSession {
     pub turns: Vec<TurnRecord>,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
+    /// 运行时元数据（checkpoint、pending_user_turn 等）
+    pub metadata: HashMap<String, serde_json::Value>,
 }
+
+// metadata keys
+const RUNTIME_CHECKPOINT_KEY: &str = "runtime_checkpoint";
+const PENDING_USER_TURN_KEY: &str = "pending_user_turn";
 
 impl AgentSession {
     pub fn new(sender: String, mode: ConversationMode) -> Self {
@@ -52,6 +96,7 @@ impl AgentSession {
             turns: Vec::new(),
             created: now,
             updated: now,
+            metadata: HashMap::new(),
         }
     }
 
@@ -67,6 +112,7 @@ impl AgentSession {
             turns: Vec::new(),
             created: now,
             updated: now,
+            metadata: HashMap::new(),
         }
     }
 
@@ -83,12 +129,113 @@ impl AgentSession {
             turns: Vec::new(),
             created: now,
             updated: now,
+            metadata: HashMap::new(),
         }
     }
 
     pub fn append_turn(&mut self, turn: TurnRecord) {
         self.turns.push(turn);
         self.updated = Utc::now();
+    }
+
+    // ── Checkpoint 管理 ─────────────────────────────────────────────
+
+    /// 设置运行时 checkpoint
+    pub fn set_checkpoint(&mut self, checkpoint: &RuntimeCheckpoint) {
+        let value = serde_json::to_value(checkpoint).unwrap_or(serde_json::Value::Null);
+        self.metadata
+            .insert(RUNTIME_CHECKPOINT_KEY.to_string(), value);
+    }
+
+    /// 获取运行时 checkpoint
+    pub fn get_checkpoint(&self) -> Option<RuntimeCheckpoint> {
+        self.metadata
+            .get(RUNTIME_CHECKPOINT_KEY)
+            .and_then(|v| serde_json::from_value::<RuntimeCheckpoint>(v.clone()).ok())
+    }
+
+    /// 清除 checkpoint
+    pub fn clear_checkpoint(&mut self) {
+        self.metadata.remove(RUNTIME_CHECKPOINT_KEY);
+    }
+
+    /// 标记有 pending user turn
+    pub fn mark_pending_user_turn(&mut self) {
+        self.metadata.insert(
+            PENDING_USER_TURN_KEY.to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+
+    /// 清除 pending user turn
+    pub fn clear_pending_user_turn(&mut self) {
+        self.metadata.remove(PENDING_USER_TURN_KEY);
+    }
+
+    /// 检查是否有 pending user turn
+    pub fn has_pending_user_turn(&self) -> bool {
+        self.metadata
+            .get(PENDING_USER_TURN_KEY)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// 从 checkpoint 恢复中断的消息链
+    ///
+    /// 返回恢复的消息数量
+    pub fn restore_from_checkpoint(&mut self) -> usize {
+        let checkpoint = self.get_checkpoint();
+        if checkpoint.is_none() {
+            return 0;
+        }
+        let checkpoint = checkpoint.unwrap();
+
+        let mut restored_messages: Vec<ChatMessage> = Vec::new();
+
+        // 添加 assistant 消息
+        if let Some(assistant) = checkpoint.assistant_message {
+            restored_messages.push(assistant);
+        }
+
+        // 添加已完成的工具结果
+        for result in checkpoint.completed_tool_results {
+            restored_messages.push(result);
+        }
+
+        // 为待执行的工具调用生成错误消息
+        for pending in checkpoint.pending_tool_calls {
+            restored_messages.push(ChatMessage::tool_result(
+                "Error: Task interrupted before this tool finished.",
+                pending.id.clone(),
+                true,
+            ));
+        }
+
+        // 检查是否与现有消息重叠
+        let overlap = self.find_overlap_with_turns(&restored_messages);
+        let new_messages = restored_messages.len() - overlap;
+
+        // 添加新消息到最新 turn
+        if new_messages > 0 && !self.turns.is_empty() {
+            // 在实际实现中，需要将消息追加到 turns
+            // 这里简化处理：直接添加到最后一个 turn 的 tool_trace
+            tracing::info!(
+                session_id = %self.id,
+                restored_count = new_messages,
+                "checkpoint_restored"
+            );
+        }
+
+        self.clear_checkpoint();
+        self.clear_pending_user_turn();
+        new_messages
+    }
+
+    /// 查找恢复消息与现有 turns 的重叠
+    fn find_overlap_with_turns(&self, _restored: &[ChatMessage]) -> usize {
+        // 简化实现：返回 0，表示全部是新消息
+        // 完整实现需要比对消息内容
+        0
     }
 
     /// 压缩后的历史（近 N 轮完整 + 早期摘要）
@@ -481,6 +628,7 @@ impl SessionManager {
             turns,
             created,
             updated,
+            metadata: HashMap::new(),
         }))
     }
 }

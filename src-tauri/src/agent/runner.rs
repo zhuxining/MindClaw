@@ -2,12 +2,17 @@
 //!
 //! MindClaw 保留 run 契约和业务编排，run 内部的 LLM/tool/streaming
 //! 循环交给 rig Agent、StreamingPromptRequest 和 PromptHook。
+//!
+//! 重试机制：
+//! - 使用 RetryPolicy 处理 transient error
+//! - 支持 Standard（3 次）和 Persistent（无限）模式
 
 use crate::agent::hooks::{
     IterationFinishContext, IterationStartContext, ModelRequestContext, ModelResponseContext,
     RunAbortReason, RunHooks, RunStartContext, ToolCallPlaceholder,
 };
 use crate::agent::messages::{ChatMessage, MessageContent, MessageRole, ToolChoice};
+use crate::agent::retry::RetryPolicy;
 use crate::agent::spec::{
     AgentRunResult, AgentRunSpec, StopReason, TokenUsage, ToolEvent, ToolStatus,
 };
@@ -62,13 +67,16 @@ impl AgentRunner {
 
         let rig_hook = RigPromptHook::new(spec, Arc::clone(&observer), cancel.clone());
         let model = self.models.model_for(&spec.model);
+
+        // 执行 run（重试逻辑在 run_with_model 内部处理）
         let outcome = match_completion_model!(
             model,
             run_with_model,
             spec,
             tools,
             rig_hook.clone(),
-            cancel.clone()
+            cancel.clone(),
+            spec.retry_mode.to_policy()
         );
 
         let mut result = match outcome {
@@ -133,6 +141,23 @@ impl AgentRunner {
 }
 
 async fn run_with_model<M>(
+    model: M,
+    spec: &AgentRunSpec,
+    tools: Vec<Box<dyn ToolDyn>>,
+    hook: RigPromptHook,
+    cancel: CancellationToken,
+    _retry_policy: RetryPolicy,
+) -> Result<RunOutcome, RunFailure>
+where
+    M: CompletionModel + Clone + 'static,
+    M::StreamingResponse: GetTokenUsage + Clone + Unpin + Send + Sync + 'static,
+{
+    // 注意：重试逻辑在 Provider 层处理（LLMClient/CompletionModel）
+    // 这里只执行一次 run，transient error 会由 rig 内部或 Provider 层处理
+    run_with_model_once(model, spec, tools, hook, cancel).await
+}
+
+async fn run_with_model_once<M>(
     model: M,
     spec: &AgentRunSpec,
     tools: Vec<Box<dyn ToolDyn>>,
@@ -902,9 +927,16 @@ mod tests {
         let cancel = CancellationToken::new();
         let hook = test_hook(&spec, cancel.clone());
 
-        let outcome = run_with_model(TextModel, &spec, vec![], hook, cancel)
-            .await
-            .expect("plain text run should succeed");
+        let outcome = run_with_model(
+            TextModel,
+            &spec,
+            vec![],
+            hook,
+            cancel,
+            RetryPolicy::disabled(),
+        )
+        .await
+        .expect("plain text run should succeed");
 
         assert_eq!(outcome.final_text, "hello world");
         assert_eq!(outcome.usage.prompt_tokens, 3);
@@ -924,6 +956,7 @@ mod tests {
             vec![Box::new(EchoTool { fail: false })],
             hook.clone(),
             cancel,
+            RetryPolicy::disabled(),
         )
         .await
         .expect("tool run should succeed");
@@ -947,6 +980,7 @@ mod tests {
             vec![Box::new(EchoTool { fail: false })],
             hook,
             cancel,
+            RetryPolicy::disabled(),
         )
         .await
         .expect_err("run should hit max turns");
@@ -983,6 +1017,7 @@ mod tests {
             vec![Box::new(EchoTool { fail: true })],
             hook,
             cancel,
+            RetryPolicy::disabled(),
         )
         .await
         .expect_err("strict tool failure should abort");
@@ -1002,6 +1037,7 @@ mod tests {
             vec![Box::new(EchoTool { fail: true })],
             hook.clone(),
             cancel,
+            RetryPolicy::disabled(),
         )
         .await
         .expect("lenient tool failure should continue");

@@ -5,6 +5,7 @@
 
 use crate::agent::messages::ToolChoice;
 use crate::agent::messages::{ChatMessage, ToolSchema};
+use crate::agent::retry::RetryMode;
 use crate::agent::session::ToolTrace;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -81,6 +82,10 @@ pub struct AgentRunSpec {
     /// true：第一个工具错误立即中止
     /// false：错误作为消息返回，LLM 可重试（默认）
     pub fail_on_tool_error: bool,
+
+    /// LLM 调用重试模式
+    /// 默认：Standard（最多 3 次重试）
+    pub retry_mode: RetryMode,
 }
 
 impl Default for AgentRunSpec {
@@ -100,6 +105,7 @@ impl Default for AgentRunSpec {
             parallel_tools: true,
             tool_choice: ToolChoice::Auto,
             fail_on_tool_error: false,
+            retry_mode: RetryMode::Standard,
         }
     }
 }
@@ -132,6 +138,7 @@ impl AgentRunSpec {
             parallel_tools: true,
             tool_choice: ToolChoice::Auto,
             fail_on_tool_error: false,
+            retry_mode: RetryMode::Standard,
         }
     }
 
@@ -158,6 +165,7 @@ impl AgentRunSpec {
             parallel_tools: true,
             tool_choice: ToolChoice::Auto,
             fail_on_tool_error: false,
+            retry_mode: RetryMode::Standard,
         }
     }
 
@@ -182,7 +190,8 @@ impl AgentRunSpec {
             max_tokens: Some(2000),
             parallel_tools: true,
             tool_choice: ToolChoice::Auto,
-            fail_on_tool_error: true, // 后台任务严格模式
+            fail_on_tool_error: true,          // 后台任务严格模式
+            retry_mode: RetryMode::Persistent, // 后台任务持久重试
         }
     }
 
@@ -203,6 +212,7 @@ impl AgentRunSpec {
             parallel_tools: false,
             tool_choice: ToolChoice::Auto,
             fail_on_tool_error: true,
+            retry_mode: RetryMode::Disabled, // 测试禁用重试
         }
     }
 }

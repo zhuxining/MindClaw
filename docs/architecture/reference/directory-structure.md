@@ -1,5 +1,5 @@
 > **Status**: `active`
-> **Last updated**: 2026-05-01
+> **Last updated**: 2026-05-02
 >
 > 本文档描述 MindClaw 当前代码目录结构及目标差距。核心模块已完成 rig 迁移，前端工作域拆分待后续进行。
 
@@ -27,7 +27,7 @@
 
 ## Rust 后端当前结构（`src-tauri/src/`）
 
-> 以下结构反映当前代码状态（2026-05-01）。
+> 以下结构反映当前代码状态（2026-05-02）。
 > ✅ 标记 = 已达成目标边界；🔧 标记 = 正在演进；📋 标记 = 待迁移。
 
 后端目录按架构职责组织：入口层保持薄，业务规则进入 Services，运行状态和依赖装配进入 Runtime，Agent 执行边界进入 Agent Runtime，存储细节进入 Storage。
@@ -54,8 +54,10 @@ src-tauri/src/
 │   ├── context.rs          ContextPipeline / ContextSource / BuiltContext
 │   ├── session.rs          AgentSession / TurnRecord / session 串行化
 │   ├── events.rs           UserVisiblePhase 对外状态契约
-│   ├── hooks.rs            RunHooks observer 与交互式 Hook
+│   ├── hooks.rs            RunHooks observer 与交互式 Hook / CompositeRunHooks
 │   ├── spawn.rs            SubAgent / BackgroundAgent 派生执行
+│   ├── retry.rs            RetryPolicy / RetryMode — LLM 调用重试机制
+│   ├── compact.rs          AutoCompact — Session 历史自动压缩
 │   ├── memory.rs           Agent 记忆召回与 Frontmatter 扩展
 │   ├── skills.rs           SkillManifest / SkillMetadata / SkillsRegistry
 │   ├── observability.rs    AgentObserver 与 tracing 适配
@@ -303,7 +305,7 @@ Vault 目录由 Storage 架构定义，代码目录迁移时需要保持同一�
 
 ---
 
-## 当前实现差距（2026-05-01）
+## 当前实现差距（2026-05-02）
 
 ### ✅ 已达成
 
@@ -312,6 +314,11 @@ Vault 目录由 Storage 架构定义，代码目录迁移时需要保持同一�
 - ✅ Streaming 使用 rig 真实流式 API + 回调桥接
 - ✅ AgentSpawnDispatcher 已重新启用
 - ✅ 核心 agent/ 目录边界与文档一致
+- ✅ Retry Policy 已实现（retry.rs）：transient error 自动重试
+- ✅ Checkpoint Recovery 已实现（session.rs）：中断恢复状态
+- ✅ AutoCompact 已实现（compact.rs）：Session 历史压缩
+- ✅ CompositeRunHooks 已实现（hooks.rs）：Hook 组合器
+- ✅ Mid-turn Injection 框架已添加（loop_.rs）：injection_queue 字段
 
 ### 🔧 进行中
 

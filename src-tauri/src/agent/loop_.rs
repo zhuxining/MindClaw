@@ -56,8 +56,13 @@ const TARGET_CHANNEL: &str = "desktop";
 
 /// Session 级串行化状态
 struct SessionSlot {
+    /// 等待处理的消息队列
     queue: VecDeque<InboundMessage>,
+    /// 当前活跃的 run
     active_run: Option<RunHandle>,
+    /// Mid-turn 注入队列（用于在 run 期间接收后续消息）
+    #[allow(dead_code)]
+    injection_queue: VecDeque<InboundMessage>,
 }
 
 impl SessionSlot {
@@ -65,6 +70,7 @@ impl SessionSlot {
         Self {
             queue: VecDeque::new(),
             active_run: None,
+            injection_queue: VecDeque::new(),
         }
     }
 }

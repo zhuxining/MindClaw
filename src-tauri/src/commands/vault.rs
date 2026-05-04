@@ -19,6 +19,17 @@ pub struct VaultDirEntry {
     pub modified_ms: i64,
 }
 
+/// Memory 列表项
+#[derive(Debug, Serialize)]
+pub struct MemoryListItem {
+    pub id: String,
+    pub key: String,
+    pub category: String,
+    pub importance: f64,
+    pub file_path: String,
+    pub updated: String,
+}
+
 /// 规范化并验证路径未逃逸 root
 fn validate_path_child(root: &Path, candidate: &Path) -> AppResult<PathBuf> {
     let canonical_root = root
@@ -407,4 +418,88 @@ pub async fn get_vault_note(
         created_at: 0,
         updated_at: 0,
     })
+}
+
+/// 提取所有唯一标签（用于 TagsFilterPane）
+#[tauri::command]
+pub async fn list_all_tags(runtime: tauri::State<'_, Arc<AppRuntime>>) -> AppResult<Vec<String>> {
+    runtime.services().note.list_all_tags().await
+}
+
+/// 按过滤条件查询笔记
+#[tauri::command]
+pub async fn list_notes_by_filter(
+    runtime: tauri::State<'_, Arc<AppRuntime>>,
+    tags: Option<Vec<String>>,
+    date_from: Option<String>,
+    date_to: Option<String>,
+    limit: Option<usize>,
+) -> AppResult<Vec<VaultNote>> {
+    let limit = limit.unwrap_or(100);
+    let results = runtime
+        .services()
+        .note
+        .filter_notes(
+            tags.as_deref(),
+            date_from.as_deref(),
+            date_to.as_deref(),
+            limit,
+        )
+        .await?;
+    Ok(results.into_iter().map(note_to_vault_note).collect())
+}
+
+/// 列出所有 Memory
+#[tauri::command]
+pub async fn list_memories(
+    runtime: tauri::State<'_, Arc<AppRuntime>>,
+    category: Option<String>,
+    limit: Option<usize>,
+) -> AppResult<Vec<MemoryListItem>> {
+    let limit = limit.unwrap_or(100);
+    let vault_db = runtime.vault_db();
+
+    let conn = vault_db.lock().await;
+
+    let items = if let Some(cat) = category {
+        let mut stmt = conn.prepare(
+            "SELECT id, key, category, importance, file_path, updated FROM memories_index WHERE category = ?1 ORDER BY importance DESC LIMIT ?2"
+        ).map_err(|e| AppError::Storage(format!("prepare list memories: {e}")))?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![cat, limit as i64], |row| {
+                Ok(MemoryListItem {
+                    id: row.get::<_, String>(0)?,
+                    key: row.get::<_, String>(1)?,
+                    category: row.get::<_, String>(2)?,
+                    importance: row.get::<_, f64>(3)?,
+                    file_path: row.get::<_, String>(4)?,
+                    updated: row.get::<_, String>(5)?,
+                })
+            })
+            .map_err(|e| AppError::Storage(format!("query memories: {e}")))?;
+
+        rows.filter_map(|r| r.ok()).collect()
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT id, key, category, importance, file_path, updated FROM memories_index ORDER BY importance DESC LIMIT ?1"
+        ).map_err(|e| AppError::Storage(format!("prepare list memories: {e}")))?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![limit as i64], |row| {
+                Ok(MemoryListItem {
+                    id: row.get::<_, String>(0)?,
+                    key: row.get::<_, String>(1)?,
+                    category: row.get::<_, String>(2)?,
+                    importance: row.get::<_, f64>(3)?,
+                    file_path: row.get::<_, String>(4)?,
+                    updated: row.get::<_, String>(5)?,
+                })
+            })
+            .map_err(|e| AppError::Storage(format!("query memories: {e}")))?;
+
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    Ok(items)
 }

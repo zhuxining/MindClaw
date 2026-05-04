@@ -1,4 +1,5 @@
 use crate::agent::messages::MessageContent;
+use crate::agent::session::SessionListItem;
 use crate::bus::events::InboundMessage;
 use crate::error::AppResult;
 use crate::models::conversation::ConversationMode;
@@ -63,4 +64,23 @@ pub async fn get_session_history(
         }
         None => Ok(Vec::new()),
     }
+}
+
+/// 列出所有会话
+#[tauri::command]
+pub async fn list_sessions(
+    runtime: tauri::State<'_, Arc<AppRuntime>>,
+    limit: Option<usize>,
+) -> AppResult<Vec<SessionListItem>> {
+    let limit = limit.unwrap_or(50);
+    runtime.session_mgr().list_sessions(limit).await
+}
+
+/// 删除会话
+#[tauri::command]
+pub async fn delete_session(
+    runtime: tauri::State<'_, Arc<AppRuntime>>,
+    session_id: String,
+) -> AppResult<()> {
+    runtime.session_mgr().delete_session(&session_id).await
 }

@@ -57,27 +57,12 @@ export interface VaultEntry {
 
 // ─── Workspace ────────────────────────────────────────────────────────────────
 
-export type BuiltinTabId = "daily" | "private" | "vault" | "source";
-
-export interface PinnedDirTab {
-	id: string;
-	/** 相对于 vault 根目录的路径，或以 "/" 开头的绝对路径 */
-	dirPath: string;
-	label: string;
-}
-
 export type DirectoryViewMode = "tree" | "flat";
 
 export interface WorkspacePanelSizes {
 	left: number;
 	center: number;
 	right: number;
-}
-
-export interface WorkspaceRightPanelHeights {
-	pin: number;
-	tasks: number;
-	relatedContent: number;
 }
 
 export interface DailyItem {
@@ -119,14 +104,11 @@ export type OpenedItem =
 	| SourceImageItem;
 
 export interface WorkspacePrefs {
-	active_tab_id: string;
-	pinned_dir_tabs: PinnedDirTab[];
-	dir_view_mode: Record<string, DirectoryViewMode>;
+	active_workspace_id: WorkspaceId;
+	open_tabs: OpenTab[];
+	active_tab_id: string | null;
 	panel_sizes: WorkspacePanelSizes;
-	right_panel_heights: WorkspaceRightPanelHeights;
 	last_opened_item: OpenedItem | null;
-	pinned_note: { path: string; title: string } | null;
-	chat_mode: ConversationMode;
 }
 
 export type EditorSaveState = "idle" | "saving" | "saved" | "error";
@@ -147,6 +129,14 @@ export type ConversationMode =
 	| "challenge"
 	| "vault"
 	| "private";
+
+export interface SessionListItem {
+	id: string;
+	sender: string;
+	mode: ConversationMode;
+	created: string;
+	updated: string;
+}
 
 export interface UserMessage {
 	type: "user";
@@ -194,4 +184,193 @@ export interface VaultNote {
 	source_url: string | null;
 	created_at: number;
 	updated_at: number;
+}
+
+// ─── Memory ────────────────────────────────────────────────────────────────────
+
+export interface MemoryListItem {
+	id: string;
+	key: string;
+	category: string;
+	importance: number;
+	file_path: string;
+	updated: string;
+}
+
+// ─── Skills ────────────────────────────────────────────────────────────────────
+
+export interface SkillMetadata {
+	name: string;
+	description: string;
+	always_load: boolean;
+	path: string;
+}
+
+export interface SkillManifest extends SkillMetadata {
+	license?: string;
+	compatibility?: string;
+	metadata: Record<string, string>;
+	allowed_tools: string[];
+}
+
+// ─── Workspace Shell ──────────────────────────────────────────────────────────
+
+export type WorkspaceId =
+	| "daily"
+	| "inbox"
+	| "private"
+	| "vault"
+	| "agent"
+	| "skills"
+	| "memory"
+	| "mcp"
+	| "session"
+	| "cron"
+	| "checklist"
+	| "graph"
+	| "tasks"
+	| "settings";
+
+export interface StatusBarState {
+	saveState: EditorSaveState;
+	lineCol: string;
+	encoding: string;
+}
+
+// ─── Pane System ──────────────────────────────────────────────────────────────
+
+export type LeftPaneId =
+	| "calendar-filter"
+	| "tags-filter"
+	| "type-filter"
+	| "saved-filter"
+	| "file-explorer"
+	| "agent-list"
+	| "skill-list"
+	| "memory-list"
+	| "mcp-server-list"
+	| "session-list"
+	| "cron-job-list";
+
+export type RightPaneId = "note-outline" | "note-frontmatter" | "related-files";
+
+export interface PaneState {
+	activePaneId: string;
+	scrollPosition: number;
+	filterParams: Record<string, string>;
+}
+
+// ─── Content Host / Tabs ──────────────────────────────────────────────────────
+
+export type ContentType =
+	| "daily-note"
+	| "markdown"
+	| "web"
+	| "pdf"
+	| "image"
+	| "agent-session"
+	| "agent-detail"
+	| "skill-detail"
+	| "memory-detail"
+	| "mcp-detail"
+	| "session-detail"
+	| "cron-detail"
+	| "checklist"
+	| "graph"
+	| "settings";
+
+export interface ContentDescriptor {
+	type: ContentType;
+	path: string;
+	title: string;
+	/** Additional metadata depending on content type */
+	meta?: Record<string, unknown>;
+}
+
+export interface OpenTab {
+	id: string;
+	descriptor: ContentDescriptor;
+	dirty: boolean;
+}
+
+// ─── OpenedItem ↔ ContentDescriptor Conversion ────────────────────────────────
+
+/** Convert legacy OpenedItem to ContentDescriptor */
+export function openedItemToDescriptor(item: OpenedItem): ContentDescriptor {
+	switch (item.type) {
+		case "daily":
+			return {
+				type: "daily-note",
+				path: item.path,
+				title: item.date,
+				meta: { date: item.date },
+			};
+		case "note":
+			return {
+				type: "markdown",
+				path: item.path,
+				title: item.title,
+			};
+		case "source-web":
+			return {
+				type: "web",
+				path: item.path,
+				title: item.title,
+				meta: { url: item.url },
+			};
+		case "source-pdf":
+			return {
+				type: "pdf",
+				path: item.path,
+				title: item.title,
+			};
+		case "source-image":
+			return {
+				type: "image",
+				path: item.path,
+				title: item.title,
+			};
+	}
+}
+
+/** Convert ContentDescriptor to legacy OpenedItem (for backward compatibility) */
+export function descriptorToOpenedItem(
+	descriptor: ContentDescriptor,
+): OpenedItem | null {
+	switch (descriptor.type) {
+		case "daily-note":
+			return {
+				type: "daily",
+				date: (descriptor.meta?.date as string) ?? descriptor.title,
+				path: descriptor.path,
+			};
+		case "markdown":
+			return {
+				type: "note",
+				path: descriptor.path,
+				title: descriptor.title,
+			};
+		case "web":
+			return {
+				type: "source-web",
+				path: descriptor.path,
+				title: descriptor.title,
+				url: (descriptor.meta?.url as string) ?? "",
+			};
+		case "pdf":
+			return {
+				type: "source-pdf",
+				path: descriptor.path,
+				title: descriptor.title,
+			};
+		case "image":
+			return {
+				type: "source-image",
+				path: descriptor.path,
+				title: descriptor.title,
+			};
+		default:
+			// agent-session, agent-detail, etc. not supported as OpenedItem
+			return null;
+	}
 }

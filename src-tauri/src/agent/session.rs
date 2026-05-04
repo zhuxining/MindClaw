@@ -306,6 +306,16 @@ pub enum RunStatus {
     Cancelled,
 }
 
+/// 会话列表项（用于 UI 展示）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionListItem {
+    pub id: String,
+    pub sender: String,
+    pub mode: ConversationMode,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
+}
+
 /// 会话管理器
 pub struct SessionManager {
     db: Arc<Mutex<Connection>>,
@@ -473,6 +483,69 @@ impl SessionManager {
         let mut cache = self.sessions.lock().await;
         let now = Utc::now();
         cache.retain(|_, session| now - session.updated < max_age);
+    }
+
+    /// 列出所有会话（按更新时间倒序）
+    pub async fn list_sessions(&self, limit: usize) -> Result<Vec<SessionListItem>, AppError> {
+        let db = self.db.lock().await;
+        let mut stmt = db.prepare(
+            "SELECT id, sender, mode, created, updated FROM sessions ORDER BY updated DESC LIMIT ?1"
+        ).map_err(|e| AppError::Storage(format!("prepare list sessions: {e}")))?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .map_err(|e| AppError::Storage(format!("query list sessions: {e}")))?;
+
+        let items: Vec<SessionListItem> = rows
+            .filter_map(|r| r.ok())
+            .filter_map(|(id, sender, mode_str, created_str, updated_str)| {
+                let mode: ConversationMode = serde_json::from_str(&mode_str).ok()?;
+                let created = DateTime::parse_from_rfc3339(&created_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .ok()?;
+                let updated = DateTime::parse_from_rfc3339(&updated_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .ok()?;
+                Some(SessionListItem {
+                    id,
+                    sender,
+                    mode,
+                    created,
+                    updated,
+                })
+            })
+            .collect();
+
+        Ok(items)
+    }
+
+    /// 删除会话及其所有 turns
+    pub async fn delete_session(&self, session_id: &str) -> Result<(), AppError> {
+        let db = self.db.lock().await;
+        db.execute(
+            "DELETE FROM turns WHERE session_id = ?1",
+            rusqlite::params![session_id],
+        )
+        .map_err(|e| AppError::Storage(format!("delete turns: {e}")))?;
+        db.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            rusqlite::params![session_id],
+        )
+        .map_err(|e| AppError::Storage(format!("delete session: {e}")))?;
+
+        // 清除缓存
+        let mut cache = self.sessions.lock().await;
+        cache.remove(session_id);
+
+        Ok(())
     }
 
     // ── DB 操作 ─────────────────────────────────────────────────

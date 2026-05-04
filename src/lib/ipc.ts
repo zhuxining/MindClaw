@@ -2,7 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
 	AppSettings,
 	CreateTaskParams,
+	MemoryListItem,
 	OpenedItem,
+	SessionListItem,
+	SkillManifest,
+	SkillMetadata,
 	Task,
 	VaultEntry,
 	VaultNote,
@@ -38,6 +42,12 @@ export const ipc = {
 	getSessionHistory: (sessionId: string) =>
 		call<string[]>("get_session_history", { session_id: sessionId }),
 
+	listSessions: (limit?: number) =>
+		call<SessionListItem[]>("list_sessions", { limit }),
+
+	deleteSession: (sessionId: string) =>
+		call<void>("delete_session", { session_id: sessionId }),
+
 	// ─── Tasks ─────────────────────────────────────────────────────────────────
 	listTasks: (status?: string) => call<Task[]>("list_tasks", { status }),
 
@@ -71,6 +81,28 @@ export const ipc = {
 
 	getRelevantNotes: (path: string) =>
 		call<VaultNote[]>("get_relevant_notes", { path }),
+
+	listAllTags: () => call<string[]>("list_all_tags"),
+
+	listNotesByFilter: (params: {
+		tags?: string[];
+		date_from?: string;
+		date_to?: string;
+		limit?: number;
+	}) => call<VaultNote[]>("list_notes_by_filter", params),
+
+	listMemories: (params?: { category?: string; limit?: number }) =>
+		call<MemoryListItem[]>("list_memories", params ?? {}),
+
+	// ─── Skills ────────────────────────────────────────────────────────────────
+
+	listSkills: () => call<SkillMetadata[]>("list_skills"),
+
+	searchSkills: (query: string) =>
+		call<SkillMetadata[]>("search_skills", { query }),
+
+	activateSkill: (name: string) =>
+		call<SkillManifest>("activate_skill", { name }),
 
 	// ─── Vault ─────────────────────────────────────────────────────────────────
 	listVaultDir: (path?: string) =>

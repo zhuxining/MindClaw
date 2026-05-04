@@ -79,6 +79,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::conversation::send_message,
             commands::conversation::get_session_history,
+            commands::conversation::list_sessions,
+            commands::conversation::delete_session,
             commands::daily::get_daily,
             commands::daily::save_daily,
             commands::daily::read_note,
@@ -104,6 +106,12 @@ pub fn run() {
             commands::vault::get_relevant_notes,
             commands::vault::get_vault_note,
             commands::vault::list_dir,
+            commands::vault::list_all_tags,
+            commands::vault::list_notes_by_filter,
+            commands::vault::list_memories,
+            commands::skills::list_skills,
+            commands::skills::search_skills,
+            commands::skills::activate_skill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

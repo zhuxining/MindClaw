@@ -3,7 +3,7 @@
 //! 从配置文件加载两层配置（UserConfig + VaultConfig），合并为运行时 AppConfig，
 //! 打开双 DB（全局 DB + vault DB），初始化所有服务。
 
-use crate::agent::{Agent, AgentProfile, AgentRunner};
+use crate::agent::{Agent, AgentProfile, AgentRunner, SkillsRegistry};
 use crate::bus::MessageBus;
 use crate::error::AppResult;
 use crate::providers::ProviderRegistry;
@@ -149,6 +149,15 @@ impl AppRuntimeBuilder {
             .await?,
         );
 
+        // 16. 初始化 SkillsRegistry
+        let skills_search_paths = vec![
+            config.vault_path.join("skills"),
+            config.vault_path.join(".mindclaw/skills"),
+        ];
+        let mut skills_registry = SkillsRegistry::new(skills_search_paths);
+        skills_registry.scan().await?;
+        let skills_registry = Arc::new(Mutex::new(skills_registry));
+
         let shutdown = CancellationToken::new();
 
         Ok(AppRuntime {
@@ -158,6 +167,7 @@ impl AppRuntimeBuilder {
             bus,
             agent,
             session_mgr,
+            skills_registry,
             config,
             shutdown,
             tasks: Mutex::new(Vec::new()),

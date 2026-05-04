@@ -1,5 +1,5 @@
-import { AppShell } from "@/components/layout/AppShell";
-import { VaultSetup } from "@/components/layout/VaultSetup";
+import { AppShell } from "@/app/app-shell";
+import { VaultSetup } from "@/app/vault-setup";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
 import { useWorkspacePrefsSync } from "@/hooks/useWorkspacePrefsSync";
 import { useSettingsQuery } from "@/queries/settings";

@@ -1,10 +1,24 @@
 import { useEffect, useRef } from "react";
 import { ipc } from "@/lib/ipc";
+import type { WorkspacePrefs } from "@/lib/types";
+import { openedItemToDescriptor } from "@/lib/types";
 import { useWorkspacePrefsQuery } from "@/queries/settings";
-import { useChatStore } from "@/stores/chat";
-import { useWorkspaceStore, workspacePrefsFromState } from "@/stores/workspace";
+import { useShellStore } from "@/stores/shell";
+import { useTabStore } from "@/stores/tabs";
 
 const SAVE_DELAY_MS = 300;
+
+function serializePrefs(): WorkspacePrefs {
+	const shell = useShellStore.getState();
+	const tabs = useTabStore.getState();
+	return {
+		active_workspace_id: shell.activeWorkspaceId,
+		open_tabs: tabs.openTabs,
+		active_tab_id: tabs.activeTabId,
+		panel_sizes: shell.panelSizes,
+		last_opened_item: shell.openedItem,
+	};
+}
 
 export function useWorkspacePrefsSync(enabled: boolean) {
 	const { data: prefs } = useWorkspacePrefsQuery();
@@ -15,30 +29,53 @@ export function useWorkspacePrefsSync(enabled: boolean) {
 	useEffect(() => {
 		if (!enabled || !prefs || hydratedRef.current) return;
 
-		useWorkspaceStore.getState().hydrateFromPrefs(prefs);
-		useChatStore.getState().setMode(prefs.chat_mode);
+		// Hydrate ShellStore
+		useShellStore.getState().hydrate({
+			activeWorkspaceId: prefs.active_workspace_id ?? prefs.active_tab_id,
+			panelSizes: prefs.panel_sizes,
+			lastOpenedItem: prefs.last_opened_item,
+		});
+
+		// Hydrate TabStore
+		if (prefs.open_tabs && prefs.open_tabs.length > 0) {
+			const tabStore = useTabStore.getState();
+			// Restore tabs by opening each one
+			for (const tab of prefs.open_tabs) {
+				tabStore.openTab(tab.descriptor);
+			}
+			// Set active tab
+			if (prefs.active_tab_id) {
+				tabStore.setActiveTab(prefs.active_tab_id);
+			}
+		} else if (prefs.last_opened_item) {
+			// Fallback: open last item as a tab
+			useTabStore
+				.getState()
+				.openTab(openedItemToDescriptor(prefs.last_opened_item));
+		}
+
 		hydratedRef.current = true;
 	}, [enabled, prefs]);
 
-	// Auto-save: subscribe to workspace store changes
+	// Auto-save: subscribe to store changes
 	useEffect(() => {
 		if (!enabled || !hydratedRef.current) return;
 
 		const scheduleSave = () => {
 			if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 			saveTimerRef.current = setTimeout(() => {
-				const state = useWorkspaceStore.getState();
-				if (!state.isHydrated) return;
-				void ipc.saveWorkspacePrefs(
-					workspacePrefsFromState(state, useChatStore.getState().mode),
-				);
+				if (!useShellStore.getState().isHydrated) return;
+				void ipc.saveWorkspacePrefs(serializePrefs());
 			}, SAVE_DELAY_MS);
 		};
 
-		const unsubscribe = useWorkspaceStore.subscribe(scheduleSave);
+		// Subscribe to all relevant stores
+		const unsubShell = useShellStore.subscribe(scheduleSave);
+		const unsubTabs = useTabStore.subscribe(scheduleSave);
 
 		return () => {
-			unsubscribe();
+			unsubShell();
+			unsubTabs();
 			if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 		};
 	}, [enabled]);

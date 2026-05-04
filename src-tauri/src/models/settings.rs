@@ -1,6 +1,4 @@
-use crate::models::conversation::ConversationMode;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,28 +40,6 @@ pub struct AppSettings {
     pub language: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum DirectoryViewMode {
-    Tree,
-    #[default]
-    Flat,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PinnedDirTab {
-    pub id: String,
-    #[serde(rename = "dirPath")]
-    pub dir_path: String,
-    pub label: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PinnedNote {
-    pub path: String,
-    pub title: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspacePanelSizes {
     pub left: f32,
@@ -79,27 +55,6 @@ impl Default for WorkspacePanelSizes {
             left: 22.0,
             center: 52.0,
             right: 26.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct WorkspaceRightPanelHeights {
-    pub pin: f32,
-    pub tasks: f32,
-    #[serde(rename = "relatedContent", alias = "relevance")]
-    pub related_content: f32,
-}
-
-impl Default for WorkspaceRightPanelHeights {
-    /// NOTE: These defaults are duplicated in TypeScript (src/stores/workspace.ts).
-    /// When changing values, update BOTH locations to maintain consistency.
-    fn default() -> Self {
-        Self {
-            pin: 20.0,
-            tasks: 50.0,
-            related_content: 30.0,
         }
     }
 }
@@ -130,33 +85,89 @@ pub enum WorkspaceOpenedItem {
     },
 }
 
+/// Content type for tabs in Content Host
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContentType {
+    DailyNote,
+    Markdown,
+    Web,
+    Pdf,
+    Image,
+    AgentSession,
+    AgentDetail,
+    SkillDetail,
+    MemoryDetail,
+    McpDetail,
+    SessionDetail,
+    CronDetail,
+    Checklist,
+    Graph,
+    Settings,
+}
+
+/// Descriptor for content that can be opened in a tab
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentDescriptor {
+    #[serde(rename = "type")]
+    pub content_type: ContentType,
+    pub path: String,
+    pub title: String,
+    #[serde(default)]
+    pub meta: Option<serde_json::Value>,
+}
+
+/// An open tab in Content Host
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenTab {
+    pub id: String,
+    pub descriptor: ContentDescriptor,
+    #[serde(default)]
+    pub dirty: bool,
+}
+
+/// Workspace ID for Ribbon workspaces
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceId {
+    Daily,
+    Inbox,
+    Private,
+    Vault,
+    Agent,
+    Skills,
+    Memory,
+    Mcp,
+    Session,
+    Cron,
+    Checklist,
+    Graph,
+    Tasks,
+    Settings,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WorkspacePrefs {
-    pub active_tab_id: String,
-    pub pinned_dir_tabs: Vec<PinnedDirTab>,
-    pub dir_view_mode: HashMap<String, DirectoryViewMode>,
+    pub active_workspace_id: WorkspaceId,
+    pub open_tabs: Vec<OpenTab>,
+    pub active_tab_id: Option<String>,
     pub panel_sizes: WorkspacePanelSizes,
-    pub right_panel_heights: WorkspaceRightPanelHeights,
     pub last_opened_item: Option<WorkspaceOpenedItem>,
-    pub pinned_note: Option<PinnedNote>,
-    pub chat_mode: ConversationMode,
 }
 
 impl Default for WorkspacePrefs {
     fn default() -> Self {
+        let today = chrono::Local::now().date_naive().to_string();
         Self {
-            active_tab_id: "daily".to_string(),
-            pinned_dir_tabs: Vec::new(),
-            dir_view_mode: HashMap::new(),
+            active_workspace_id: WorkspaceId::Daily,
+            open_tabs: Vec::new(),
+            active_tab_id: None,
             panel_sizes: WorkspacePanelSizes::default(),
-            right_panel_heights: WorkspaceRightPanelHeights::default(),
             last_opened_item: Some(WorkspaceOpenedItem::Daily {
-                date: chrono::Local::now().date_naive().to_string(),
-                path: format!("daily/{}.md", chrono::Local::now().date_naive()),
+                date: today.clone(),
+                path: format!("daily/{}.md", today),
             }),
-            pinned_note: None,
-            chat_mode: ConversationMode::Companion,
         }
     }
 }

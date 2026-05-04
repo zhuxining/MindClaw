@@ -93,6 +93,121 @@ impl NoteService {
             .map_err(|e| AppError::Storage(format!("read note {file_path}: {e}")))
     }
 
+    /// 提取所有唯一标签（用于 TagsFilterPane）
+    pub async fn list_all_tags(&self) -> AppResult<Vec<String>> {
+        let conn = self.vault_db.lock().await;
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT tags FROM notes_index WHERE tags != '[]'")
+            .map_err(|e| AppError::Storage(format!("prepare tags query: {e}")))?;
+
+        let tags_rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
+            Ok(m) => m,
+            Err(e) => return Err(AppError::Storage(format!("query tags: {e}"))),
+        };
+
+        let tags_jsons: Vec<String> = tags_rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| AppError::Storage(format!("collect tags rows: {e}")))?;
+
+        let mut all_tags = std::collections::HashSet::new();
+        for tags_json in tags_jsons {
+            let parsed: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            for tag in parsed {
+                all_tags.insert(tag);
+            }
+        }
+
+        let mut result: Vec<String> = all_tags.into_iter().collect();
+        result.sort();
+        Ok(result)
+    }
+
+    /// 按过滤条件查询笔记（用于 FilterPane）
+    pub async fn filter_notes(
+        &self,
+        tags: Option<&[String]>,
+        date_from: Option<&str>,
+        date_to: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<NoteIndex>> {
+        let conn = self.vault_db.lock().await;
+
+        // 构建动态查询
+        let mut conditions = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        // Tags 过滤：每个 tag 需要 LIKE '%"tag"%'
+        if let Some(tags) = tags {
+            if !tags.is_empty() {
+                let mut tag_conditions = Vec::new();
+                for tag in tags {
+                    tag_conditions.push(format!("tags LIKE ?{}", 1 + params.len()));
+                    params.push(Box::new(format!("%\"{}\"", tag)));
+                }
+                conditions.push(format!("({})", tag_conditions.join(" OR ")));
+            }
+        }
+
+        // 日期范围过滤
+        if let Some(from) = date_from {
+            conditions.push(format!("modified_at >= ?{}", 1 + params.len()));
+            params.push(Box::new(from.to_string()));
+        }
+        if let Some(to) = date_to {
+            conditions.push(format!("modified_at <= ?{}", 1 + params.len()));
+            params.push(Box::new(to.to_string()));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let limit_param_idx = 1 + params.len();
+        let sql = format!(
+            "SELECT id, title, tags, file_path, modified_at FROM notes_index {} ORDER BY modified_at DESC LIMIT ?{}",
+            where_clause,
+            limit_param_idx
+        );
+        params.push(Box::new(limit as i64));
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| AppError::Storage(format!("prepare filter query: {e}")))?;
+
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let mapped = match stmt.query_map(params_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        }) {
+            Ok(m) => m,
+            Err(e) => return Err(AppError::Storage(format!("query filtered notes: {e}"))),
+        };
+
+        let rows: Vec<_> = mapped
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| AppError::Storage(format!("collect filtered notes: {e}")))?;
+
+        rows.into_iter()
+            .map(|(id, title, tags_json, file_path, modified_at)| {
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+                Ok(NoteIndex {
+                    id,
+                    title,
+                    tags,
+                    file_path,
+                    modified_at,
+                })
+            })
+            .collect()
+    }
+
     /// 增量 sync：对比文件 mtime，只更新有变化的文件
     pub async fn sync_index(&self, exclude_dirs: &[&str]) -> AppResult<SyncResult> {
         let mut result = SyncResult::default();

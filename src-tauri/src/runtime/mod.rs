@@ -6,7 +6,7 @@ pub mod builder;
 pub mod config;
 pub mod services;
 
-use crate::agent::{Agent, SessionManager};
+use crate::agent::{Agent, SessionManager, SkillsRegistry};
 use crate::bus::events::InboundMessage;
 use crate::bus::MessageBus;
 use crate::error::AppResult;
@@ -35,6 +35,8 @@ pub struct AppRuntime {
     pub(crate) agent: Arc<Agent>,
     /// 会话管理器
     pub(crate) session_mgr: Arc<SessionManager>,
+    /// 技能注册表
+    pub(crate) skills_registry: Arc<Mutex<SkillsRegistry>>,
     /// 应用配置
     pub(crate) config: Arc<AppConfig>,
     /// 关停信号
@@ -111,6 +113,10 @@ impl AppRuntime {
 
     pub fn session_mgr(&self) -> &Arc<SessionManager> {
         &self.session_mgr
+    }
+
+    pub fn skills_registry(&self) -> &Arc<Mutex<SkillsRegistry>> {
+        &self.skills_registry
     }
 
     pub fn config(&self) -> &Arc<AppConfig> {

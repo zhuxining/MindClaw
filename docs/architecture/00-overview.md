@@ -35,7 +35,7 @@ Agent 记忆服务后续行动，Markdown 知识承载共同真相；两者都�
 `AgentProfile` 只描述身份、策略和边界；Session、上下文、取消状态和消息分发都属于 Runtime。
 
 **4. 外层编排与内层执行分离**
-`AgentLoop` 负责编排一条入站消息，`AgentRunner` 负责执行一次 run 的 LLM 与工具迭代。
+`AgentLoops` 负责编排一条入站消息，`AgentRunner` 负责执行一次 run 的 LLM 与工具迭代。
 
 **5. Adapter 不承载业务语义**
 Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业务判断留在 Runtime 和 Services。
@@ -47,7 +47,7 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
 | 决策问题                              | 选择                                               | 放弃的替代方案                          | 理由                                                                       |
 | ------------------------------------- | -------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
 | Agent 是否是运行时实体？              | 否，使用 `AgentProfile`                            | Agent 持有 provider/session/tools       | 定义与状态分离更利于复用和权限控制                                         |
-| 编排与执行是否分层？                  | 是，Loop / Runner 分离                             | 单个大 Agent 对象包办全部               | turn 级和 run 级粒度不同，混在一起会导致职责失控                           |
+| 编排与执行是否分层？                  | 是，Loops / Runner 分离                             | 单个大 Agent 对象包办全部               | turn 级和 run 级粒度不同，混在一起会导致职责失控                           |
 | 旁路观察是否进入主调用链？            | 否，作为 Review & Evolution side path              | 每次输入同步观察和沉淀                  | 观察和沉淀不应拉长主响应链路                                               |
 | 经验教训正文存在哪里？                | Markdown Vault                                     | Agent Memory 或 SQLite 正文             | 经验教训是共同知识，必须人类可读、可审阅、可修改                           |
 | Agent 记忆如何持久化？                | 受管 Markdown + Frontmatter，ContextIndex 只建索引 | SQLite 结构化运行数据作为真相源         | 记忆影响长期行为，必须可审阅、可迁移、可人工纠偏                           |
@@ -76,7 +76,7 @@ Provider、MCP、Storage、Bus Adapter 只处理外部系统协议差异；业�
 ┌───────────────────▼─────────────────────────────────┐
 │ Agent Runtime                                        │
 │ Definition: AgentProfile / AgentRegistry / Router    │
-│ Orchestration: AgentLoop / Session / Context / Spawn  │
+│ Orchestration: AgentLoops / Session / Context / Spawn  │
 │ Execution: AgentRunner / Rig Agent / PromptHook / ToolServer │
 │ Adapter: ProviderRegistry / MCP config / Event / Storage adapters │
 └─────────────┬───────────────────────────┬───────────┘
@@ -138,20 +138,20 @@ sequenceDiagram
     participant User as User
     participant Channel as Channel
     participant Bus as MessageBus
-    participant Loop as AgentLoop
+    participant Loops as AgentLoops
     participant Ctx as ContextPipeline
     participant Runner as AgentRunner
     participant Provider as ProviderAdapter
 
     User->>Channel: 输入
     Channel->>Bus: InboundMessage
-    Bus->>Loop: consume
-    Loop->>Ctx: build context
-    Loop->>Runner: run(spec, hooks)
+    Bus->>Loops: consume
+    Loops->>Ctx: build context
+    Loops->>Runner: run(spec, hooks)
     Runner->>Provider: chat / chat_stream
     Provider-->>Runner: response
-    Runner-->>Loop: result
-    Loop->>Bus: OutboundMessage
+    Runner-->>Loops: result
+    Loops->>Bus: OutboundMessage
     Bus->>Channel: deliver
     Channel->>User: 输出
 ```
@@ -199,7 +199,7 @@ flowchart LR
 | [02-bus.md](./02-bus.md)                                 | MessageBus：异步消息队列                                             |
 | [03-agent-runtime.md](./03-agent-runtime.md)             | Agent Runtime：Definition / Orchestration / Execution / Adapter 总览 |
 | [03.01-agent-profile.md](./03.01-agent-profile.md)       | AgentProfile：静态定义与策略边界                                     |
-| [03.02-agent-loop.md](./03.02-agent-loop.md)             | AgentLoop：turn 级编排层                                             |
+| [03.02-agent-Loops.md](./03.02-agent-Loops.md)             | AgentLoops：turn 级编排层                                             |
 | [03.03-agent-runner.md](./03.03-agent-runner.md)         | AgentRunner：run 级执行引擎                                          |
 | [03.04-run-contracts.md](./03.04-run-contracts.md)       | Run 契约：Spec / Result / RunHooks / InvocationMode                  |
 | [03.05-agent-spawn.md](./03.05-agent-spawn.md)           | Agent Spawn：SubAgent 派生执行                                      |

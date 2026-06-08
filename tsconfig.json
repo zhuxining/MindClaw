@@ -2,7 +2,11 @@
 	"$schema": "https://raw.githubusercontent.com/Effect-TS/language-service/refs/heads/main/schema.json",
 	"compilerOptions": {
 		"target": "ESNext",
-		"plugins": [{ "name": "@effect/language-service" }],
+		"plugins": [
+			{
+				"name": "@effect/language-service"
+			}
+		],
 		"useDefineForClassFields": true,
 		"lib": ["ESNext", "DOM", "DOM.Iterable"],
 		"module": "ESNext",

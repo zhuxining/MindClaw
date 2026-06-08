@@ -1,1 +1,0 @@
-// mindclaw search "query"

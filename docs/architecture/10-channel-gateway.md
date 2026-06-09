@@ -1,171 +1,144 @@
 > **Status**: `draft`
 
-# 架构子模块：Channel & Gateway
+# 架构子模块：Gateway Runtime 与 Channels
 
 ## § 职责定位
 
-Channel & Gateway 是消息接入的两层抽象：
+Gateway Runtime 负责常驻运行、统一接入客户端和外部 Webhook、托管 ChannelManager、MessageBus 与 Active ACP Dispatch；不负责具体渠道协议解析，不负责 Agent 内部智能，也不负责多 Agent 路由分发。
 
-- **`im_channel`**：渠道协议适配层，负责对接外部 IM 渠道 API，进行消息拉取、发送和协议解析
-- **`gateway`**：网关层，负责渠道注册、身份鉴权、流量控制、消息标准化（`RawMessage` → `ChannelMessage`）
+Channels 负责具体 IM 渠道接入：对接外部 API、管理渠道凭证、处理轮询或 Webhook payload，并转换为统一的 `ChannelMessage`；不负责桌面 UI、ACP 协议或多客户端控制 API。
 
-两层通过 `ChannelAdapter` trait 解耦：`im_channel` 只输出 `RawMessage`，`gateway` 接收后完成标准化再流入 `message_bus`。
+## § 核心原则
 
-## § 核心 Trait
-
-### ChannelAdapter（im_channel 层）
-
-```rust
-pub trait ChannelAdapter: Send + Sync {
-    fn channel_name(&self) -> &str;
-    fn poll_messages(&self, page_size: i32, page_token: Option<&str>)
-        -> Result<(Vec<RawMessage>, Option<String>), ChannelError>;
-    fn send_message(&self, conversation_id: &str, content: &str, reply_to: Option<&str>)
-        -> Result<(), ChannelError>;
-    fn credentials(&self) -> &dyn CredentialsManager;
-}
-```
-
-### CredentialsManager
-
-```rust
-pub trait CredentialsManager: Send + Sync {
-    fn set_credentials(&self, credentials: serde_json::Value) -> Result<(), ChannelError>;
-    fn clear_credentials(&self) -> Result<(), ChannelError>;
-    fn has_credentials(&self) -> bool;
-    fn test_connection(&self) -> Result<(), ChannelError>;
-}
-```
-
-### GatewayRegistry（gateway 层）
-
-`GatewayRegistry` 持有 `HashMap<String, Arc<dyn ChannelAdapter>>`，提供：
-
-- `register(adapter)` — 注册渠道
-- `get(channel)` — 按名称获取
-- `list_channels()` — 列出所有已注册渠道
-- `poll_all()` — 并行轮询所有渠道
-- `set_credentials()` / `test_connection()` — 凭证管理
-
-### Gateway 处理流程
-
-```rust
-pub trait Gateway {
-    fn submit(&self, raw: RawMessage) -> Result<ChannelMessage, GatewayError>;
-    fn send_back(&self, msg: ChannelMessage) -> Result<(), GatewayError>;
-}
-```
-
-Gateway 内部处理链：
-
-1. **AuthFilter**：验证 sender 身份、凭证有效性
-2. **RateLimiter**：按渠道/用户维度限流，防止突发流量
-3. **Transformer**：`RawMessage` → `ChannelMessage` 标准化转换
-4. **SessionBinder**：识别并绑定到对应 `Session` / `Thread`
-
-## § 渠道实现
-
-### 飞书 (`im_channel::feishu`)
-
-飞书作为首个渠道，由 `src-tauri/src/services/im_channel/feishu/` 实现：
-
-| 组件 | 文件 | 职责 |
-|------|------|------|
-| `FeishuClient` | `client.rs` | HTTP 客户端，调用飞书 Open API |
-| `TokenManager` | `token.rs` | tenant_access_token 的获取与缓存 |
-| `converter` | `converter.rs` | 飞书消息结构 → `RawMessage` 转换 |
-
-### Telegram (`im_channel::telegram`)
-
-Telegram Bot 渠道，由 `src-tauri/src/services/im_channel/telegram/` 实现：
-
-| 组件 | 文件 | 职责 |
-|------|------|------|
-| `TelegramClient` | `client.rs` | HTTP 客户端，调用 Telegram Bot API |
-| `TelegramTokenManager` | `token.rs` | Bot Token 管理 |
-| `converter` | `converter.rs` | Telegram Update → `RawMessage` 转换 |
-
-两者分别实现 `ChannelAdapter` 和 `CredentialsManager` trait。
+1. **Runtime 管生命周期**：Gateway Runtime 启动、停止和监督 ChannelManager、MessageBus、Active ACP Dispatch 与 Gateway API。这样桌面窗口关闭后消息链路仍在线。
+2. **Channel 管协议细节**：FeishuChannel、TelegramChannel 各自处理外部 API、Token 和消息转换。这样 gateway 不堆积渠道特定分支。
+3. **API 管入口安全**：Desktop UI、CLI、Web UI、Mobile companion 与 Webhook 统一经过 Gateway API。这样认证、授权、审计和健康检查有单一入口。
+4. **Active ACP Server 管处理目标**：自动渠道消息只发往当前激活 ACP Server。这样 v1 不需要 RouteRule 或多 Agent 分发规则。
 
 ## § 边界与实体
 
-### im_channel 输入/输出
+### 输入
 
-- `poll_messages()`：从渠道 API 拉取新消息，返回 `Vec<RawMessage>`
-- `send_message(msg: RawMessage)`：将 `RawMessage` 写回渠道会话
+- `start()`：启动 Gateway Runtime 和内部子模块。
+- `stop()`：停止渠道连接、MessageBus、Active ACP Dispatch 和 Gateway API。
+- `register_channel(channel)`：注册一个渠道实现到 ChannelManager。
+- `set_active_acp_server(server_id)`：更新当前激活 ACP Server。
+- `publish_inbound(msg: ChannelMessage)`：接收渠道入站消息。
+- `publish_outbound(msg: ChannelMessage)`：接收 MessageBus 出站消息并分发给目标渠道。
+- `handle_client_request(request)`：接收 Desktop UI、CLI、Web UI 和 Mobile companion 的本地控制请求。
+- `handle_webhook(channel, payload)`：接收外部渠道 Webhook 请求。
 
-### gateway 输入/输出
+### 输出
 
-- `submit(raw: RawMessage)`：接收来自 im_channel 的原始消息，返回标准化 `ChannelMessage`
-- `send_back(msg: ChannelMessage)`：接收来自 message_bus 的回复消息，转换为 `RawMessage` 后发回 im_channel
+- `RuntimeStatus`：Gateway Runtime、渠道、MessageBus、Active ACP Server 的运行状态。
+- `ChannelMessage`：统一渠道消息，供 MessageBus 消费。
+- `GatewayEvent`：运行时事件，供 UI 和日志订阅。
+- `GatewayError`：运行时、渠道、API 入口的统一错误边界。
 
 ### 核心实体
 
-- **RawMessage**：渠道原始消息，包含 `channel_name`（渠道标识）、`raw_payload`（渠道特定格式）、`timestamp`
-- **ChannelMessage**：统一渠道消息，包含 `channel_id`（会话 ID）、`sender_id`、`content`（文本内容）、`timestamp`、`message_id`（原始消息 ID，用于去重）
-- **ChannelAdapter**：渠道适配器 trait，新增渠道无需修改 Gateway 和 MessageBus
+- **GatewayRuntime**：本地常驻运行时，拥有内部子模块的生命周期。
+- **GatewayAPI**：本地和外部入口，负责客户端请求、Webhook 请求、鉴权和状态查询。
+- **ChannelManager**：渠道管理器，负责渠道注册、启动、停止、健康状态和出站分发。
+- **Channel**：具体渠道适配器，负责外部 IM API、凭证和消息转换。
+- **ActiveAcpServer**：用户当前选中的 ACP Server，接收自动进入的渠道消息。
+- **ChannelMessage**：跨渠道统一消息，进入 MessageBus 的唯一消息格式。
 
 ### 错误边界
 
-- 网络错误和渠道 API 错误在 `im_channel` 层捕获，转换为 `ChannelError`（包含 `Retryable`/`NonRetryable` 分类）
-- 鉴权失败、限流触发在 `gateway` 层捕获，转换为 `GatewayError`，不向 MessageBus 泄露原始 HTTP 错误
+- 渠道 API、网络、凭证错误由 Channel 捕获，并转换为 `GatewayError::Channel`。
+- Gateway API 鉴权、Webhook 签名、请求格式错误转换为 `GatewayError::Api`。
+- Runtime 启停和内部子模块状态错误转换为 `GatewayError::Runtime`。
+- Active ACP Server 未配置或不可用时转换为 `GatewayError::AgentUnavailable`。
+- MessageBus 和 Active ACP Dispatch 不接收渠道原始错误，也不依赖具体渠道客户端实现。
 
 ## § 关键流程
 
-### 消息轮询流程（以飞书为例）
+### Runtime 启动流程
 
 ```mermaid
 sequenceDiagram
-    participant Registry as GatewayRegistry
-    participant FC as FeishuChannel
-    participant API as 飞书 Open API
-    participant Stronghold
-    participant GW as Gateway
+    participant UI as Desktop UI
+    participant RT as GatewayRuntime
+    participant API as GatewayAPI
+    participant CM as ChannelManager
+    participant MB as MessageBus
+    participant AD as ActiveAcpDispatch
 
-    Registry->>FC: poll_messages()
-    FC->>Stronghold: 获取 App Token
-    Stronghold-->>FC: token
-    FC->>API: GET /im/v1/messages (with token)
-    API-->>FC: 消息列表 JSON
-    FC->>FC: 去重过滤 + 转换为 RawMessage
-    FC-->>Registry: Vec<RawMessage>
-    Registry->>GW: submit(RawMessage)
-    GW->>GW: 鉴权 / 限流 / 标准化
-    GW->>GW: RawMessage → ChannelMessage
+    UI->>RT: start()
+    RT->>API: start_local_api()
+    RT->>MB: start()
+    RT->>AD: load_active_acp_server()
+    RT->>CM: start_enabled_channels()
+    CM-->>RT: channel status
+    AD-->>RT: active server status
+    RT-->>UI: RuntimeStatus
 ```
 
-### 消息回写流程
+### 飞书轮询接入流程
+
+```mermaid
+sequenceDiagram
+    participant RT as GatewayRuntime
+    participant CM as ChannelManager
+    participant FC as FeishuChannel
+    participant FS as 飞书 Open API
+    participant MB as MessageBus
+    participant AD as ActiveAcpDispatch
+
+    RT->>CM: start_enabled_channels()
+    CM->>FC: start_polling()
+    FC->>FS: poll messages
+    FS-->>FC: 飞书消息
+    FC->>FC: 转换为 ChannelMessage
+    FC-->>CM: ChannelMessage
+    CM->>MB: publish_inbound(ChannelMessage)
+    MB->>AD: dispatch_to_active_server(ChannelMessage)
+```
+
+### 飞书 Webhook 接入流程
+
+```mermaid
+sequenceDiagram
+    participant FS as 飞书 Webhook
+    participant API as GatewayAPI
+    participant CM as ChannelManager
+    participant FC as FeishuChannel
+    participant MB as MessageBus
+    participant AD as ActiveAcpDispatch
+
+    FS->>API: POST /webhooks/feishu
+    API->>API: 校验签名
+    API->>CM: dispatch_webhook("feishu", payload)
+    CM->>FC: handle_webhook(payload)
+    FC->>FC: 转换为 ChannelMessage
+    FC-->>CM: ChannelMessage
+    CM->>MB: publish_inbound(ChannelMessage)
+    MB->>AD: dispatch_to_active_server(ChannelMessage)
+```
+
+### 出站消息分发流程
 
 ```mermaid
 sequenceDiagram
     participant MB as MessageBus
-    participant GW as Gateway
-    participant Registry as GatewayRegistry
+    participant CM as ChannelManager
     participant FC as FeishuChannel
-    participant API as 飞书 Open API
+    participant FS as 飞书 Open API
 
-    MB->>GW: send_back(ChannelMessage)
-    GW->>GW: ChannelMessage → RawMessage
-    GW->>Registry: get("feishu")
-    Registry-->>GW: FeishuChannel
-    GW->>FC: send(RawMessage)
-    FC->>API: POST /im/v1/messages
+    MB->>CM: publish_outbound(ChannelMessage)
+    CM->>CM: 按 channel 查找目标 Channel
+    CM->>FC: send_message(...)
+    FC->>FS: 发送回复
 ```
-
-### 新增渠道流程
-
-1. 实现 `ChannelAdapter` trait（HTTP 客户端 + 消息转换）
-2. 实现 `CredentialsManager` trait（凭证管理）
-3. 在 `AppState::new()` 中将实现注册到 `GatewayRegistry`
-4. 前端 `ChannelSettings` 组件传入对应 `channelName` 即可使用
 
 ## § 设计决策与权衡
 
 | 决策问题 | 选择 | 放弃的替代方案 | 理由 |
 |---------|------|--------------|------|
-| 渠道抽象方式？ | `dyn ChannelAdapter` trait object | 泛型 / enum 多态 | 渠道运行时动态注册，trait object 更灵活；数量少（<10），vtable 开销可忽略 |
-| 凭证管理？ | 渠道自管（`CredentialsManager` trait） | 统一 CredentialProvider | 每种渠道凭证格式不同（OAuth2、API Key 等），自管更解耦 |
-| 轮询方式？ | 同步 trait 方法 + tokio block_in_place | async trait | 保持 trait object-safe，避免使用 async_trait crate |
-| 飞书 SDK 还是直接 HTTP 调用？ | 直接 HTTP（reqwest） | 飞书官方 Rust SDK | 官方 SDK 维护不活跃，直接 HTTP 更可控；API 端点少，手写成本低 |
-| Token 刷新策略？ | 惰性刷新（过期前 5 分钟刷新） | 每次请求前刷新 | 减少不必要的 API 调用，飞书 token 有效期 2 小时 |
-| 标准化在哪一层？ | `gateway` 集中标准化 | `im_channel` 各自标准化 | 避免重复实现鉴权/限流逻辑；新增渠道只需实现协议转换 |
+| gateway 的定位是什么？ | 本地常驻 Gateway Runtime | 轻量 ChannelRegistry | 桌面窗口关闭后仍需接收渠道消息，多客户端和 Webhook 需要统一入口 |
+| ChannelRegistry 放在哪里？ | 作为 ChannelManager 内部能力 | 作为独立架构层 | registry 只是渠道管理细节，运行时边界由 Gateway Runtime 承担 |
+| 飞书接收模块叫什么？ | FeishuChannel | FeishuGateway | FeishuChannel 表达具体渠道适配器，FeishuGateway 会与运行时 gateway 混淆 |
+| Desktop UI 是否直接轮询渠道？ | Desktop UI 通过 Gateway API 控制和观察 | Desktop UI 直接调用 FeishuClient | UI 生命周期不能影响消息接入和 Agent 调度 |
+| 自动消息如何选择 Agent？ | 直接发往 Active ACP Server | RouteRule 多 Agent 分发 | v1 降低配置和调试成本，用户只需要当前激活的一个 ACP Server |
+| Webhook 是否进入 MessageBus？ | Webhook 先进入 Gateway API，再由 Channel 生成 `ChannelMessage` | Webhook 直接写入 MessageBus | 渠道签名校验和 payload 转换属于 Gateway Runtime 与 Channel 边界 |

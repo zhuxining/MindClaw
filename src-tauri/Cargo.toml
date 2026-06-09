@@ -93,6 +93,9 @@ rmcp = { version = "1.6", features = [
     "transport-streamable-http-server",
 ] }
 
+# ── ACP Protocol ────────────────────────────────────────────────────
+agent-client-protocol = "0.14.0"
+
 # ── CLI ─────────────────────────────────────────────────────────────
 clap = { version = "4", features = [
     "derive",

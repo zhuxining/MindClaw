@@ -17,6 +17,12 @@
 			"sourceType": "github",
 			"computedHash": "5b5242007485d63223f3b96cfe3f6fa17f12989698c49fb3fce86864a4d5c5ee"
 		},
+		"context7-cli": {
+			"source": "upstash/context7",
+			"sourceType": "github",
+			"skillPath": "skills/context7-cli/SKILL.md",
+			"computedHash": "6077b3c638fb7efb31d9b2c815436650de4aef73e7b671edec2f1c63f6a1e105"
+		},
 		"rust-best-practices": {
 			"source": "apollographql/skills",
 			"sourceType": "github",

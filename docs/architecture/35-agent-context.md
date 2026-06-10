@@ -4,151 +4,89 @@
 
 ## § 职责定位
 
-`agent_context` 是 Gateway Runtime 内部的 **Agent 上下文组装模块**，负责在 Agent Dispatch 通过 ACP 协议发送消息给 Agent 之前，组装完整的上下文信息：Agent 身份证（Identity）、记忆（Memory）、可用工具列表（Tools）、会话配置（Session Config）。
+`agent_context` 是 SessionDispatcher 与 `acp_client` 之间的上下文组装模块，负责把 Agent 的 Identity、选中的 Skill、渠道消息、记忆和工具元数据组装为 ACP 请求；不负责协议传输、队列调度、SlashCommand 解析、渠道回复或 ACP Server 内部智能。
 
-**核心原则**：`agent_context` 不直接参与协议通信，也不包含业务智能。它只负责**数据准备**——将 MindClaw 管理的 Agent 元数据、用户记忆、本地工具注册信息等，组装成 ACP 协议要求的 `system_prompt` 和 `context` 字段。
+## § 核心原则
 
-**为什么独立成模块**：
-
-1. **解耦**：ACP 协议层保持纯粹，不关心 prompt 如何组装
-2. **可测试**：prompt 组装逻辑可以独立单元测试
-3. **可扩展**：未来支持多种 prompt 模板策略（如不同 Agent 使用不同模板）
+1. **Agent 上下文聚合**：`agent_context` 接收 ExecutionContext 并生成 ACP 请求；理由是 Agent、Identity、Skill 和会话元数据需要在协议调用前合并。
+2. **上下文与协议分离**：`agent_context` 生成 ACP 请求，`acp_client` 发送 ACP 请求；理由是 prompt 组装和协议通信拥有不同变更理由。
+3. **上下文与调度分离**：SessionDispatcher 决定处理顺序和命令语义，`agent_context` 只准备请求内容；理由是队列状态不属于上下文组装职责。
+4. **Skill 与 Tool 分离**：`agent_context` 注入 Skill instruction 和工具描述，ToolExecutor 执行工具；理由是用户任务模板和本地能力执行需要独立边界。
 
 ## § 边界与实体
 
 ### 输入
 
-- `build_request(active_server_id: &str, session_id: &str, user_message: &ChannelMessage)`：为当前激活 ACP Server 组装完整 ACP 请求
-- `register_identity(server_id: &str, identity: AgentIdentity)`：注册 ACP Server 身份证
-- `register_memory_source(source: MemorySource)`：注册记忆数据源
-- `get_registered_tools(active_server_id: &str)`：获取当前激活 ACP Server 可用的本地工具列表
+- `build_request(context, user_message)`：根据 ExecutionContext 和用户消息组装 ACP 请求。
+- `build_legacy_request(agent, user_message)`：在 legacy ACP 调用路径中组装 `AgentRequest`。
+- `register_memory_source(source)`：注册记忆数据源。
+- `get_registered_tools(agent_id, skill_id)`：获取当前 Agent 和 Skill 可用工具元数据。
 
 ### 输出
 
-- `AcpRequest`：组装后的完整 ACP 请求，包含 `system_prompt`、`context`、`user_message`、`available_tools`
-- `PromptBuildError`：组装失败时的错误（如 Agent 不存在、记忆源不可用）
+- `AcpRequest`：组装后的 ACP 请求，包含 Agent Identity、Skill instruction、系统上下文、用户消息和工具元数据。
+- `AgentRequest`：legacy 调用路径使用的 Agent 请求。
+- `PromptBuildError`：上下文组装失败时的错误。
 
 ### 核心实体
 
-- **AgentIdentity**：Agent 身份证，包含 `agent_id`、`name`、`role_description`、`capabilities`、`system_prompt_template`
-- **MemorySource**：记忆数据源接口，支持短期记忆（会话上下文）和长期记忆（向量检索）
-- **PromptBuilder**：prompt 组装器，将 Identity + Memory + Tools 合并为最终 system prompt
-- **ToolRegistry**：本地工具注册表，管理可供 Agent 调用的工具元数据（名称、描述、参数 schema）
+- **ExecutionContext**：一次执行所需的 Agent、Identity、Skill、ACP Server 和会话元数据。
+- **Agent**：用户可选择的执行者，默认拥有 Identity，并关联多个 Skill。
+- **Identity**：Agent 的身份、人设和行为约束。
+- **Skill**：独立管理的任务能力模板，提供 instruction 和输出约束。
+- **MemorySource**：记忆数据源接口，提供会话历史和长期记忆。
+- **PromptBuilder**：上下文组装器，将 Identity、Skill、记忆、工具元数据和用户消息合并为 ACP 请求。
+- **ToolRegistry**：本地工具元数据注册表，管理可暴露给 ACP Server 的工具描述。
 
-## § 子模块职责
+### 错误边界
 
-### Identity（Agent 身份证）
-
-- 管理 Agent 的身份定义：名称、角色、能力描述、行为约束
-- 每个 ACP Server 对应一个 `AgentIdentity`，存储在 SQLite 中
-- 当前激活 ACP Server 使用对应的 Identity 组装 system prompt
-- 将 Identity 转换为 system prompt 片段
-
-### Memory（记忆管理）
-
-- **短期记忆**：当前会话的最近 N 轮对话历史，从 SQLite 读取
-- **长期记忆**：持久化知识库，支持关键词/向量检索，将相关记忆注入 context
-- 记忆注入策略：限制 token 预算，避免 prompt 过长
-- 与 Storage 层交互，不直接操作文件
-
-### PromptBuilder（Prompt 组装器）
-
-- 接收 `AgentIdentity`、`MemoryContext`、`ToolList`、`UserMessage`
-- 按模板组装为完整 ACP 请求的 `context` 字段
-- 支持模板变量替换（如 `{{agent_name}}`、`{{current_time}}`）
-- 控制总 prompt 长度，超出时优先截断长期记忆
-
-### ToolRegistry（工具元数据注册表）
-
-- 注册本地工具的元数据（名称、描述、参数 JSON Schema）
-- 按 Agent 过滤可用工具列表
-- **注意**：只管理元数据，实际执行在 `acp_client::ToolExecutor` 中
-- 与 `acp_client` 的工具注册保持同步
+- Agent Identity 缺失、Skill 不可用、记忆源不可用和工具元数据读取失败由 `agent_context` 转换为 `PromptBuildError`。
+- `agent_context` 不暴露渠道原始 payload，不解析 slash command，不执行本地工具，不处理 ACP 传输错误。
 
 ## § 关键流程
 
-### Prompt 组装流程
+### Agent + Skill Prompt 组装流程
 
 ```mermaid
 sequenceDiagram
-    participant AD as AgentDispatch
+    participant SD as SessionDispatcher
     participant ACX as agent_context
-    participant ID as Identity
     participant MEM as Memory
-    participant PB as PromptBuilder
     participant TR as ToolRegistry
+    participant PB as PromptBuilder
     participant ACP as acp_client
 
-    AD->>ACX: build_request(active_server_id, session_id, user_message)
-
-    ACX->>ID: get_identity(agent_id)
-    ID-->>ACX: AgentIdentity
-
-    ACX->>MEM: fetch_memory(session_id, budget=2000tokens)
+    SD->>ACX: build_request(ExecutionContext, message)
+    ACX->>MEM: fetch_memory(context.conversation)
     MEM-->>ACX: MemoryContext
-
-    ACX->>TR: get_tools_for(agent_id)
-    TR-->>ACX: Vec<LocalTool>
-
-    ACX->>PB: build(identity, memory, tools, user_message)
+    ACX->>TR: get_tools_for(context.agent, context.skill)
+    TR-->>ACX: ToolMetadata
+    ACX->>PB: build(identity, skill, memory, tools, message)
     PB-->>ACX: AcpRequest
-
-    ACX-->>AD: AcpRequest
-    AD->>ACP: prompt_turn(request)
+    ACX-->>SD: AcpRequest
+    SD->>ACP: send_to_server(context.acp_server, request)
 ```
 
-### Agent Identity 定义示例
+### legacy 请求组装流程
 
-```rust
-AgentIdentity {
-    agent_id: "default",
-    name: "MindClaw Assistant",
-    role_description: "你是一个本地 AI 助手，帮助用户处理 IM 消息...",
-    capabilities: vec!["消息摘要", "任务执行", "文件操作"],
-    system_prompt_template: "你是 {{name}}。{{role_description}}\n\n当前可用工具：{{tools}}",
-    constraints: vec!["不访问外部网络", "不泄露用户数据"],
-}
-```
+```mermaid
+sequenceDiagram
+    participant SD as SessionDispatcher
+    participant ACX as agent_context
+    participant ACP as acp_client
 
-## § 与 acp_client 的关系
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  agent_context                                               │
-│  ┌──────────┐  ┌──────────┐  ┌─────────────┐  ┌──────────┐ │
-│  │ Identity │  │ Memory   │  │PromptBuilder│  │ToolReg.  │ │
-│  └────┬─────┘  └────┬─────┘  └──────┬──────┘  └────┬─────┘ │
-│       └─────────────┴───────────────┴──────────────┘        │
-│                         │                                   │
-│                         ▼ AcpRequest (含 system_prompt)     │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-┌─────────────────────────┼───────────────────────────────────┐
-│  acp_client              │                                   │
-│                         ▼                                   │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Transport → SessionManager → Protocol → ToolExecutor │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                         │                                   │
-│                         ▼ ACP Protocol                       │
-└─────────────────────────────────────────────────────────────┘
+    SD->>ACX: build_legacy_request(agent, message)
+    ACX-->>SD: AgentRequest
+    SD->>ACP: send(AgentRequest)
 ```
 
 ## § 设计决策与权衡
 
 | 决策问题 | 选择 | 放弃的替代方案 | 理由 |
 |---------|------|--------------|------|
-| 模块边界？ | 独立 `agent_context` 模块 | 并入 `acp_client` | 解耦协议层与 prompt 逻辑，独立可测试 |
-| Identity 存储？ | SQLite 持久化 | 配置文件 / 内存 | 支持动态更新，Active ACP Server 切换后需要读取对应 Identity |
-| Memory 注入方式？ | prompt 文本注入 | 协议级 memory 扩展 | ACP 标准通过 prompt 传递上下文 |
-| prompt 模板？ | 字符串模板替换 | 结构化 AST | 简单够用，避免过度设计 |
-| Tool 元数据同步？ | `agent_context` 注册元数据，`acp_client` 注册执行器 | 单一注册中心 | 元数据与执行逻辑解耦 |
-
-## § 后续演进
-
-| 功能 | 说明 | 阶段 |
-|------|------|------|
-| ACP Server Identity 切换 | 用户切换 Active ACP Server 后，使用对应 Identity 组装上下文 | v1.1 |
-| 记忆向量检索 | 接入本地向量数据库，语义检索相关记忆 | v1.1 |
-| Prompt 模板市场 | 用户可自定义/分享 prompt 模板 | v2.0 |
-| 动态工具发现 | Agent 根据上下文动态发现可用工具 | v2.0 |
+| 模块边界是什么？ | 独立 `agent_context` 模块 | 并入 `acp_client` | 协议层不应关心 prompt 如何组装 |
+| 谁决定消息顺序？ | SessionDispatcher | `agent_context` | 上下文组装不拥有队列和 worker 生命周期 |
+| Identity 如何归属？ | Agent 默认拥有 Identity | Channel 注入 Identity | Agent 身份与渠道协议无关 |
+| Skill 如何注入？ | PromptBuilder 合并 Skill instruction | ACP Server 自行选择 Skill | Skill 是用户显式选择的任务模板，应由 MindClaw 注入 |
+| Memory 如何注入？ | PromptBuilder 合并进 ACP 请求 | ACP Server 自行读取本地存储 | 本地存储权限由 MindClaw 控制，注入边界在 Client 侧更清晰 |
+| Tool 元数据与执行如何划分？ | `agent_context` 管元数据，`acp_client::ToolExecutor` 管执行 | 单一工具模块同时管元数据和执行 | 元数据选择与本地权限执行拥有不同变更理由 |

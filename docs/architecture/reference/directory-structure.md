@@ -2,62 +2,61 @@
 
 > 本文档记录代码目录结构，代码重组时同步更新。
 
-## 目标架构目录（Gateway Runtime + Active ACP Server）
+## 目标架构目录（App 内驻留 GatewaySupervisor + Agent 调度）
 
 ```
 src-tauri/src/
-├── lib.rs                         # Tauri Builder：插件/命令注册
+├── lib.rs                         # Tauri Builder：插件/命令注册、managed state 注入
 ├── main.rs                        # Rust 二进制入口
 ├── error.rs                       # AppError 定义
-├── commands/                      # Tauri Command 层（thin），只连接 Gateway API
+├── commands/                      # Tauri Command 层（thin），只连接 GatewaySupervisor API
 │   └── mod.rs
-├── services/                      # Service 层（thick，业务逻辑）
+├── services/                      # Service 层（thick，业务逻辑；不 use tauri::*）
 │   ├── mod.rs
-│   ├── gateway/                   # Gateway Runtime：本地常驻运行时
+│   ├── gateway/                   # Gateway Runtime 业务边界
 │   │   ├── mod.rs
-│   │   ├── runtime.rs             # GatewayRuntime：启动/停止/监督内部子模块
-│   │   ├── api.rs                 # Gateway API：Desktop UI/CLI/Web UI/Webhook 入口
-│   │   ├── active_acp.rs          # ActiveAcpServer：当前激活 ACP Server 选择与状态
+│   │   ├── supervisor.rs          # GatewaySupervisor：App 内驻留业务主管组件
+│   │   ├── api.rs                 # Gateway API adapter：commands/local API/webhook 边界
 │   │   ├── health.rs              # Health check 与运行状态
-│   │   ├── supervisor.rs          # 后台进程与任务监督
 │   │   └── error.rs               # GatewayError 错误类型
+│   ├── agent/                     # Agent 执行模型
+│   │   ├── mod.rs
+│   │   ├── types.rs               # Agent、Identity、Skill、SlashCommand、ExecutionContext
+│   │   ├── store.rs               # AgentStore、SkillStore、ConversationExecutionStateStore
+│   │   ├── command_parser.rs      # SlashCommandParser
+│   │   └── resolver.rs            # AgentResolver
 │   ├── channels/                  # ChannelManager 与具体渠道实现
 │   │   ├── mod.rs                 # Channel trait + CredentialsManager trait
-│   │   ├── manager.rs             # ChannelManager：渠道生命周期与出站分发
+│   │   ├── manager.rs             # ChannelManager：渠道生命周期、凭证代理、入站接收和出站分发
 │   │   ├── registry.rs            # ChannelRegistry：渠道注册与查找
+│   │   ├── inbound.rs             # InboundDriver：polling/long-polling/stream/webhook/manual
 │   │   ├── feishu/                # 飞书渠道实现
-│   │   │   ├── mod.rs
-│   │   │   ├── client.rs          # FeishuChannel：飞书 Open API/Webhook 适配
-│   │   │   ├── token.rs           # TokenManager：飞书 Token 管理
-│   │   │   └── converter.rs       # 飞书消息 → ChannelMessage 转换
 │   │   └── telegram/              # Telegram 渠道实现
-│   │       ├── mod.rs
-│   │       ├── client.rs          # TelegramChannel：Telegram Bot API 适配
-│   │       ├── token.rs           # TelegramTokenManager：Bot Token 管理
-│   │       └── converter.rs       # Telegram Update → ChannelMessage 转换
-│   ├── message_bus/               # 消息总线层（无 RouteRule）
+│   ├── session_dispatcher/        # 会话调度器
+│   │   ├── mod.rs                 # SessionDispatcher 对外接口
+│   │   ├── types.rs               # DispatchKey、DispatchCommand、RetryPolicy
+│   │   └── worker.rs              # per-session worker
+│   ├── event_bus/                 # Runtime 事件 Pub/Sub
+│   │   ├── mod.rs                 # EventBus
+│   │   └── types.rs               # RuntimeEvent
+│   ├── message_bus/               # legacy RouteRule 兼容模块
 │   │   ├── mod.rs
-│   │   ├── queue.rs               # inbound/outbound 消息队列
-│   │   ├── topic.rs               # Topic 消息分发
-│   │   ├── subscription.rs        # SubscriptionMgr 订阅管理
-│   │   └── types.rs               # ChannelMessage, BusMessage 等类型
+│   │   ├── router.rs              # MessageBus：legacy RouteRule 管理
+│   │   └── types.rs               # ChannelMessage、AgentRequest、AgentResponse、RouteRule
 │   ├── agent_context/             # Agent 上下文组装层
 │   │   ├── mod.rs
-│   │   ├── identity.rs            # Agent 身份证管理
 │   │   ├── memory.rs              # 记忆检索与注入
 │   │   ├── prompt_builder.rs      # Prompt 组装器
 │   │   └── tool_registry.rs       # 本地工具元数据注册表
 │   └── acp_client/                # ACP 协议客户端
 │       ├── mod.rs
-│       ├── client.rs              # AcpClient：连接管理、生命周期
+│       ├── client.rs              # AcpClient：协议调用入口
+│       ├── server.rs              # AcpServer、AcpServerConfig、AcpServerStatus
+│       ├── registry.rs            # AcpServerRegistry
 │       ├── transport.rs           # Transport trait + StdioTransport/HttpTransport
 │       ├── session.rs             # SessionManager：会话管理
 │       ├── protocol.rs            # ACP 协议数据结构
 │       ├── tool_executor.rs       # ToolExecutor：本地工具执行
-│       ├── tools/                 # 内置本地工具集
-│       │   ├── mod.rs
-│       │   ├── fs.rs              # File System 工具
-│       │   └── terminal.rs        # Terminal 工具
 │       └── content.rs             # ContentPart 多模态内容模型
 ├── storage/                       # Storage 层（thin）
 │   └── mod.rs
@@ -70,23 +69,20 @@ src/
 ├── components/
 │   └── ui/                        # shadcn/ui 组件
 ├── hooks/                         # 自定义 hooks
-├── lib/                           # 工具函数
+├── lib/                           # 工具函数与类型
 ├── routes/                        # TanStack Router 路由
-│   ├── __root.tsx
-│   ├── index.tsx                  # 首页
-│   └── messages.tsx               # 消息流页面
 └── stores/                        # Zustand stores
-    └── message-store.ts           # 消息状态
 ```
 
-## 当前实现目录（待迁移）
+## 当前实现目录（迁移中）
 
 ```
 src-tauri/src/services/
-├── gateway/                       # 当前仅包含 ChannelGateway、GatewayRegistry、GatewayError
-├── im_channel/                    # 当前包含 feishu、telegram 具体渠道实现
-├── message_bus/                   # 当前包含 MessageBus、RouteRule、ChannelMessage
+├── gateway/                       # 当前包含 ChannelGateway、GatewayRegistry、GatewayError；目标为 GatewaySupervisor 业务边界
+├── im_channel/                    # 当前包含 feishu、telegram 具体渠道实现；目标迁移到 channels/
+├── message_bus/                   # 当前包含 MessageBus、RouteRule、ChannelMessage；目标保留为 legacy 兼容模块
+├── event_bus/                     # 当前已新增 RuntimeEvent 与 EventBus
 └── acp_client/                    # 当前包含 AcpClient 与 ACP 协议类型
 ```
 
-当前实现中的 `gateway/` 和 `im_channel/` 会迁移为目标架构中的 `gateway/`（Runtime）与 `channels/`（ChannelManager + Channel 实现）。当前实现中的 `RouteRule` 会移除，自动消息改为直接进入 Active ACP Server。
+当前实现中的 `gateway/` 和 `im_channel/` 会迁移为目标架构中的 `gateway/`（GatewaySupervisor）与 `channels/`（ChannelManager + Channel 实现）。当前实现中的 `RouteRule` 保留为 legacy 兼容接口，自动消息调度改由 `SessionDispatcher` 和 `agent/` 模块解析默认 Agent 或 slash command 后进入对应 ACP Server。

@@ -63,3 +63,82 @@ impl Default for MessageStore {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(id: &str) -> ChannelMessage {
+        ChannelMessage {
+            message_id: id.to_string(),
+            channel: "feishu".to_string(),
+            conversation_id: "chat-1".to_string(),
+            sender_id: "user-1".to_string(),
+            sender_name: "User".to_string(),
+            content: format!("message {id}"),
+            timestamp: 1,
+            is_reply: false,
+            reply_to: None,
+        }
+    }
+
+    #[test]
+    fn check_and_mark_seen_returns_false_for_duplicate_message_id() {
+        let store = MessageStore::new();
+
+        assert!(store.check_and_mark_seen("msg-1"));
+        assert!(!store.check_and_mark_seen("msg-1"));
+    }
+
+    #[test]
+    fn save_message_keeps_messages_in_insert_order() {
+        let store = MessageStore::new();
+
+        store.save_message(message("msg-1"));
+        store.save_message(message("msg-2"));
+
+        let messages = store.get_messages();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].message_id, "msg-1");
+        assert_eq!(messages[1].message_id, "msg-2");
+    }
+
+    #[test]
+    fn get_recent_messages_returns_requested_tail() {
+        let store = MessageStore::new();
+
+        store.save_message(message("msg-1"));
+        store.save_message(message("msg-2"));
+        store.save_message(message("msg-3"));
+
+        let recent = store.get_recent_messages(2);
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].message_id, "msg-2");
+        assert_eq!(recent[1].message_id, "msg-3");
+    }
+
+    #[test]
+    fn get_recent_messages_returns_all_when_limit_exceeds_len() {
+        let store = MessageStore::new();
+
+        store.save_message(message("msg-1"));
+        store.save_message(message("msg-2"));
+
+        let recent = store.get_recent_messages(10);
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].message_id, "msg-1");
+        assert_eq!(recent[1].message_id, "msg-2");
+    }
+
+    #[test]
+    fn clear_removes_messages_and_seen_ids() {
+        let store = MessageStore::new();
+
+        assert!(store.check_and_mark_seen("msg-1"));
+        store.save_message(message("msg-1"));
+        store.clear();
+
+        assert!(store.get_messages().is_empty());
+        assert!(store.check_and_mark_seen("msg-1"));
+    }
+}

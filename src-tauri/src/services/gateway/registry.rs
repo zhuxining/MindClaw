@@ -134,3 +134,186 @@ impl Default for GatewayRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::gateway::CredentialsManager;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
+    struct FakeCredentials {
+        has_credentials: Mutex<bool>,
+        tested: AtomicBool,
+    }
+
+    impl FakeCredentials {
+        fn new() -> Self {
+            Self {
+                has_credentials: Mutex::new(false),
+                tested: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl CredentialsManager for FakeCredentials {
+        fn set_credentials(&self, _credentials: serde_json::Value) -> Result<(), GatewayError> {
+            *self.has_credentials.lock().unwrap() = true;
+            Ok(())
+        }
+
+        fn clear_credentials(&self) -> Result<(), GatewayError> {
+            *self.has_credentials.lock().unwrap() = false;
+            Ok(())
+        }
+
+        fn has_credentials(&self) -> bool {
+            *self.has_credentials.lock().unwrap()
+        }
+
+        fn test_connection(&self) -> Result<(), GatewayError> {
+            self.tested.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct FakeGateway {
+        name: String,
+        credentials: FakeCredentials,
+        messages: Vec<ChannelMessage>,
+        sent_messages: Mutex<Vec<String>>,
+    }
+
+    impl FakeGateway {
+        fn new(name: &str, message_id: &str) -> Self {
+            Self {
+                name: name.to_string(),
+                credentials: FakeCredentials::new(),
+                messages: vec![message(message_id)],
+                sent_messages: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ChannelGateway for FakeGateway {
+        fn channel_name(&self) -> &str {
+            &self.name
+        }
+
+        fn poll_messages(
+            &self,
+            _page_size: i32,
+            _page_token: Option<&str>,
+        ) -> Result<(Vec<ChannelMessage>, Option<String>), GatewayError> {
+            Ok((self.messages.clone(), None))
+        }
+
+        fn send_message(
+            &self,
+            _conversation_id: &str,
+            content: &str,
+            _reply_to: Option<&str>,
+        ) -> Result<(), GatewayError> {
+            self.sent_messages.lock().unwrap().push(content.to_string());
+            Ok(())
+        }
+
+        fn credentials(&self) -> &dyn CredentialsManager {
+            &self.credentials
+        }
+    }
+
+    fn message(id: &str) -> ChannelMessage {
+        ChannelMessage {
+            message_id: id.to_string(),
+            channel: "feishu".to_string(),
+            conversation_id: "chat-1".to_string(),
+            sender_id: "user-1".to_string(),
+            sender_name: "User".to_string(),
+            content: "hello".to_string(),
+            timestamp: 1,
+            is_reply: false,
+            reply_to: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn register_get_and_list_channels_keep_registration_order() {
+        let registry = GatewayRegistry::new();
+
+        registry.register(Arc::new(FakeGateway::new("feishu", "msg-1")));
+        registry.register(Arc::new(FakeGateway::new("telegram", "msg-2")));
+
+        assert!(registry.get("feishu").await.is_some());
+        assert_eq!(registry.list_channels().await, vec!["feishu", "telegram"]);
+    }
+
+    #[tokio::test]
+    async fn register_replaces_existing_gateway_without_duplicating_order() {
+        let registry = GatewayRegistry::new();
+
+        registry.register(Arc::new(FakeGateway::new("feishu", "old")));
+        registry.register(Arc::new(FakeGateway::new("feishu", "new")));
+
+        let gateway = registry.get("feishu").await.unwrap();
+        let (messages, _) = gateway.poll_messages(10, None).unwrap();
+        assert_eq!(messages[0].message_id, "new");
+        assert_eq!(registry.list_channels().await, vec!["feishu"]);
+    }
+
+    #[tokio::test]
+    async fn send_message_returns_unsupported_for_unknown_channel() {
+        let registry = GatewayRegistry::new();
+
+        let error = registry
+            .send_message("missing", "chat-1", "hello", None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, GatewayError::Unsupported(_)));
+    }
+
+    #[tokio::test]
+    async fn credentials_are_proxied_to_target_gateway() {
+        let registry = GatewayRegistry::new();
+        registry.register(Arc::new(FakeGateway::new("feishu", "msg-1")));
+
+        assert!(!registry.has_credentials("feishu").await);
+        registry
+            .set_credentials("feishu", serde_json::json!({ "token": "secret" }))
+            .await
+            .unwrap();
+        assert!(registry.has_credentials("feishu").await);
+        registry.test_connection("feishu").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn credential_methods_return_unsupported_for_unknown_channel() {
+        let registry = GatewayRegistry::new();
+
+        let set_error = registry
+            .set_credentials("missing", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        let test_error = registry.test_connection("missing").await.unwrap_err();
+
+        assert!(matches!(set_error, GatewayError::Unsupported(_)));
+        assert!(matches!(test_error, GatewayError::Unsupported(_)));
+        assert!(!registry.has_credentials("missing").await);
+    }
+
+    #[tokio::test]
+    async fn poll_all_returns_result_for_each_registered_channel() {
+        let registry = GatewayRegistry::new();
+        registry.register(Arc::new(FakeGateway::new("feishu", "msg-1")));
+        registry.register(Arc::new(FakeGateway::new("telegram", "msg-2")));
+
+        let results = registry.poll_all(10).await;
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "feishu");
+        assert_eq!(results[0].1.as_ref().unwrap()[0].message_id, "msg-1");
+        assert_eq!(results[1].0, "telegram");
+        assert_eq!(results[1].1.as_ref().unwrap()[0].message_id, "msg-2");
+    }
+}

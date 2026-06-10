@@ -1,181 +1,186 @@
 > **Status**: `draft`
 
-# 架构总览：Gateway Runtime 与 ACP Server 调度
+# 架构总览：App 内驻留 GatewaySupervisor、Agent 与会话调度
 
 ## § 系统目标与约束
 
-MindClaw 消息调度子系统以 **Gateway Runtime** 为本地常驻核心：Gateway Runtime 在桌面窗口最小化或关闭后持续运行，负责托管消息渠道、MessageBus、当前激活 ACP Server 调用链路和本地控制 API；Desktop UI 只作为配置、监控和人工操作的客户端。
+MindClaw 消息调度子系统以 **Gateway Runtime** 为业务运行时边界，为 Desktop UI、CLI、Web UI、Mobile companion、Webhook 和外部消息渠道提供统一的本地 Agent Runtime。代码实现命名为 **GatewaySupervisor**，运行在 Tauri App 进程内，复用 Tauri 的应用运行时、managed State、AppHandle 和 async runtime。
 
-核心数据流： **`Gateway Runtime → ChannelManager → MessageBus → agent_context → acp_client → Active ACP Server`**
+核心数据流：**`GatewaySupervisor → ChannelManager → SessionDispatcher → AgentResolver → agent_context → acp_client → Agent 绑定的 ACP Server`**。
+
+事件数据流：**`GatewaySupervisor / ChannelManager / SessionDispatcher → EventBus → Gateway API / UI / Logger / Audit`**。
 
 **核心约束：**
 
-- Gateway Runtime 是消息接入和 ACP Server 调度的运行时核心，Desktop UI 退出窗口后不影响已启用渠道的轮询、Webhook 接入和消息处理
-- Gateway Runtime 同一时刻只有一个 **Active ACP Server** 接收自动进入的渠道消息
-- Desktop UI、CLI、Web UI、Mobile companion 和外部 Webhook 通过 Gateway API 接入，不直接调用渠道实现或 MessageBus 内部结构
-- 所有消息处理在本地完成，不经过 MindClaw 云端服务
-- 密钥（飞书 Token 等）存储在 Stronghold 中
-- 遵循现有分层架构：Command (thin) → Service (thick) → Storage (thin)
-- Services 层不得 `use tauri::*`
-- ACP 是通信协议，MindClaw 是 ACP Client，Agent 进程是 ACP Server。MindClaw 不实现 Agent 智能，只负责协议通信和本地能力暴露
+- Gateway Runtime 是业务运行时边界，不是 Tauri runtime、Tokio runtime 或独立 OS daemon。
+- GatewaySupervisor 作为 Tauri managed State 的业务组件运行在 Tauri App 进程内。
+- MindClaw 第一阶段采用 App 内驻留：窗口关闭到托盘后 GatewaySupervisor 继续运行，用户显式退出应用后 GatewaySupervisor 停止。
+- 业务层不得创建独立 `tokio::runtime::Runtime`。
+- 独立 daemon 不是 v1 边界；UI 完全退出后继续接收消息属于 daemon / sidecar 演进方向。
+- 无 slash command 的自动消息使用默认 Agent。
+- SlashCommand 是用户显式选择 Agent 或 Skill 的入口，不读取 legacy RouteRule。
+- Skill 独立管理，Agent 与 Skill 是多对多关系。
+- Desktop UI、CLI、Web UI、Mobile companion 和外部 Webhook 通过 Gateway API 接入，不直接调用渠道实现、SessionDispatcher、AgentResolver 或 EventBus 内部结构。
+- Channel 只负责外部协议、凭证、payload 转换和渠道发送。
+- ChannelManager 按渠道 inbound driver 启动消息接收任务：polling、long polling、stream、webhook handler 或 manual input。
+- SessionDispatcher 负责消息去重、按会话保序、slash command 解析入口、ACP 调用和回复编排。
+- EventBus 只负责 Pub/Sub 事件传播，不参与业务调度。
+- Services 层不得 `use tauri::*`；Tauri 相关能力只出现在 `lib.rs`、`commands` 或 Gateway API adapter 层。
+- 所有消息处理在本地完成，不经过 MindClaw 云端服务。
+- 密钥存储在 Stronghold 中。
 
 ## § 核心设计原则
 
-1. **Gateway Runtime 常驻化**：消息渠道、MessageBus 和 ACP Server 调用链路由 Gateway Runtime 托管；理由是桌面窗口生命周期不能决定消息接入是否在线。
-2. **单一激活 ACP Server**：自动进入的渠道消息直接发送给当前激活 ACP Server；理由是 v1 不引入多 Agent 路由规则，降低调度复杂度。
-3. **UI 是客户端**：Desktop UI 只通过 Gateway API 查看状态、修改配置和发起人工操作；理由是 CLI、Web UI、Mobile companion 与桌面端应复用同一运行时入口。
-4. **Channel 拥有协议细节**：FeishuChannel、TelegramChannel 负责渠道 API、凭证、协议解析和 `ChannelMessage` 转换；理由是渠道响应结构差异大，转换逻辑应靠近对应 API。
-5. **智能在 ACP Server 端**：意图识别、任务规划、工具执行决策在 ACP Server 中完成；理由是 MindClaw 负责调度、上下文注入和本地能力暴露，不承担 Agent 运行时职责。
+1. **App 内驻留优先**：GatewaySupervisor 运行在 Tauri App 进程内，窗口关闭到托盘后继续处理消息；理由是 v1 不承担独立 daemon 的安装、更新和 IPC 成本。
+2. **Agent 是执行者**：用户通过默认 Agent 或 `/命令` 选择谁执行；理由是 Agent 比 ACP Server 更贴近用户心智。
+3. **Skill 独立复用**：Skill 独立管理，Agent 与 Skill 多对多关联；理由是任务能力需要跨 Agent 复用。
+4. **SessionDispatcher 管业务调度**：入站消息按 `channel + conversation_id` 分片调度，并解析显式命令；理由是同一会话需要顺序一致，不同会话不应互相阻塞。
+5. **EventBus 管事件传播**：运行时事件通过 EventBus 广播给 UI、日志和审计；理由是 Pub/Sub 事件传播与 ACP 调度是不同职责。
 
 ## § 关键设计决策
 
 | 决策问题 | 选择 | 放弃的替代方案 | 理由 |
 |---------|------|--------------|------|
-| 消息接入运行时绑定桌面窗口还是后台服务？ | Gateway Runtime 常驻后台运行 | Desktop UI 进程直接承载渠道连接 | 桌面窗口最小化或关闭后仍需接收和处理 IM 消息 |
-| gateway 是渠道 registry 还是运行时入口？ | gateway 定位为 Gateway Runtime | gateway 仅承载 ChannelGateway trait 和 Registry | Webhook、多客户端接入、health check、后台任务需要统一运行时边界 |
-| 消息如何选择 Agent？ | 发送到当前激活 ACP Server | RouteRule 多 Agent 路由 | v1 只需要一个用户当前选中的 Agent 处理消息，避免提前引入规则引擎 |
-| 渠道抽象放在哪里？ | ChannelManager 作为 Gateway Runtime 内部子模块 | 将渠道实现作为顶层架构层 | 渠道生命周期由 Gateway Runtime 管理，MessageBus 不依赖具体渠道 |
-| 飞书消息获取用轮询还是 Webhook？ | v1 支持轮询，Gateway Runtime 预留 Webhook HTTP 入口 | 仅桌面端手动刷新 | 后台持续运行需要自动接入；Webhook 接入需要服务端入口 |
-| Agent 上下文组装？ | 独立 `agent_context` 模块 | 并入 `acp_client` | 解耦协议层与 prompt 逻辑，独立可测试 |
+| v1 后台模型是什么？ | Tauri App 内驻留 GatewaySupervisor | 独立 OS daemon | App 内驻留满足窗口关闭到托盘后的消息处理，避免 daemon 安装、更新和本地 IPC 成本 |
+| 用户选择的主对象是什么？ | Agent | ACP Server 或 RouteRule | Agent 表达“谁来执行”，ACP Server 是执行后端，RouteRule 是 legacy 自动路由 |
+| Skill 如何建模？ | Skill 独立管理，Agent-Skill 多对多 | Skill 内嵌在 Agent | 独立 Skill 能被多个 Agent 复用，减少重复配置 |
+| 入站消息由 Bus 还是 Dispatcher 处理？ | SessionDispatcher 处理 ACP 调度和 slash command 入口 | MessageBus 直连上下游 | 当前链路是有序处理管线，不是多订阅者 Pub/Sub |
+| Agent 如何选择？ | 默认 Agent + SlashCommand 显式选择 | RouteRule 多 Agent 自动路由 | 显式命令比关键词规则更可解释，避免规则冲突 |
+| 事件传播如何建模？ | EventBus 作为真正 Pub/Sub | 让 SessionDispatcher 同时广播事件 | 事件订阅和业务调度拥有不同变更理由 |
+| 外部 SaaS webhook 如何接入？ | v1 保留 Gateway API 边界，本机可接收 local webhook；公网 webhook 需要 relay 或用户自建 endpoint | 认为 daemon 能直接接收公网 webhook | daemon 解决进程常驻，公网 webhook 需要公网 HTTPS endpoint |
 
 ## § 边界划分
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                            Clients                                           │
-│  Desktop UI        CLI        Web UI        Mobile companion        Webhook   │
-│  (控制台)          (命令)     (浏览器)      (伴随客户端)           (外部入口) │
-└──────────┬──────────┬──────────┬───────────┬───────────────────────┬────────┘
-           │          │          │           │                       │
-           ▼          ▼          ▼           ▼                       ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                         Gateway Runtime                                      │
-│                                                                              │
-│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────────────────┐  │
-│  │ Gateway API    │  │ Health/Superv. │  │        ChannelManager        │  │
-│  │ HTTP/WS/IPC    │  │ health/start   │  │ FeishuChannel/Telegram/...   │  │
-│  └───────┬────────┘  └───────┬────────┘  └──────────────┬───────────────┘  │
-│          │                   │                          │ ChannelMessage    │
-│          └───────────────────┴──────────────────────────▼                  │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │                         MessageBus                                    │  │
-│  │             inbound / outbound / subscription                         │  │
-│  └──────────────────────────────────┬───────────────────────────────────┘  │
-│                                     │ ChannelMessage                         │
-│                                     ▼                                       │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │                       Active ACP Dispatch                             │  │
-│  │       agent_context → acp_client → Active ACP Server                  │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-│                                                                              │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │                    Storage / Config / Stronghold                      │  │
-│  │        active_acp_server, messages, sessions, memory, secrets         │  │
-│  └──────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
+Tauri App Process
+  ├─ Tauri Runtime
+  │    ├─ app/window/webview event loop
+  │    ├─ IPC commands
+  │    ├─ plugin lifecycle
+  │    ├─ managed State
+  │    └─ async runtime
+  │
+  └─ AppState
+       └─ GatewaySupervisor
+            ├─ Gateway API adapter
+            ├─ ChannelManager
+            ├─ SessionDispatcher
+            │    ├─ per-session queue
+            │    ├─ SlashCommandParser
+            │    ├─ AgentResolver
+            │    ├─ agent_context
+            │    ├─ acp_client
+            │    └─ reply orchestration
+            ├─ Agent module
+            │    ├─ Agent
+            │    ├─ Identity
+            │    ├─ Skill
+            │    ├─ SlashCommand
+            │    └─ ConversationExecutionState
+            ├─ EventBus
+            └─ Storage / Config / Stronghold
 ```
 
 **模块职责：**
 
-- **Gateway Runtime**：本地常驻运行时。负责启动和监督 ChannelManager、MessageBus、Active ACP Dispatch、Gateway API、health check 和后台任务
-- **Gateway API**：本地控制入口。向 Desktop UI、CLI、Web UI、Mobile companion 和 Webhook 暴露受控 API，不暴露内部模块实现
-- **ChannelManager**：渠道生命周期管理器。负责启动、停止、健康状态、轮询任务和出站消息分发
-- **Channels**：具体渠道实现。FeishuChannel、TelegramChannel 负责渠道 API、凭证、协议解析和 `ChannelMessage` 转换
-- **MessageBus**：消息总线层。接收 `ChannelMessage`，传递给 Active ACP Dispatch，并将响应转为出站消息
-- **Active ACP Dispatch**：当前激活 ACP Server 调用链路。由 `agent_context` 组装上下文，再由 `acp_client` 通过 ACP 协议调用 Active ACP Server
-- **Storage / Config / Stronghold**：持久化消息、配置、会话、记忆、Active ACP Server 配置和密钥
+- **Tauri Runtime**：应用运行时。负责 app 事件循环、窗口、WebView、IPC、插件生命周期、managed State、AppHandle 和 async executor。
+- **GatewaySupervisor**：Gateway Runtime 的 Rust 实现。负责组装和监督 ChannelManager、SessionDispatcher、Agent 模块、EventBus、Gateway API adapter、Storage、Config 和 Stronghold。
+- **Agent module**：执行者管理模块。负责 Agent、Identity、Skill、SlashCommand 和 ConversationExecutionState。
+- **ChannelManager**：渠道生命周期管理器。负责渠道注册、凭证代理、健康状态、inbound driver 启停和出站分发。
+- **SessionDispatcher**：消息调度器。负责去重、保存、按 session 保序、slash command 入口、ACP 调用和回复编排。
+- **agent_context**：上下文组装 seam。负责把 Agent Identity、Skill instruction、记忆和工具元数据组装为 ACP 请求。
+- **acp_client**：ACP 协议客户端。负责与 Agent 绑定的 ACP Server 通信，不承载业务智能。
+- **EventBus**：事件总线。负责运行时事件广播，不承担消息业务调度。
 
-**数据流方向：**
+**跨切关注点：**
 
-```
-Feishu Poll/Webhook ─▶ Gateway Runtime ─▶ ChannelManager ─▶ MessageBus ─▶ agent_context ─▶ acp_client ─▶ Active ACP Server
-Feishu API ◀────────── Gateway Runtime ◀── ChannelManager ◀── MessageBus ◀── AgentResponse ◀──────────────────────┘
-Desktop UI / CLI / Web UI ───────────────▶ Gateway API ─▶ Runtime Status / Active ACP Server / MessageStore / Config
-```
+- **鉴权**：Gateway API adapter 校验本地客户端和 Webhook 请求。
+- **审计与日志**：EventBus 发布事件，Logger 和 Audit 订阅事件。
+- **错误翻译**：Service 层将渠道、Agent 解析、ACP 和调度错误转换为 Gateway Runtime 错误边界。
+- **密钥保护**：Stronghold 持有渠道凭证和 ACP Server secret。
+- **任务取消**：GatewaySupervisor 使用 cancellation token 统一停止 inbound drivers 和 dispatcher workers。
 
 ## § 核心实体关系
 
-**核心实体：**
-
-- **GatewayRuntime**：本地常驻运行时，拥有渠道、消息总线、Active ACP Dispatch 和控制 API 的生命周期
-- **Channel**：外部消息渠道的本地适配器，负责接入外部 IM 平台并产生 `ChannelMessage`
-- **ChannelMessage**：跨渠道统一消息，包含来源渠道、会话、发送者、内容、时间和回复关系
-- **ActiveAcpServer**：用户当前选中的 ACP Server，接收自动进入的渠道消息
-- **AcpRequest**：经 `agent_context` 组装后的 ACP 协议请求，包含 system prompt、上下文、用户消息和可用工具描述
-- **AgentResponse**：Active ACP Server 处理完成后返回的结果，包含处理状态、输出内容和错误信息
+- **GatewaySupervisor**：App 内驻留的业务主管组件，拥有渠道管理、Agent 管理、会话调度、事件广播和控制 API 的生命周期。
+- **Agent**：用户可选择的执行者，默认拥有 Identity，绑定默认 ACP Server，并关联多个 Skill。
+- **Identity**：Agent 的身份、人设和行为约束。
+- **Skill**：独立管理的任务能力模板，可被多个 Agent 复用。
+- **AcpServer**：Agent 默认绑定的 ACP 执行后端。
+- **SlashCommand**：对话中的显式选择入口，映射到 Agent 或 Agent + Skill。
+- **ConversationExecutionState**：按 `channel + conversation_id` 保存当前会话 Agent、Skill 和 ACP session 状态。
+- **ChannelMessage**：跨渠道统一消息，表示一次来自外部渠道或 Agent 回复的消息。
+- **RuntimeEvent**：Gateway Runtime 内部事件，用于 UI、日志、审计和监控订阅。
 
 ```mermaid
 erDiagram
-    GatewayRuntime ||--o{ Channel : "管理"
-    Channel ||--o{ ChannelMessage : "产生"
-    GatewayRuntime ||--|| ActiveAcpServer : "持有当前选择"
-    ChannelMessage ||--o{ AcpRequest : "触发"
-    ActiveAcpServer ||--o{ AcpRequest : "接收"
-    AcpRequest ||--o| AgentResponse : "产生"
+    GatewaySupervisor ||--o{ Agent : "管理"
+    Agent ||--|| Identity : "默认拥有"
+    Agent }o--o{ Skill : "配置可用技能"
+    AcpServer ||--o{ Agent : "作为默认执行后端"
+    Agent ||--o{ SlashCommand : "作为命令目标"
+    ConversationExecutionState }o--|| Agent : "当前选择"
+    ConversationExecutionState }o--o| Skill : "当前技能"
+    GatewaySupervisor ||--o{ ChannelMessage : "调度"
+    GatewaySupervisor ||--o{ RuntimeEvent : "发布"
 ```
 
 ## § 整体流程
 
-### 主流程：飞书消息 → Active ACP Server 处理 → 回复
+### 主流程：渠道消息 → Agent 解析 → ACP Server → 渠道回复
 
 ```mermaid
 sequenceDiagram
-    participant FS as 飞书 Open API/Webhook
-    participant RT as Gateway Runtime
     participant CM as ChannelManager
-    participant FC as FeishuChannel
-    participant MB as MessageBus
-    participant AD as Active ACP Dispatch
-    participant ACP as Active ACP Server
+    participant SD as SessionDispatcher
+    participant AR as AgentResolver
+    participant ACX as agent_context
+    participant ACP as acp_client
+    participant AS as ACP Server
 
-    RT->>CM: 启动渠道
-    CM->>FC: start()
-    FC->>FS: poll 或接收 webhook
-    FS-->>FC: 飞书消息
-    FC->>FC: 转换为 ChannelMessage
-    FC-->>CM: ChannelMessage
-    CM->>MB: publish_inbound(ChannelMessage)
-
-    MB->>AD: dispatch_to_active_server(ChannelMessage)
-    AD->>AD: agent_context 组装上下文
-    AD->>ACP: acp_client Prompt Turn
-    ACP-->>AD: AgentResponse
-    AD-->>MB: AgentResponse
-
-    MB->>CM: publish_outbound(ChannelMessage)
-    CM->>FC: send_message(...)
-    FC->>FS: 发送回复消息
+    CM->>SD: enqueue(ChannelMessage)
+    SD->>AR: resolve(message, conversation)
+    AR-->>SD: ExecutionContext
+    SD->>ACX: build_request(context, message)
+    ACX-->>SD: AcpRequest
+    SD->>ACP: send_to_server(context.acp_server, request)
+    ACP->>AS: ACP Protocol
+    AS-->>ACP: AgentResponse
+    ACP-->>SD: AgentResponse
+    SD->>CM: send_message(reply)
 ```
 
-### Desktop UI 切换当前激活 ACP Server
+### SlashCommand 选择流程
 
 ```mermaid
 sequenceDiagram
-    participant UI as Desktop UI
-    participant API as Gateway API
-    participant RT as Gateway Runtime
-    participant CFG as ConfigStore
+    participant UI as Conversation Input
+    participant SD as SessionDispatcher
+    participant CP as SlashCommandParser
+    participant AR as AgentResolver
+    participant STATE as ConversationExecutionState
 
-    UI->>API: set_active_acp_server(server_id)
-    API->>RT: update_active_acp_server(server_id)
-    RT->>CFG: save(active_acp_server)
-    RT-->>API: RuntimeStatus
-    API-->>UI: 当前 ACP Server 已更新
+    UI->>SD: /review message
+    SD->>CP: parse(input)
+    CP-->>SD: SlashCommand
+    SD->>AR: resolve(command)
+    AR-->>SD: Agent + Skill + ACP Server
+    SD->>STATE: one-shot 或 sticky update
 ```
 
 ## § 部署架构
 
-- Gateway Runtime 作为本地常驻后台服务运行，由 Desktop UI 启动、连接和监督
-- Desktop UI 关闭窗口后，Gateway Runtime 持续处理已启用渠道消息
-- 用户显式退出 MindClaw 后，Gateway Runtime 停止渠道连接并关闭 Active ACP Dispatch
-- Gateway Runtime 对本机客户端暴露 Local API；外部 Webhook 入口必须经过明确开启和认证配置
+- GatewaySupervisor 运行在 Tauri App 进程内。
+- Desktop UI 关闭窗口到托盘后，Tauri App 进程保持运行，GatewaySupervisor 持续处理已启用渠道消息。
+- 用户显式退出 MindClaw 后，GatewaySupervisor 停止 inbound drivers 并关闭调度器。
+- v1 不安装独立 daemon、sidecar 或 OS service。
+- GatewaySupervisor 对本机客户端暴露 Local API；外部公网 Webhook 入口需要 Cloud Relay、tunnel 或用户自建 HTTPS endpoint。
 
 ## § 安全架构
 
-- **密钥管理**：飞书 App ID/Secret 存储在 Stronghold (`tauri-plugin-stronghold`)
-- **信任边界**：Gateway API 是 Desktop UI、CLI、Web UI、Mobile companion 和 Webhook 进入系统的唯一入口
-- **本地 API 访问控制**：本机客户端通过本地 token 或系统权限访问 Gateway API
-- **Webhook 访问控制**：外部 Webhook 必须校验渠道签名或共享密钥
-- **ACP Server 控制**：只有用户显式选择的 Active ACP Server 接收自动渠道消息
-- **数据隔离**：`vault/private/` 对 ACP Server 不可见，Storage 层拒绝 `private/` 前缀路径
-- **工具沙箱**：`acp_client::ToolExecutor` 执行本地工具时受权限控制，Terminal 工具禁止危险命令
+- **密钥管理**：渠道凭证和 ACP Server secret 存储在 Stronghold。
+- **信任边界**：Gateway API adapter 是 Desktop UI、CLI、Web UI、Mobile companion 和 Webhook 进入系统的唯一入口。
+- **Agent 选择边界**：SlashCommand 只使用用户可见且已启用的 Agent 和 Skill。
+- **Webhook 访问控制**：外部 Webhook 必须校验渠道签名或共享密钥；公网 webhook 必须经过 HTTPS endpoint。
+- **数据隔离**：`vault/private/` 对 ACP Server 不可见，Storage 层拒绝 `private/` 前缀路径。
+- **工具权限**：ACP Server 发起的本地工具调用经过 `acp_client::ToolExecutor` 权限控制。

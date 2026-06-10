@@ -143,3 +143,100 @@ impl RouteCondition {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(content: &str) -> ChannelMessage {
+        ChannelMessage {
+            message_id: "msg-1".to_string(),
+            channel: "feishu".to_string(),
+            conversation_id: "chat-1".to_string(),
+            sender_id: "user-1".to_string(),
+            sender_name: "User".to_string(),
+            content: content.to_string(),
+            timestamp: 1,
+            is_reply: false,
+            reply_to: None,
+        }
+    }
+
+    fn condition(
+        channel: Option<&str>,
+        sender_id: Option<&str>,
+        keywords: Option<Vec<&str>>,
+        keyword_mode: MatchMode,
+    ) -> RouteCondition {
+        RouteCondition {
+            channel: channel.map(str::to_string),
+            sender_id: sender_id.map(str::to_string),
+            keywords: keywords.map(|items| items.into_iter().map(str::to_string).collect()),
+            keyword_mode,
+        }
+    }
+
+    #[test]
+    fn matches_channel_and_sender() {
+        let msg = message("hello");
+        let route = condition(Some("feishu"), Some("user-1"), None, MatchMode::Contains);
+
+        assert!(route.matches(&msg));
+    }
+
+    #[test]
+    fn rejects_channel_mismatch() {
+        let msg = message("hello");
+        let route = condition(Some("telegram"), None, None, MatchMode::Contains);
+
+        assert!(!route.matches(&msg));
+    }
+
+    #[test]
+    fn rejects_sender_mismatch() {
+        let msg = message("hello");
+        let route = condition(None, Some("user-2"), None, MatchMode::Contains);
+
+        assert!(!route.matches(&msg));
+    }
+
+    #[test]
+    fn contains_keyword_matches_case_insensitively() {
+        let msg = message("Please HELP me");
+        let route = condition(None, None, Some(vec!["help"]), MatchMode::Contains);
+
+        assert!(route.matches(&msg));
+    }
+
+    #[test]
+    fn contains_keyword_rejects_when_no_keyword_is_present() {
+        let msg = message("hello");
+        let route = condition(None, None, Some(vec!["help"]), MatchMode::Contains);
+
+        assert!(!route.matches(&msg));
+    }
+
+    #[test]
+    fn not_contains_keyword_matches_when_keyword_is_absent() {
+        let msg = message("hello");
+        let route = condition(None, None, Some(vec!["urgent"]), MatchMode::NotContains);
+
+        assert!(route.matches(&msg));
+    }
+
+    #[test]
+    fn not_contains_keyword_rejects_when_keyword_is_present() {
+        let msg = message("urgent issue");
+        let route = condition(None, None, Some(vec!["urgent"]), MatchMode::NotContains);
+
+        assert!(!route.matches(&msg));
+    }
+
+    #[test]
+    fn empty_keywords_match_without_restricting_other_fields() {
+        let msg = message("anything");
+        let route = condition(Some("feishu"), None, Some(vec![]), MatchMode::Contains);
+
+        assert!(route.matches(&msg));
+    }
+}

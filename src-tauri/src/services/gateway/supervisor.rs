@@ -277,8 +277,10 @@ impl GatewaySupervisor {
         self.acp_servers.status(&server_id)
     }
 
-    pub fn save_acp_server(&self, server: AcpServer) {
+    pub fn save_acp_server(&self, server: AcpServer) -> Result<(), AppError> {
+        server.validate()?;
         self.acp_servers.save(server);
+        Ok(())
     }
 
     pub fn list_agents(&self) -> Vec<Agent> {

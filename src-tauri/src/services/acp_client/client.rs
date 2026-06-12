@@ -22,6 +22,7 @@ pub struct AcpClient {
 
 impl AcpClient {
     pub async fn connect(server: &AcpServer) -> Result<Self, String> {
+        server.validate().map_err(|error| error.to_string())?;
         let agent = AcpAgent::new(server.to_mcp_server());
         let (dispatch_tx, mut dispatch_rx) = mpsc::channel::<DispatchRequest>(32);
         let cancel_token = CancellationToken::new();

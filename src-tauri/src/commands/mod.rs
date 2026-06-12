@@ -123,8 +123,8 @@ pub fn list_acp_servers(state: State<'_, Arc<AppState>>) -> Result<Vec<AcpServer
 
 #[tauri::command]
 pub fn save_acp_server(server: AcpServer, state: State<'_, Arc<AppState>>) -> Result<(), AppError> {
-    state.gateway.save_acp_server(server);
-    Ok(())
+    server.validate()?;
+    state.gateway.save_acp_server(server)
 }
 
 #[tauri::command]

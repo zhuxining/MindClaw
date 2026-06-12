@@ -1,6 +1,7 @@
 use crate::error::AppError;
-use crate::services::gateway::{ChannelGateway, CredentialsManager};
-use crate::services::message_bus::ChannelMessage;
+use crate::services::channels::{Channel, CredentialsManager};
+use crate::services::core::ChannelMessage;
+use crate::services::gateway::GatewayError;
 use std::sync::Arc;
 
 use super::converter::convert_telegram_update;
@@ -139,9 +140,9 @@ impl TelegramClient {
     }
 }
 
-// ── ChannelGateway trait impl ────────────────────────────────
+// ── Channel trait impl ────────────────────────────────
 
-impl ChannelGateway for TelegramClient {
+impl Channel for TelegramClient {
     fn channel_name(&self) -> &str {
         "telegram"
     }
@@ -150,19 +151,15 @@ impl ChannelGateway for TelegramClient {
         &self,
         page_size: i32,
         page_token: Option<&str>,
-    ) -> Result<(Vec<ChannelMessage>, Option<String>), crate::services::gateway::GatewayError> {
+    ) -> Result<(Vec<ChannelMessage>, Option<String>), GatewayError> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 self.poll_messages(page_size, page_token)
                     .await
                     .map_err(|e| match e {
-                        AppError::Gateway(msg) => {
-                            crate::services::gateway::GatewayError::Network(msg)
-                        }
-                        AppError::Unauthorized(_) => {
-                            crate::services::gateway::GatewayError::Unauthorized
-                        }
-                        other => crate::services::gateway::GatewayError::Network(other.to_string()),
+                        AppError::Gateway(msg) => GatewayError::Network(msg),
+                        AppError::Unauthorized(_) => GatewayError::Unauthorized,
+                        other => GatewayError::Network(other.to_string()),
                     })
             })
         })
@@ -173,19 +170,15 @@ impl ChannelGateway for TelegramClient {
         conversation_id: &str,
         content: &str,
         reply_to: Option<&str>,
-    ) -> Result<(), crate::services::gateway::GatewayError> {
+    ) -> Result<(), GatewayError> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 self.send_message(conversation_id, content, reply_to)
                     .await
                     .map_err(|e| match e {
-                        AppError::Gateway(msg) => {
-                            crate::services::gateway::GatewayError::Network(msg)
-                        }
-                        AppError::Unauthorized(_) => {
-                            crate::services::gateway::GatewayError::Unauthorized
-                        }
-                        other => crate::services::gateway::GatewayError::Network(other.to_string()),
+                        AppError::Gateway(msg) => GatewayError::Network(msg),
+                        AppError::Unauthorized(_) => GatewayError::Unauthorized,
+                        other => GatewayError::Network(other.to_string()),
                     })
             })
         })

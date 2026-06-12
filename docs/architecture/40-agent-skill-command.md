@@ -4,15 +4,18 @@
 
 ## § 职责定位
 
-Agent 模块负责管理 MindClaw 中可被用户选择的执行者：Agent、Identity、Skill、Agent-Skill 关联、SlashCommand 和 ConversationExecutionState；不负责渠道协议、ACP 协议传输、消息队列调度、legacy RouteRule 或本地工具执行。
+Agent 模块是 MindClaw 的 Agent Control Layer。它负责管理用户侧执行模型：Agent、Identity、Skill、Agent-Skill 关联、SlashCommand、AgentResolver 和 ConversationExecutionState。
+
+Agent 模块不负责渠道协议、ACP 协议传输、消息队列调度、legacy RouteRule 或本地工具执行。
 
 ## § 核心原则
 
-1. **Agent 是执行者**：用户选择 Agent 来决定“谁来执行”；理由是 Agent 比 ACP Server、Identity 和 Skill 更贴近用户心智。
-2. **Identity 归属 Agent**：每个 Agent 默认拥有自己的 Identity；理由是首版需要降低身份复用带来的配置复杂度。
-3. **Skill 独立复用**：Skill 独立管理，Agent 与 Skill 多对多关联；理由是任务能力需要跨 Agent 复用。
-4. **SlashCommand 显式选择**：SlashCommand 只响应用户显式输入；理由是显式命令比自动规则路由更可解释。
-5. **RouteRule 隔离**：Agent 选择不读取 legacy RouteRule；理由是规则路由已退出主链路。
+1. **Agent 是用户选择的执行者**：Agent 表达“谁来处理当前消息”，比 ACP Server 更贴近用户心智。
+2. **ACP Server 是执行后端**：Agent 绑定默认 ACP Server，但不拥有模型调用细节。
+3. **Identity 归属 Agent**：每个 Agent 默认拥有自己的 Identity，降低首版配置复杂度。
+4. **Skill 独立复用**：Skill 独立管理，Agent 与 Skill 多对多关联。
+5. **SlashCommand 显式选择**：SlashCommand 只响应用户显式输入，不读取 legacy RouteRule。
+6. **ConversationState 隔离会话选择**：会话级 Agent / Skill 状态按 `channel + conversation_id` 隔离。
 
 ## § 边界与实体
 
@@ -25,7 +28,8 @@ Agent 模块负责管理 MindClaw 中可被用户选择的执行者：Agent、Id
 - `parse_input(message)`：解析对话输入中的 slash command。
 - `resolve_execution_context(message, conversation)`：解析当前消息使用的 Agent、Identity、Skill 和 ACP Server。
 - `set_conversation_agent(conversation, agent_id)`：切换当前会话 Agent。
-- `reset_conversation(conversation)`：恢复当前会话默认 Agent。
+- `set_conversation_skill(conversation, skill_id)`：切换当前会话 Skill。
+- `reset_conversation(conversation)`：恢复当前会话默认 Agent / Skill。
 
 ### 输出
 
@@ -53,20 +57,37 @@ Agent 模块负责管理 MindClaw 中可被用户选择的执行者：Agent、Id
 
 ## § 关键流程
 
+### 默认 Agent 解析流程
+
+```mermaid
+sequenceDiagram
+    participant SD as SessionDispatcher
+    participant AR as AgentResolver
+    participant STORE as ConversationStateStore
+    participant AG as AgentStore
+
+    SD->>AR: resolve(ChannelMessage)
+    AR->>STORE: get(channel, conversation_id)
+    STORE-->>AR: state or none
+    AR->>AG: get_default_agent()
+    AG-->>AR: Agent + default Skill + ACP Server
+    AR-->>SD: ExecutionContext
+```
+
 ### SlashCommand one-shot 执行流程
 
 ```mermaid
 sequenceDiagram
     participant SD as SessionDispatcher
-    participant AG as AgentResolver
     participant CP as SlashCommandParser
+    participant AR as AgentResolver
     participant ACX as agent_context
     participant ACP as acp_client
 
     SD->>CP: parse(message.content)
     CP-->>SD: command + args
-    SD->>AG: resolve(command, conversation)
-    AG-->>SD: ExecutionContext
+    SD->>AR: resolve(command, conversation)
+    AR-->>SD: ExecutionContext
     SD->>ACX: build_request(context, message)
     ACX-->>SD: AcpRequest
     SD->>ACP: send_to_server(context.acp_server, request)
@@ -78,7 +99,7 @@ sequenceDiagram
 sequenceDiagram
     participant SD as SessionDispatcher
     participant CP as SlashCommandParser
-    participant STORE as ConversationExecutionStateStore
+    participant STORE as ConversationStateStore
     participant EB as EventBus
 
     SD->>CP: parse("/use reviewer")
@@ -99,16 +120,39 @@ erDiagram
     Skill ||--o{ SlashCommand : "作为命令技能"
     ConversationExecutionState }o--|| Agent : "当前选择"
     ConversationExecutionState }o--o| Skill : "当前技能"
-    ConversationExecutionState }o--o| AcpServer : "临时后端覆盖"
 ```
+
+## § SlashCommand 语义
+
+固定控制命令：
+
+- `/help`：查看命令说明。
+- `/default`：恢复或设置默认 Agent / Skill。
+- `/use <agent>`：切换当前会话 Agent。
+- `/skill <skill>`：切换当前会话 Skill。
+
+任意 `/<name>` 可作为显式执行入口：
+
+- one-shot：只影响当前消息，不修改会话状态。
+- sticky：通过 `/use` 或 `/skill` 修改当前会话状态。
+
+SlashCommand 不读取 RouteRule，不根据关键词自动选择 Agent。
 
 ## § 设计决策与权衡
 
 | 决策问题 | 选择 | 放弃的替代方案 | 理由 |
 |---------|------|--------------|------|
-| 用户选择的主对象是什么？ | Agent | ACP Server 或 ExecutionRole | Agent 更符合“谁来执行”的用户心智，ACP Server 是执行后端 |
+| 用户选择的主对象是什么？ | Agent | ACP Server 或 ExecutionRole | Agent 更符合“谁来执行”的用户心智 |
 | Identity 如何建模？ | Agent 默认拥有 Identity | Identity 独立复用为主路径 | Agent 1:1 Identity 降低首版配置复杂度 |
-| Skill 如何建模？ | Skill 独立管理，Agent-Skill 多对多 | Skill 内嵌在 Agent 中 | 独立 Skill 可跨 Agent 复用，减少重复配置 |
+| Skill 如何建模？ | Skill 独立管理，Agent-Skill 多对多 | Skill 内嵌在 Agent 中 | 独立 Skill 可跨 Agent 复用 |
 | SlashCommand 是否使用 RouteRule？ | 不使用 RouteRule | 复用 RouteRule 匹配逻辑 | SlashCommand 是显式命令，RouteRule 是自动规则路由 |
 | SlashCommand 解析在哪里？ | 后端统一解析 | 前端解析后传结构化命令 | 后端解析保证 Desktop UI、CLI、Webhook 语义一致 |
 | 会话切换状态如何保存？ | ConversationExecutionState 按 conversation 隔离 | 写入 ChannelMessage | 执行状态是会话状态，不属于消息内容 |
+
+## § 安全边界
+
+- 只能解析和执行已启用、用户可见的 Agent / Skill。
+- 禁用 Agent 或 Skill 后不得用于新执行。
+- SlashCommand 错误不得回退到 RouteRule 自动路由。
+- Agent / Skill 内容默认仅本地保存，不上传 MindClaw 云端。
+- 执行元数据必须保留实际使用的 agent_id、skill_id、acp_server_id，便于审计和调试。

@@ -1,8 +1,9 @@
 use super::converter::{convert_feishu_message, FeishuMessageListResponse};
 use super::token::TokenManager;
 use crate::error::AppError;
-use crate::services::gateway::{ChannelGateway, GatewayError};
-use crate::services::message_bus::ChannelMessage;
+use crate::services::channels::{Channel, CredentialsManager};
+use crate::services::core::ChannelMessage;
+use crate::services::gateway::GatewayError;
 use std::sync::Arc;
 
 /// 飞书 API 基础 URL
@@ -200,9 +201,9 @@ impl FeishuClient {
     }
 }
 
-// ── ChannelGateway trait impl ────────────────────────────────
+// ── Channel trait impl ────────────────────────────────
 
-impl ChannelGateway for FeishuClient {
+impl Channel for FeishuClient {
     fn channel_name(&self) -> &str {
         "feishu"
     }
@@ -244,7 +245,7 @@ impl ChannelGateway for FeishuClient {
         })
     }
 
-    fn credentials(&self) -> &dyn crate::services::gateway::CredentialsManager {
+    fn credentials(&self) -> &dyn CredentialsManager {
         self.token_manager.as_ref()
     }
 }

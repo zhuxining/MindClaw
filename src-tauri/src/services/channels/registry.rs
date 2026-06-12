@@ -1,19 +1,20 @@
-use super::{ChannelGateway, GatewayError};
-use crate::services::message_bus::ChannelMessage;
+use super::Channel;
+use crate::services::core::ChannelMessage;
+use crate::services::gateway::GatewayError;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 /// 渠道注册中心
 ///
 /// 持有所有已注册的渠道 Gateway，提供统一的轮询和消息发送接口。
-pub struct GatewayRegistry {
-    /// 渠道映射：channel_name → ChannelGateway
-    gateways: RwLock<HashMap<String, Arc<dyn ChannelGateway>>>,
+pub struct ChannelRegistry {
+    /// 渠道映射：channel_name → Channel
+    gateways: RwLock<HashMap<String, Arc<dyn Channel>>>,
     /// 渠道排序列表（保持注册顺序，用于轮询）
     order: RwLock<Vec<String>>,
 }
 
-impl GatewayRegistry {
+impl ChannelRegistry {
     pub fn new() -> Self {
         Self {
             gateways: RwLock::new(HashMap::new()),
@@ -22,7 +23,7 @@ impl GatewayRegistry {
     }
 
     /// 注册一个渠道 Gateway（同步，可在 AppState::new() 中调用）
-    pub fn register(&self, gateway: Arc<dyn ChannelGateway>) {
+    pub fn register(&self, gateway: Arc<dyn Channel>) {
         let name = gateway.channel_name().to_string();
         let mut gateways = self.gateways.write().unwrap();
         let mut order = self.order.write().unwrap();
@@ -34,7 +35,7 @@ impl GatewayRegistry {
     }
 
     /// 获取指定渠道的 Gateway
-    pub async fn get(&self, channel: &str) -> Option<Arc<dyn ChannelGateway>> {
+    pub async fn get(&self, channel: &str) -> Option<Arc<dyn Channel>> {
         self.gateways.read().unwrap().get(channel).cloned()
     }
 
@@ -51,7 +52,7 @@ impl GatewayRegistry {
         &self,
         page_size: i32,
     ) -> Vec<(String, Result<Vec<ChannelMessage>, GatewayError>)> {
-        let channels: Vec<Arc<dyn ChannelGateway>> = {
+        let channels: Vec<Arc<dyn Channel>> = {
             let order = self.order.read().unwrap();
             let gateways = self.gateways.read().unwrap();
             order
@@ -76,7 +77,7 @@ impl GatewayRegistry {
                 Ok(r) => results.push(r),
                 Err(e) => {
                     // spawn error — shouldn't happen, but log it
-                    eprintln!("GatewayRegistry: poll_all spawn error: {}", e);
+                    eprintln!("ChannelRegistry: poll_all spawn error: {}", e);
                 }
             }
         }
@@ -129,7 +130,7 @@ impl GatewayRegistry {
     }
 }
 
-impl Default for GatewayRegistry {
+impl Default for ChannelRegistry {
     fn default() -> Self {
         Self::new()
     }
@@ -138,7 +139,7 @@ impl Default for GatewayRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::gateway::CredentialsManager;
+    use crate::services::channels::CredentialsManager;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
@@ -195,7 +196,7 @@ mod tests {
         }
     }
 
-    impl ChannelGateway for FakeGateway {
+    impl Channel for FakeGateway {
         fn channel_name(&self) -> &str {
             &self.name
         }
@@ -239,7 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_get_and_list_channels_keep_registration_order() {
-        let registry = GatewayRegistry::new();
+        let registry = ChannelRegistry::new();
 
         registry.register(Arc::new(FakeGateway::new("feishu", "msg-1")));
         registry.register(Arc::new(FakeGateway::new("telegram", "msg-2")));
@@ -250,7 +251,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_replaces_existing_gateway_without_duplicating_order() {
-        let registry = GatewayRegistry::new();
+        let registry = ChannelRegistry::new();
 
         registry.register(Arc::new(FakeGateway::new("feishu", "old")));
         registry.register(Arc::new(FakeGateway::new("feishu", "new")));
@@ -263,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_returns_unsupported_for_unknown_channel() {
-        let registry = GatewayRegistry::new();
+        let registry = ChannelRegistry::new();
 
         let error = registry
             .send_message("missing", "chat-1", "hello", None)
@@ -275,7 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn credentials_are_proxied_to_target_gateway() {
-        let registry = GatewayRegistry::new();
+        let registry = ChannelRegistry::new();
         registry.register(Arc::new(FakeGateway::new("feishu", "msg-1")));
 
         assert!(!registry.has_credentials("feishu").await);
@@ -289,7 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn credential_methods_return_unsupported_for_unknown_channel() {
-        let registry = GatewayRegistry::new();
+        let registry = ChannelRegistry::new();
 
         let set_error = registry
             .set_credentials("missing", serde_json::json!({}))
@@ -304,7 +305,7 @@ mod tests {
 
     #[tokio::test]
     async fn poll_all_returns_result_for_each_registered_channel() {
-        let registry = GatewayRegistry::new();
+        let registry = ChannelRegistry::new();
         registry.register(Arc::new(FakeGateway::new("feishu", "msg-1")));
         registry.register(Arc::new(FakeGateway::new("telegram", "msg-2")));
 

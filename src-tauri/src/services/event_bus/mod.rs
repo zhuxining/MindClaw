@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod types;
 
 pub use types::RuntimeEvent;
@@ -33,6 +31,7 @@ impl EventBus {
     }
 
     /// 订阅后续事件。
+    #[allow(dead_code)]
     pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {
         self.sender.subscribe()
     }

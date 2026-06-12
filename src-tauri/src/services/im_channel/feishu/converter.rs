@@ -1,4 +1,4 @@
-use crate::services::message_bus::ChannelMessage;
+use crate::services::core::ChannelMessage;
 use serde::{Deserialize, Serialize};
 
 /// 飞书消息原始结构（来自 API 响应）

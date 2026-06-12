@@ -1,5 +1,10 @@
 pub mod acp_client;
+pub mod agent;
+pub mod agent_context;
+pub mod channels;
+pub mod core;
 pub mod event_bus;
 pub mod gateway;
 pub mod im_channel;
 pub mod message_bus;
+pub mod session_dispatcher;

@@ -19,6 +19,9 @@ pub enum AppError {
     #[error("ACP 客户端错误: {0}")]
     AcpClient(String),
 
+    #[error("Agent 错误: {0}")]
+    Agent(String),
+
     /// 存储错误（v2 SQLite 持久化时使用）
     #[error("存储错误: {0}")]
     #[allow(dead_code)]
@@ -41,5 +44,17 @@ pub enum AppError {
 impl From<reqwest::Error> for AppError {
     fn from(e: reqwest::Error) -> Self {
         AppError::Gateway(format!("HTTP 请求失败: {}", e))
+    }
+}
+
+impl From<agent_client_protocol::Error> for AppError {
+    fn from(e: agent_client_protocol::Error) -> Self {
+        AppError::AcpClient(e.to_string())
+    }
+}
+
+impl From<rusqlite::Error> for AppError {
+    fn from(e: rusqlite::Error) -> Self {
+        AppError::Storage(e.to_string())
     }
 }

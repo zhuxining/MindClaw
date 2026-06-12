@@ -1,5 +1,6 @@
 use crate::error::AppError;
-use crate::services::gateway::{CredentialsManager, GatewayError};
+use crate::services::channels::CredentialsManager;
+use crate::services::gateway::GatewayError;
 use tokio::sync::RwLock;
 
 /// Token 管理器：负责飞书 tenant_access_token 的获取和缓存

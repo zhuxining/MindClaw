@@ -1,143 +1,116 @@
-> **Status**: `draft`
+> **Status**: `active`
+>
+> **Related specs**: MVP 规格见 `docs/prd/20-acp-native-feishu-agent-mvp.md`；实现状态见 `docs/architecture/reference/migration.md`；场景追踪见 `docs/architecture/reference/traceability.md`。
 
-# 产品蓝图：App 内驻留消息网关、Agent 与 ACP Server 调度
+# 产品蓝图：本地优先的 ACP-native Agent 控制平面
 
-## Part 1：产品定位
+## 产品定位
 
-- **目标用户**：重度 LLM 用户（开发者、研究员、知识工作者），在 IM、Email、Webhook、MCP Event 和 CLI 场景中接收大量信息，需要本地 Agent 在无人值守状态下持续处理消息。
-- **核心问题**：消息渠道分散在不同入口，敏感上下文不适合交给云端 AI 服务，桌面端、CLI、Web UI、移动伴随端缺少统一的本地 Agent 调度入口。
-- **核心方式**：MindClaw 提供运行在 Tauri App 进程内的 GatewaySupervisor，托管渠道 inbound drivers、SessionDispatcher、EventBus、Agent 执行模型、ACP Server 调用链路和本地控制入口。
-- **长期价值**：用户以 MindClaw 为本地 AI 消息中枢；当桌面窗口关闭到托盘时，已启用渠道仍持续连接到默认 Agent，用户也能通过 `/命令` 显式选择 Agent 和 Skill 完成特定任务。
+MindClaw 为已经拥有或愿意搭建 ACP Server 的开发者和重度 LLM 用户，在真实 IM 消息进入个人工作流时解决 Agent 执行入口分散、角色配置重复和会话状态不可控的问题，通过本地控制平面统一管理 Agent、Skill、会话状态和消息渠道，形成可复用、可解释、由用户本机掌控的 Agent 工作空间。
 
-## Part 2：核心场景
+MindClaw 的产品边界由三条判断定义：
 
-### 场景 1：窗口关闭到托盘后的消息处理
+1. **ACP-native**：MindClaw 不自研基础 Agent Server，而是通过 ACP 调用用户已有或自建的 Agent 执行后端。
+2. **Control plane**：MindClaw 管理用户侧的 Agent 角色、Skill、会话状态、默认 Agent 和显式命令。
+3. **Messaging-native**：MindClaw 把这些 Agent 接入 Feishu 等真实消息渠道，让 Agent 不只停留在 IDE、CLI 或聊天窗口里。
 
-用户关闭 MindClaw 桌面窗口到托盘后，Tauri App 进程保持运行，GatewaySupervisor 继续在进程内处理已启用渠道。渠道 inbound driver 产生 `ChannelMessage`，SessionDispatcher 按会话顺序发送给默认 Agent，处理结果通过原渠道回写。
+更短的对外表达：
 
-**数据流**：Channel inbound driver → ChannelManager → SessionDispatcher → AgentResolver → agent_context → acp_client → Agent 绑定的 ACP Server → SessionDispatcher → ChannelManager → Channel reply
+> MindClaw 让你自己的 ACP Agent 进入 IM 消息流。
 
-### 场景 2：不同渠道使用不同接收方式
+## 目标用户与场景
 
-用户启用多个入口后，GatewaySupervisor 为每个渠道启动对应 inbound driver：Feishu 使用 polling，Telegram 使用 long polling，Email 使用 IMAP IDLE 或 polling，MCP Event 使用 stream，CLI Input 使用本地输入或 Local API。
+### Primary User
 
-### 场景 3：管理 Agent、Skill 与 ACP Server
+- **ACP-native 开发者**：已经使用 Claude Code、Gemini CLI、自研 Agent 或其他 ACP Server；核心问题是底层执行能力已有，但缺少统一控制平面；成功状态是默认 Agent 能通过已有 ACP Server 处理真实消息。
+- **重度 LLM 用户**：需要在个人工作流中反复切换角色、任务模板和上下文；核心问题是 Agent、Skill 和会话状态散落在不同工具；成功状态是在 MindClaw 中复用同一组 Agent / Skill 配置。
+- **早期 IM Agent 内测用户**：希望让自己的 Agent 进入 Feishu 消息流；核心问题是每个渠道都要重复搭建 bot、runtime 和回复策略；成功状态是 Feishu 文本消息能进入本地处理链路并生成可确认的建议回复。
 
-用户在设置中管理多个 Agent。每个 Agent 默认拥有自己的 Identity，绑定一个默认 ACP Server，并关联一组可用 Skill。Skill 独立管理，同一个 Skill 能被多个 Agent 复用。
+### Secondary User
 
-### 场景 4：通过 `/命令` 显式选择 Agent 或 Skill
+- **个人知识工作者和高级自动化用户**：长期需要多个消息入口和多个 Agent，但不驱动 MVP 取舍；原因是第一阶段必须先验证 ACP + Feishu 的最小闭环。
 
-用户在对话中输入 `/review`、`/reply` 或 `/research`，系统根据命令选择目标 Agent 和 Skill。该选择来自用户显式输入，不读取 legacy RouteRule，也不根据消息关键词自动切换 Agent。
+### Excluded User
 
-### 场景 5：Desktop UI 作为控制台查看状态
+- **大型企业采购与团队管理用户**：不服务其审批、组织权限和团队协作流程；理由是这些流程会把产品拉向 SaaS 管理后台，偏离本地优先的个人控制平面。
+- **只需要云端托管 Bot 的用户**：不服务无本地运行时、无 ACP Server 配置意愿的纯 SaaS 场景；理由是 MindClaw 的核心价值来自用户本机控制和 ACP-native 执行边界。
+- **需要多 Agent 自动路由平台的用户**：不服务关键词分发、负载均衡和自动 Agent 路由；理由是当前命题要求显式选择和可解释执行。
 
-用户重新打开 MindClaw 桌面端，Desktop UI 连接 Gateway API adapter，查看 GatewaySupervisor、渠道连接、inbound drivers、消息处理、EventBus 事件、当前会话 Agent、Skill 和 ACP Server 状态。Desktop UI 不直接轮询渠道，也不直接调用 ACP Server。
+### Core Scenario
 
-### 场景 6：Webhook 与公网入口边界
+1. **把已有 ACP Server 接入 MindClaw**：用户注册一个本地 ACP Server，并将默认 Agent 绑定到该 Server。MindClaw 不关心 Server 内部使用哪个模型或工具，只通过 ACP 协议发送请求、接收响应和记录执行状态。
+2. **在 MindClaw 中管理 Agent 和 Skill**：用户创建 Agent，配置名称、描述、Identity、默认 ACP Server，并关联一组 Skill。Skill 独立管理，可被多个 Agent 复用。
+3. **通过 SlashCommand 显式选择执行方式**：用户在对话中输入 `/review`、`/reply` 或 `/research`，系统将任意 `/<name>` 解析为显式执行入口，并根据命令选择目标 Agent 或快捷任务。固定控制命令包括 `/help`、`/default`、`/use`、`/skill`。
+4. **把 Agent 接入 Feishu 消息流**：用户启用 Feishu 渠道后，GatewaySupervisor 接收 Feishu 消息，SessionDispatcher 按 `channel + conversation_id` 保持会话内顺序，AgentResolver 选择默认 Agent 或会话当前 Agent，agent_context 组装 prompt，acp_client 调用 Agent 绑定的 ACP Server，处理结果按当前回写策略形成建议回复或受限自动回复。
+5. **Desktop UI 作为本地控制台**：用户重新打开 MindClaw 桌面端，查看 ACP Server、Agent、Skill、渠道连接、消息处理、EventBus 事件和当前会话执行状态。窗口关闭到托盘后，Tauri App 进程保持运行；显式退出 App、系统休眠或关机后不承诺继续运行。
 
-本地 webhook 和 CLI Input 通过本机 Local API 进入 GatewaySupervisor。外部 SaaS webhook 需要公网 HTTPS endpoint、tunnel 或 Cloud Relay；独立 daemon 只解决进程常驻，不解决公网可达。
+## 核心命题
 
-## Part 3：产品原则
+本产品的核心命题是：用户应当在本机拥有一个 ACP-native Agent 控制平面，用显式、可解释、可复用的 Agent / Skill / 会话状态，把已有 ACP Server 的执行能力接入真实消息流，而不是重新托管一个云端 Agent 平台。
 
-1. **App 内驻留优先**：v1 让 GatewaySupervisor 运行在 Tauri App 进程内，窗口关闭到托盘后继续处理消息。理由是该模型满足个人桌面后台场景，并避免独立 daemon 的安装、更新和权限成本。
-2. **默认 Agent 优先**：无 `/命令` 的自动消息发送给默认 Agent。理由是 v1 保持单一默认执行目标，降低配置和调试成本。
-3. **显式选择优先于自动路由**：用户通过 `/命令` 切换 Agent 或 Skill。理由是显式选择比关键词路由更可解释，不引入 RouteRule 优先级和冲突。
-4. **Skill 独立复用**：Skill 独立管理，Agent 与 Skill 多对多关联。理由是任务能力需要跨 Agent 复用，Agent 负责组合身份、技能和执行后端。
-5. **本地优先**：所有消息处理和 ACP Server 调用均在本地完成，不上传 MindClaw 云端。理由是用户的消息和上下文具有隐私敏感性。
+这个命题排除四类方向：自研基础 Agent Server、MindClaw 云端消息处理服务、legacy RouteRule 自动路由、多用户团队管理后台。
 
-## Part 4：价值边界
+## 产品原则
 
-### 明确解决
+- **ACP 优先，不自研 Agent Server**：MindClaw 专注控制平面和渠道接入，底层 Agent 执行交给用户配置的 ACP Server。理由：复用已有执行能力能让产品聚焦在用户侧控制与消息场景。
+- **用户侧 Agent 模型优先**：Agent、Skill、默认 Agent、会话状态属于 MindClaw 的核心产品模型，不依赖某个具体 ACP Server 的内部配置。理由：用户需要跨 ACP Server 复用角色、任务模板和执行状态。
+- **显式选择优先于自动路由**：用户通过 `/命令` 切换 Agent 或 Skill，不在 v1 引入关键词 RouteRule、自动 Agent 路由或复杂优先级。理由：真实 IM 场景要求结果可解释，显式命令比隐式规则更可靠。
+- **少渠道先闭环**：第一阶段用 Feishu 验证 ACP Server → Agent → Skill → 消息回复的完整价值链，不同时推进多渠道平台。理由：单渠道闭环能暴露控制平面的真实缺口。
+- **本地优先与可观测优先**：MindClaw 自身不向 MindClaw 云端上传消息或上下文，并让用户看清哪个 Agent、哪个 Skill、哪个 ACP Server 处理了消息。理由：本地控制和执行可追踪是用户信任真实 IM 接入的前提。
 
-- 桌面窗口关闭到托盘后，已启用渠道仍能进入 GatewaySupervisor。
-- GatewaySupervisor 统一托管渠道 inbound drivers、SessionDispatcher、EventBus、Agent 执行模型、ACP Server 调用链路和本地控制入口。
-- 用户可管理多个 Agent，每个 Agent 默认拥有自己的 Identity。
-- 用户可独立管理多个 Skill，并将 Skill 关联到多个 Agent。
-- 用户可将 Agent 绑定到 ACP Server 作为默认执行后端。
-- 用户可通过 `/命令` 显式选择 Agent 或 Agent + Skill 执行当前消息。
-- 用户可将当前会话切换到指定 Agent，再用 `/default` 恢复默认 Agent。
-- 渠道消息按 `channel + conversation_id` 保持会话内顺序，不同会话并发处理。
-- Agent 上下文组装（Identity、Skill instruction、记忆、工具列表注入 prompt）。
-- 本地 ACP Server 通过 ACP 协议标准化调用。
-- 安全控制：凭证安全存储、本地 API 鉴权、Webhook 鉴权、本地数据隔离。
+## 长期演进方向
 
-### 明确不解决
+### 方向一：ACP 执行后端复用能力增强
 
-- 不提供 MindClaw 云端消息处理服务。
-- 不承诺 Tauri App 完全退出后继续接收消息。
-- 不在 v1 提供独立 OS daemon、sidecar 或系统服务。
-- 不把独立 daemon 作为公网 webhook 的解决方案。
-- 不提供 Feishu、WhatsApp、Telegram 等外部 SaaS webhook 的公网 relay，除非用户自建 endpoint 或启用 Cloud Relay。
-- 不做 RouteRule、多 Agent 自动路由、关键词分发或负载均衡。
-- 不做 RouteRule 与 SlashCommand 的混合优先级。
-- 不做多个 Agent 并行处理同一消息。
-- 不做团队协作和多用户权限系统。
-- 不实现 ACP Server 内部 Agent 智能。
-- 不承诺桌面设备休眠或关机后继续处理消息。
+- **能力变化**：从一个默认 ACP Server 扩展到多个 ACP Server 的注册、状态检测、默认绑定和执行元数据展示。
+- **价值理由**：用户可以保留已有 Agent 执行后端，同时在 MindClaw 中统一管理面向消息流的执行选择。
+- **边界**：不抽象模型供应商，不实现 ACP Server 内部 Agent 智能，不替代底层 Agent runtime。
 
-## Part 5：演进方向
+### 方向二：Agent / Skill 控制平面增强
 
-### v1.0 — App 内驻留的本地消息闭环
+- **能力变化**：从默认 Agent 和默认 Skill 扩展到多 Agent、多 Skill、Agent-Skill 多对多、SlashCommand 和会话级选择状态。
+- **价值理由**：用户能用同一组角色和任务模板处理不同消息，而不在多个后端里重复配置。
+- **边界**：不做 legacy RouteRule 混合优先级，不做多个 Agent 并行处理同一消息，不把自动路由作为 v1 主路径。
 
-- GatewaySupervisor：App 内驻留、启停控制、health 状态。
-- Gateway API adapter：Desktop UI 连接、运行时状态、消息流订阅、默认 Agent 选择。
-- ChannelManager：渠道生命周期、inbound drivers 和出站分发。
-- FeishuChannel：polling 接入、消息转换、回复发送。
-- SessionDispatcher：按 session 保序、并发处理、ACP 调用编排。
-- EventBus：运行时事件订阅。
-- agent_context：默认 Agent 的 Identity、记忆注入、Prompt 组装。
-- acp_client：ACP 协议客户端，调用默认 Agent 绑定的 ACP Server。
+### 方向三：消息渠道接入增强
 
-### v1.1 — Agent / Skill / SlashCommand 显式选择
+- **能力变化**：从 Feishu 文本消息闭环扩展到更多入站方式、出站回复策略、渠道健康状态和富媒体能力声明。
+- **价值理由**：Agent 的价值来自进入真实消息流；渠道扩展应服务于同一套 Agent 控制平面。
+- **边界**：不同时追求多渠道平台，不默认提供公网 webhook relay，不把渠道能力扩展成独立 SaaS bot 市场。
 
-- ACP Server 管理：注册、编辑、测试连接、状态展示。
-- Agent 管理：名称、描述、默认 Identity、默认 ACP Server。
-- Skill 管理：名称、描述、instruction、输出约束。
-- Agent-Skill 多对多关联。
-- 默认 Agent 设置。
-- SlashCommand：`/agent`、`/skill`、`/use`、`/default`、`/help`。
-- ConversationExecutionState：按会话保存当前 Agent 和 Skill。
-- 当前消息展示 Agent、Skill 和 ACP Server 执行元数据。
+### 方向四：本地控制入口与可观测性增强
 
-### v1.2 — 多入口与本地控制增强
+- **能力变化**：从 Desktop UI + Tauri commands 扩展到 Gateway API adapter、运行时状态、事件订阅、托盘控制和本地自动化入口。
+- **价值理由**：用户需要理解系统是否正在工作、失败发生在哪里，以及如何从本机控制消息处理链路。
+- **边界**：不提供团队协作权限系统，不承诺 App 完全退出、系统休眠或关机后继续处理消息。
 
-- Telegram long polling。
-- Email IMAP IDLE / polling。
-- CLI Input 通过 Local API 注入消息。
-- MCP Event stream 接入。
-- 本地 webhook handler 与签名校验。
-- Skill 参数 schema。
-- SlashCommand 参数 schema。
-- 命令 palette 搜索。
-- ConversationExecutionState 持久化。
-- 托盘控制和开机启动。
+## 非目标
 
-### v2.0 — 公网入口与后台形态增强
+- **不做 SaaS 化的云端消息处理服务**：理由是产品核心是本地优先控制平面；相关云端中继需求进入独立产品方向评估。
+- **不做飞书机器人商店或应用市场**：理由是首要问题是用户本机 Agent 接入真实消息流；渠道分发和商业化市场不进入当前产品判断。
+- **不做自研基础 Agent Server**：理由是 ACP-native 要求复用用户已有或自建执行后端；底层执行能力由 ACP Server 文档和配置承担。
+- **不做模型供应商抽象层**：理由是模型选择属于 ACP Server 内部职责；MindClaw 只记录和调用 ACP Server。
+- **不做团队协作功能（多用户、组织权限、审批）**：理由是这些能力会改变产品主语；相关需求需先进入新的产品域蓝图讨论。
+- **不在设备关机、系统休眠或 App 完全退出时处理消息**：理由是 v1 后台形态是 Tauri App 内驻留；后台能力边界写入架构与 PRD。
+- **不把 legacy RouteRule 作为 Agent 选择机制**：理由是 Agent 选择必须显式、可解释；旧路由规则只作为迁移背景保留。
 
-- 用户自建 HTTPS webhook endpoint 配置。
-- Cloud Relay 作为可选产品方向。
-- 独立 daemon / sidecar 作为可选产品方向。
-- WhatsApp / Slack / 钉钉 Channel。
-- Mobile companion 接入。
-- 自动 Agent 路由作为独立产品方向。
-- 统一限流、渠道健康状态和富媒体能力声明。
+## 关键假设
 
-## Part 6：关键假设
+- 用户已经拥有或愿意搭建 ACP Server；验证方式：内测配置完成率和 ACP Server 连接成功率；失效后果：ACP-native 定位需要重新评估。
+- Feishu 文本消息能代表第一阶段真实 IM 价值；验证方式：内测用户是否把建议回复用于实际会话；失效后果：消息渠道演进方向需要调整。
+- 用户接受默认建议回复、确认后发送的安全路径；验证方式：建议回复采纳率和误发反馈；失效后果：回写策略需要更保守，自动回复继续保持非默认。
+- 显式 SlashCommand 足以覆盖早期 Agent / Skill 选择需求；验证方式：命令使用频率和失败原因统计；失效后果：自动辅助选择需作为独立产品方向重新评估。
 
-| 假设 | 验证方式 | 失效后果 |
-|------|---------|---------|
-| 用户接受“窗口关闭到托盘后继续运行，显式退出后停止”的后台模型 | 内测访谈与托盘原型 | 提前评估独立 daemon 或弱化后台处理承诺 |
-| 用户接受默认 Agent 处理无命令消息 | 内测访谈与消息处理原型 | v1.1 提前引入会话级 Agent 选择 |
-| 用户理解 Agent 与 Skill 的差异 | 原型可用性测试 | 合并 Skill 到 Agent 配置，延后独立 Skill 管理 |
-| Agent 与 Skill 多对多能减少重复配置 | 配置原型测试 | 将 Skill 降级为 Agent 内部 instruction |
-| App 内驻留在目标平台可稳定运行 | macOS 托盘与后台任务原型验证 | 降级为仅窗口打开时运行，或推进 daemon 设计 |
-| 本地 ACP Server 处理延迟用户可接受 | 内测反馈 | 增加流式响应和进度反馈 |
+## 文档关联
 
-## Part 7：非目标
-
-- 不做 SaaS 化的云服务。
-- 不做飞书机器人商店或应用市场。
-- 不做团队协作功能（多用户、权限）。
-- 不在设备关机或系统休眠时处理消息。
-- 不把公网 webhook 作为 v1 默认能力。
-- 不把 legacy RouteRule 作为 Agent 选择机制。
+- PRD 总览：`docs/prd/00-overview.md`
+- 当前 MVP 需求：`docs/prd/20-acp-native-feishu-agent-mvp.md`
+- Agent / Skill / SlashCommand 需求：`docs/prd/10-agent-skill-slash-command.md`
+- 架构总览：`docs/architecture/00-overview.md`
+- Channel Gateway 架构：`docs/architecture/10-channel-gateway.md`
+- SessionDispatcher 与 EventBus 架构：`docs/architecture/20-message-bus.md`
+- ACP Execution Layer 架构：`docs/architecture/30-acp-client.md`
+- Agent Context 架构：`docs/architecture/35-agent-context.md`
+- Agent / Skill / SlashCommand 架构：`docs/architecture/40-agent-skill-command.md`
+- 迁移状态：`docs/architecture/reference/migration.md`
+- 可追溯性矩阵：`docs/architecture/reference/traceability.md`

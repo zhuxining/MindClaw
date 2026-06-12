@@ -46,9 +46,9 @@ export default function MessageList() {
 		try {
 			setPolling(true);
 			const newMessages = await invoke<ChannelMessage[]>(
-				"poll_feishu_messages",
+				"poll_channel_messages",
 				{
-					containerIdType: "chat",
+					channel: "feishu",
 					pageToken: null,
 				},
 			);

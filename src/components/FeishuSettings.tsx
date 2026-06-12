@@ -24,9 +24,9 @@ export default function FeishuSettings() {
 		if (!appId || !appSecret) return;
 		setSaving(true);
 		try {
-			await invoke("set_feishu_credentials", {
-				appId,
-				appSecret,
+			await invoke("set_channel_credentials", {
+				channel: "feishu",
+				credentials: { app_id: appId, app_secret: appSecret },
 			});
 			setFeishuConnected(true);
 			setAppSecret("");
@@ -40,7 +40,7 @@ export default function FeishuSettings() {
 	const handleTest = async () => {
 		setTesting(true);
 		try {
-			await invoke("test_feishu_connection");
+			await invoke("test_channel_connection", { channel: "feishu" });
 			setFeishuConnected(true);
 		} catch (err) {
 			console.error("测试连接失败:", err);
@@ -52,7 +52,10 @@ export default function FeishuSettings() {
 
 	const handleDisconnect = async () => {
 		try {
-			await invoke("set_feishu_credentials", { appId: "", appSecret: "" });
+			await invoke("set_channel_credentials", {
+				channel: "feishu",
+				credentials: { app_id: "", app_secret: "" },
+			});
 			setFeishuConnected(false);
 			setAppId("");
 			setAppSecret("");

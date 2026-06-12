@@ -1,4 +1,4 @@
-use crate::services::message_bus::ChannelMessage;
+use crate::services::core::ChannelMessage;
 
 /// 将 Telegram Update JSON 转换为统一 ChannelMessage
 ///

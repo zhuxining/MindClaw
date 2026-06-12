@@ -1,5 +1,6 @@
 use crate::error::AppError;
-use crate::services::gateway::{CredentialsManager, GatewayError};
+use crate::services::channels::CredentialsManager;
+use crate::services::gateway::GatewayError;
 use tokio::sync::RwLock;
 
 /// Telegram Token 管理器

@@ -32,7 +32,7 @@ tauri-build = { version = "2", features = [] }
 
 # ── Tauri Core ──────────────────────────────────────────────────────
 # Desktop app framework + core plugins
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
@@ -135,6 +135,11 @@ tracing-subscriber = { version = "0.3", features = [
 
 # ── Error Handling ──────────────────────────────────────────────────
 thiserror = "2.0" # #[derive(Error)] for AppError
+
+# ── Image decoding (tray icon) ─────────────────────────────────
+image = { version = "0.25", default-features = false, features = [
+    "png",
+] }
 
 # ── Utilities ───────────────────────────────────────────────────────
 uuid = { version = "1.22", default-features = false, features = [

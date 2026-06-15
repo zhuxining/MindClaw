@@ -103,7 +103,6 @@
 - 当前实体：`MessageStore`，负责 SQLite 去重和内存消息缓存。
 - Storage 层保持 thin，负责 SQLite / Stronghold / 文件系统等持久化细节。
 - 业务决策不写入 Storage 层。
-- `vault/private/` 对 Agent / ACP Server 不可见；Storage 层拒绝 `private/` 前缀路径。
 - Secrets 必须进入 Stronghold 或等价安全存储。
 
 ## Frontend (package.json)

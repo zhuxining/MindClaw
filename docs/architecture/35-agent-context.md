@@ -117,7 +117,6 @@ MVP 的 prompt / request 至少包含：
 ## § 安全边界
 
 - `agent_context` 只接收标准化 `ChannelMessage`，不接收渠道原始 payload。
-- MemorySource 不得读取 `vault/private/`。
 - ToolRegistry 只暴露工具元数据，不执行工具。
 - PromptBuilder 不应把 ACP Server secrets、渠道 secrets 或本地私有路径注入 prompt。
 - Agent / Skill 内容默认仅本地保存，不上传 MindClaw 云端。

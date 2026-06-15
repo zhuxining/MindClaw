@@ -116,7 +116,6 @@ sequenceDiagram
 
 - `acp_client` 不发起 IM 渠道网络请求。
 - AcpServer secret、token 和敏感环境变量存储在 Stronghold。
-- File System 工具拒绝访问 `vault/private/` 前缀路径。
 - Terminal 工具受命令权限、超时和输出大小限制。
 - ACP Server 通过 ACP 协议边界访问本地能力。
 - 敏感工具调用必须经过权限策略确认。

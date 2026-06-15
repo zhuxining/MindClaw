@@ -194,5 +194,4 @@ sequenceDiagram
 - **信任边界**：Tauri commands（后续 Gateway API adapter）是 Desktop UI、CLI 进入系统的唯一入口。
 - **Agent 选择边界**：SlashCommand 只使用用户可见且已启用的 Agent 和 Skill。
 - **Webhook 访问控制**：外部 Webhook 必须校验渠道签名或共享密钥；公网 webhook 必须经过 HTTPS endpoint。
-- **数据隔离**：`vault/private/` 对 ACP Server 不可见，Storage 层拒绝 `private/` 前缀路径。
 - **工具权限**：ACP Server 发起的本地工具调用经过 `acp_client::ToolExecutor` 权限控制。

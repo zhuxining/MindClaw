@@ -93,5 +93,4 @@ Describes the current state of the codebase directory. Keep it in sync when addi
 ### Security / Permissions
 
 - Tauri 2.0 capabilities-based model. New plugins/APIs must be declared in `src-tauri/capabilities/`.
-- `vault/private/` is invisible to Agent — storage layer rejects `private/` prefix paths.
 - CSP should restrict to `'self'` + `https://api.anthropic.com`.

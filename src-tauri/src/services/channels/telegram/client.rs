@@ -58,7 +58,7 @@ impl TelegramClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| AppError::Gateway(format!("拉取消息网络错误: {}", e)))?;
+            .map_err(|_| AppError::Gateway("拉取消息网络错误: 请求失败".into()))?;
 
         #[derive(serde::Deserialize)]
         struct TelegramResponse {
@@ -120,7 +120,7 @@ impl TelegramClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| AppError::Gateway(format!("发送消息网络错误: {}", e)))?;
+            .map_err(|_| AppError::Gateway("发送消息网络错误: 请求失败".into()))?;
 
         #[derive(serde::Deserialize)]
         struct SendResp {

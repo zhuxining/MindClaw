@@ -52,7 +52,7 @@ impl TelegramTokenManager {
 
         let resp = reqwest::get(&url)
             .await
-            .map_err(|e| AppError::Gateway(format!("测试连接网络错误: {}", e)))?;
+            .map_err(|_| AppError::Gateway("测试连接网络错误: 连接失败".into()))?;
 
         #[derive(serde::Deserialize)]
         struct TelegramResp {

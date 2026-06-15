@@ -1,5 +1,7 @@
+pub mod feishu;
 pub mod inbound;
 pub mod registry;
+pub mod telegram;
 
 use crate::services::core::ChannelMessage;
 use crate::services::gateway::GatewayError;

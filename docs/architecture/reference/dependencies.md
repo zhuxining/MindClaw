@@ -67,9 +67,8 @@
   - `CredentialsManager` — 渠道凭证管理 trait。
   - `ChannelRegistry` — 渠道注册、查找和列表顺序。
   - `InboundDriver` — polling / long-polling / stream / webhook / manual input 的统一接收方式。
-- `src-tauri/src/services/im_channel/` — 具体渠道实现的当前位置，后续可整体迁移到 `channels/`。
-  - `FeishuClient` / `TelegramClient` — 实现 `channels::Channel` trait。
-  - Feishu `TokenManager` / `TelegramTokenManager` — 实现 `channels::CredentialsManager` trait；命名统一状态见 `docs/architecture/reference/migration.md` T1.4。
+  - `FeishuClient` / `TelegramClient` — 实现 `channels::Channel` trait；分别位于 `channels/feishu/`、`channels/telegram/`。
+  - Feishu `TokenManager` / `TelegramTokenManager` — 实现 `channels::CredentialsManager` trait。
 - `src-tauri/src/services/agent/` — Agent Control Layer。
   - `Agent` — 用户可选择的执行者，默认拥有 Identity，绑定默认 ACP Server。
   - `Identity` — Agent 的身份、人设和行为约束。
@@ -81,12 +80,12 @@
   - `SkillStore` / `CommandStore` / `ConversationStateStore` — AgentStore 下的具体子存储。
 - `src-tauri/src/services/session_dispatcher/` — 会话调度器。
   - `SessionDispatcher` — per-session 队列、FIFO worker、SlashCommand 入口、ACP 调用和回复编排。
-  - `RetryPolicy` — 调度层重试策略。
+  - `types.rs` — `DispatchCommand` 类型。
+  - `worker.rs` — `session_worker`、`process_message` 和重试编排。
+  - `retry.rs` — `RetryPolicy` 重试策略。
 - `src-tauri/src/services/event_bus/` — Runtime 事件 Pub/Sub。
   - `EventBus` — 基于 `tokio::sync::broadcast` 的事件总线。
   - `RuntimeEvent` — runtime / channel / message / dispatch / reply / agent / skill / slash command 事件。
-- `src-tauri/src/services/message_bus/` — legacy 空壳兼容模块，待删除；状态见 `docs/architecture/reference/migration.md` 废弃清单。
-  - RouteRule 已退出主链路；新 Agent 选择不得读取 RouteRule。
 - `src-tauri/src/services/agent_context/` — Agent 上下文组装层。
   - `AgentContextBuilder` / `PromptBuilder` — Identity、Skill、Memory、Tool metadata、用户消息组装。
   - `MemorySource` — 会话历史和长期记忆来源。

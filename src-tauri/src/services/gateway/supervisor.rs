@@ -6,11 +6,11 @@ use crate::services::agent::{
     Agent, AgentResolver, AgentStore, ConversationExecutionState, ConversationKey, Skill,
     SlashCommand,
 };
+use crate::services::channels::feishu::{FeishuClient, TokenManager};
+use crate::services::channels::telegram::{TelegramClient, TelegramTokenManager};
 use crate::services::channels::ChannelRegistry;
 use crate::services::core::{AgentResponse, ChannelMessage, ResponseStatus};
 use crate::services::event_bus::{EventBus, RuntimeEvent};
-use crate::services::im_channel::feishu::{FeishuClient, TokenManager};
-use crate::services::im_channel::telegram::{TelegramClient, TelegramTokenManager};
 use crate::services::session_dispatcher::SessionDispatcher;
 use crate::storage::{open_database, MessageStore, SharedDatabase};
 use std::path::Path;

@@ -1,6 +1,6 @@
 > **Status**: `draft`
 
-# 架构子模块：SessionDispatcher、EventBus 与 legacy MessageBus
+# 架构子模块：SessionDispatcher 与 EventBus
 
 ## § 职责定位
 
@@ -8,15 +8,12 @@ SessionDispatcher 是 MindClaw 的业务调度管线，负责接收标准化 `Ch
 
 EventBus 是运行时事件 Pub/Sub 组件，负责把消息接收、调度开始、调度完成、回复成功、回复失败等事件广播给 UI、日志和审计。
 
-legacy MessageBus 只保留旧 RouteRule 兼容边界，不参与新主链路。
-
 ## § 核心原则
 
 1. **Dispatcher 管处理顺序**：SessionDispatcher 以 `channel + conversation_id` 作为 session key；同一会话 FIFO，不同会话并发。
 2. **Dispatcher 管显式命令入口**：SlashCommand 在后端统一解析，保证 Desktop UI、CLI、Webhook 语义一致。
 3. **Resolver 管执行目标**：AgentResolver 读取默认 Agent、SlashCommand 和 ConversationExecutionState，生成 ExecutionContext。
 4. **EventBus 管事件传播**：EventBus 只广播 runtime 事件，不直接触发 ACP 调用。
-5. **MessageBus 退出主链路**：RouteRule 不参与 Agent 选择，不影响 SlashCommand。
 
 ## § 边界与实体
 
@@ -26,7 +23,6 @@ legacy MessageBus 只保留旧 RouteRule 兼容边界，不参与新主链路。
 - `SlashCommandParser::parse(input)`：由 Agent 模块提供的 SlashCommand 解析入口；本模块只负责调用解析结果，详见 `docs/architecture/40-agent-skill-command.md`。
 - `publish(event: RuntimeEvent)`：向 EventBus 发布运行时事件。
 - `subscribe()`：订阅 EventBus 后续事件。
-- legacy RouteRule 接口与类型已退出主链路，当前 `message_bus` 仅为空壳兼容模块，待删除。
 
 ### 输出
 
@@ -46,13 +42,11 @@ legacy MessageBus 只保留旧 RouteRule 兼容边界，不参与新主链路。
 - **ChannelMessage**：来自 Channel Gateway 的标准化消息。
 - **AgentResponse**：ACP Server 处理结果。
 - **RuntimeEvent**：运行时事件，供 UI、日志、审计和监控订阅。
-- **legacy RouteRule**：旧路由规则，已退出新主链路；当前仅作为迁移背景记录。
 
 ### 错误边界
 
 - SessionDispatcher 捕获消息去重、命令解析、Agent 解析、队列关闭、ACP 调用和回复发送错误，并转换为调度错误。
 - EventBus 不将无订阅者视为错误；订阅者滞后不阻断发布者。
-- legacy MessageBus 不暴露渠道原始错误，也不参与 ACP 调用错误处理。
 
 ## § 关键流程
 
@@ -102,7 +96,7 @@ sequenceDiagram
 
 ### legacy RouteRule 背景
 
-RouteRule 接口与类型已从新主链路移除；当前 `message_bus` 为空壳兼容模块，待 legacy 入口完全退场后删除。新 Agent 选择只读取默认 Agent、ConversationExecutionState 和 SlashCommand，不读取 RouteRule。
+RouteRule 已从主链路完全移除，相关 `message_bus` 模块已删除。新 Agent 选择只读取默认 Agent、ConversationExecutionState 和 SlashCommand，不读取 RouteRule。
 
 ## § 设计决策与权衡
 

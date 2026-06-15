@@ -8,7 +8,7 @@
 |------|--------|----------|------|
 | 窗口关闭到托盘 | Channel Gateway Layer | 已实现 | 显式退出后停止，不承诺系统休眠或关机后继续运行。 |
 | Feishu Channel 基础能力 | Channel Gateway Layer | 部分实现 | 已有 client、converter、credentials 基础；自动轮询、状态上报和内测体验待完善。 |
-| Channel trait / ChannelRegistry | Channel Gateway Layer | 已实现基础 | trait 与 registry 已迁移到 `services/channels/`；具体渠道实现仍在 `services/im_channel/`。 |
+| Channel trait / ChannelRegistry | Channel Gateway Layer | 已实现基础 | trait 与 registry 已迁移到 `services/channels/`；具体渠道实现已迁移到 `channels/feishu`、`channels/telegram`。 |
 | InboundDriver 抽象 | Channel Gateway Layer | 已实现基础 | 已有 trait / enum 骨架；Feishu 自动轮询任务待接入。 |
 | ChannelManager | Channel Gateway Layer | 规划中 | 当前由 ChannelRegistry、渠道 client 与 GatewaySupervisor 分担职责。 |
 | Gateway API adapter | Channel Gateway Layer | 规划中 | 当前 Desktop UI 主要通过 Tauri commands 访问 Services。 |
@@ -23,7 +23,7 @@
 | Agent Context 记忆 / 工具注入 | ACP Execution Layer | 规划中 | MemorySource 有基础 trait，ToolRegistry 待实现。 |
 | ACP stdio client / Transport | ACP Execution Layer | 已实现基础 | 已有 ACP client、server registry、transport、tool executor 基础；SessionManager / 协议编解码待补齐。 |
 | 执行元数据展示 | 跨层 | 规划中 | 需扩展 AgentResponse / DispatchResult 或引入 MessageExecution 记录。 |
-| legacy MessageBus | legacy | 待删除 | RouteRule 退出主链路，`message_bus` 当前为空壳兼容模块。 |
+| legacy MessageBus | legacy | 已删除 | RouteRule 退出主链路，`message_bus` 空壳模块已删除。 |
 
 ## 迁移阶段
 
@@ -137,16 +137,16 @@
 
 ---
 
-### Phase 8：目录整理与 legacy 删除 ⏳ 待开始
+### Phase 8：目录整理与 legacy 删除 🔨 部分完成
 
 目标：在功能稳定后清理过渡目录和 legacy 空壳。
 
 | 任务 | 说明 | 优先级 | 状态 |
 |------|------|--------|------|
-| T8.1 迁移 Feishu 实现 | `im_channel/feishu` → `channels/feishu` | P3 | ⏳ |
-| T8.2 迁移 Telegram 实现 | `im_channel/telegram` → `channels/telegram` | P3 | ⏳ |
-| T8.3 拆分 SessionDispatcher | `mod.rs` 拆分为 `types.rs`、`worker.rs`、`retry.rs` | P3 | ⏳ |
-| T8.4 删除 legacy message_bus | 删除空壳兼容模块 | P3 | ⏳ |
+| T8.1 迁移 Feishu 实现 | `im_channel/feishu` → `channels/feishu` | P3 | ✅ |
+| T8.2 迁移 Telegram 实现 | `im_channel/telegram` → `channels/telegram` | P3 | ✅ |
+| T8.3 拆分 SessionDispatcher | `mod.rs` 拆分为 `types.rs`、`worker.rs`、`retry.rs` | P3 | ✅ |
+| T8.4 删除 legacy message_bus | 删除空壳兼容模块 | P3 | ✅ |
 | T8.5 清理旧命名 | TokenManager 等旧命名统一到 CredentialsManager 语义 | P3 | ⏳ |
 | T8.6 重命名 SessionDispatcher 架构文档 | `docs/architecture/20-message-bus.md` → `20-session-dispatcher.md`，删除 MessageBus legacy 命名 | P3 | ⏳ |
 
@@ -157,8 +157,8 @@
 | `src-tauri/src/services/message_bus/router.rs` | 已删除 | 无需恢复 |
 | `src-tauri/src/services/message_bus/types.rs` | 已删除 | 核心类型已迁移到 `services::core` |
 | `src-tauri/src/services/acp_client/protocol.rs` | 已删除 | 后续如需协议结构，重新设计为 ACP-native protocol 模块 |
-| `src-tauri/src/services/message_bus/mod.rs` | 待删除 | 当前为空壳兼容模块，待 legacy RouteRule 完全退场后删除 |
-| `src-tauri/src/services/im_channel/` | 待迁移 | 具体渠道实现后续整体迁移到 `channels/feishu` 与 `channels/telegram` |
+| `src-tauri/src/services/message_bus/mod.rs` | 已删除 | 空壳模块，legacy RouteRule 已完全退场 |
+| `src-tauri/src/services/im_channel/` | 已迁移 | 渠道实现已整体迁移到 `channels/feishu` 与 `channels/telegram` |
 
 ## 维护规则
 

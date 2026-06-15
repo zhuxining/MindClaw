@@ -8,7 +8,7 @@
 |------|------|
 | `00-overview.md` | 总体架构、层次边界、核心数据流 |
 | `10-channel-gateway.md` | GatewaySupervisor、Channel gateway、Feishu-first 接入、App 内驻留 |
-| `20-message-bus.md` | SessionDispatcher、EventBus、legacy MessageBus 边界 |
+| `20-message-bus.md` | SessionDispatcher、EventBus |
 | `30-acp-client.md` | ACP-native execution layer、ACP Server registry、Transport / ToolExecutor 边界 |
 | `35-agent-context.md` | Agent Identity、Skill instruction、prompt / context 组装 |
 | `40-agent-skill-command.md` | Agent、Skill、SlashCommand、ConversationExecutionState 控制平面 |

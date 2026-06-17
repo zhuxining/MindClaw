@@ -1,54 +1,62 @@
 import { invoke } from "@tauri-apps/api/core";
 import { CheckCircle, Link, Settings, Unlink, XCircle } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { ChannelDescriptor } from "../lib/types";
 import { useMessageStore } from "../stores/message-store";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import { Input } from "./ui/input";
 
 interface ChannelSettingsProps {
-	channelName: string;
-	displayName: string;
-	credentialType: "feishu" | "telegram";
+	descriptor: ChannelDescriptor;
 }
 
-export default function ChannelSettings({
-	channelName,
-	displayName,
-	credentialType,
-}: ChannelSettingsProps) {
-	const [appId, setAppId] = useState("");
-	const [appSecret, setAppSecret] = useState("");
-	const [botToken, setBotToken] = useState("");
+/** 从 descriptor.credential_schema (JSON Schema) 提取字段定义。 */
+function extractFields(
+	schema: unknown,
+): { key: string; title: string; isPassword: boolean }[] {
+	const obj = schema as Record<string, unknown> | undefined;
+	const props = obj?.properties as
+		| Record<string, { title?: string; format?: string }>
+		| undefined;
+	if (!props) return [];
+	return Object.entries(props).map(([key, meta]) => ({
+		key,
+		title: meta.title ?? key,
+		isPassword: meta.format === "password",
+	}));
+}
+
+export default function ChannelSettings({ descriptor }: ChannelSettingsProps) {
+	const channelStatuses = useMessageStore((s) => s.channelStatuses);
+	const setChannelConnected = useMessageStore((s) => s.setChannelConnected);
+	const connected = channelStatuses[descriptor.id] ?? false;
+
+	const fields = extractFields(descriptor.credential_schema);
+	const [values, setValues] = useState<Record<string, string>>({});
 	const [testing, setTesting] = useState(false);
 	const [saving, setSaving] = useState(false);
-	const {
-		feishuConnected,
-		channelStatuses,
-		pollInterval,
-		setFeishuConnected,
-		setChannelConnected,
-		setPollInterval,
-	} = useMessageStore();
 
-	const connected = channelStatuses[channelName] ?? feishuConnected;
+	useEffect(() => {
+		// 检查已配置凭证
+		invoke<boolean>("get_channel_connection_status", { channel: descriptor.id })
+			.then(setChannelConnected.bind(null, descriptor.id))
+			.catch(() => setChannelConnected(descriptor.id, false));
+	}, [descriptor.id, setChannelConnected]);
 
 	const handleSave = async () => {
 		setSaving(true);
 		try {
-			const credentials =
-				credentialType === "feishu"
-					? { app_id: appId, app_secret: appSecret }
-					: { bot_token: botToken };
-
+			// 构造凭证对象（key 与 schema properties 对应）
+			const credentials: Record<string, string> = {};
+			for (const f of fields) {
+				credentials[f.key] = values[f.key] ?? "";
+			}
 			await invoke("set_channel_credentials", {
-				channel: channelName,
+				channel: descriptor.id,
 				credentials,
 			});
-			setFeishuConnected(true);
-			setChannelConnected(channelName, true);
-			if (credentialType === "feishu") setAppSecret("");
-			else setBotToken("");
+			setChannelConnected(descriptor.id, true);
 		} catch (err) {
 			console.error("保存凭证失败:", err);
 		} finally {
@@ -56,51 +64,35 @@ export default function ChannelSettings({
 		}
 	};
 
-	const canSave =
-		credentialType === "feishu" ? !!(appId && appSecret) : !!botToken;
-
 	const handleTest = async () => {
 		setTesting(true);
 		try {
-			await invoke("test_channel_connection", { channel: channelName });
-			setFeishuConnected(true);
-			setChannelConnected(channelName, true);
+			await invoke("test_channel_connection", { channel: descriptor.id });
+			setChannelConnected(descriptor.id, true);
 		} catch (err) {
 			console.error("测试连接失败:", err);
-			setFeishuConnected(false);
-			setChannelConnected(channelName, false);
+			setChannelConnected(descriptor.id, false);
 		} finally {
 			setTesting(false);
 		}
 	};
 
 	const handleDisconnect = async () => {
-		try {
-			const credentials =
-				credentialType === "feishu"
-					? { app_id: "", app_secret: "" }
-					: { bot_token: "" };
-
-			await invoke("set_channel_credentials", {
-				channel: channelName,
-				credentials,
-			});
-			setFeishuConnected(false);
-			setChannelConnected(channelName, false);
-			setAppId("");
-			setAppSecret("");
-			setBotToken("");
-		} catch (err) {
-			console.error("断开连接失败:", err);
-		}
+		// 清空凭证
+		await invoke("clear_channel_credentials", { channel: descriptor.id });
+		setChannelConnected(descriptor.id, false);
+		setValues({});
 	};
+
+	const canSave = fields.every((f) => values[f.key]);
 
 	return (
 		<div className="flex flex-col h-full">
-			{/* 标题栏 */}
 			<div className="flex items-center gap-2 px-4 py-3 border-b border-border">
 				<Settings className="w-4 h-4" />
-				<span className="text-sm font-medium">{displayName}设置</span>
+				<span className="text-sm font-medium">
+					{descriptor.display_name} 设置
+				</span>
 			</div>
 
 			<div className="flex-1 p-4 space-y-6 overflow-y-auto">
@@ -123,69 +115,41 @@ export default function ChannelSettings({
 					</div>
 				</Card>
 
-				{/* 凭证配置 */}
+				{/* 凭证配置（由 credential_schema 动态渲染） */}
 				<Card className="p-4 space-y-4">
-					<h3 className="text-sm font-medium">{displayName}应用凭证</h3>
-					{credentialType === "feishu" ? (
-						<>
-							<p className="text-xs text-muted-foreground">
-								在{displayName}开放平台创建应用后，获取 App ID 和 App Secret。
-								凭证将安全存储在本地。
-							</p>
-							<div className="space-y-3">
-								<div className="space-y-1.5">
-									<label htmlFor={`${channelName}-app-id`} className="text-sm">
-										App ID
-									</label>
-									<Input
-										id={`${channelName}-app-id`}
-										type="text"
-										placeholder={`输入${displayName} App ID`}
-										value={appId}
-										onChange={(e) => setAppId(e.target.value)}
-									/>
-								</div>
-								<div className="space-y-1.5">
-									<label
-										htmlFor={`${channelName}-app-secret`}
-										className="text-sm"
-									>
-										App Secret
-									</label>
-									<Input
-										id={`${channelName}-app-secret`}
-										type="password"
-										placeholder={`输入${displayName} App Secret`}
-										value={appSecret}
-										onChange={(e) => setAppSecret(e.target.value)}
-									/>
-								</div>
+					<h3 className="text-sm font-medium">
+						{descriptor.display_name} 凭证
+					</h3>
+					<p className="text-xs text-muted-foreground">
+						凭证将安全存储在本地。入口模式：
+						{descriptor.inbound === "long_connection"
+							? "长连接"
+							: descriptor.inbound === "long_polling"
+								? "长轮询"
+								: descriptor.inbound}
+						。{descriptor.capabilities.streaming && " · 支持流式输出"}
+					</p>
+					<div className="space-y-3">
+						{fields.map((f) => (
+							<div key={f.key} className="space-y-1.5">
+								<label
+									htmlFor={`${descriptor.id}-${f.key}`}
+									className="text-sm"
+								>
+									{f.title}
+								</label>
+								<Input
+									id={`${descriptor.id}-${f.key}`}
+									type={f.isPassword ? "password" : "text"}
+									placeholder={`输入 ${f.title}`}
+									value={values[f.key] ?? ""}
+									onChange={(e) =>
+										setValues((v) => ({ ...v, [f.key]: e.target.value }))
+									}
+								/>
 							</div>
-						</>
-					) : (
-						<>
-							<p className="text-xs text-muted-foreground">
-								在 @BotFather 创建 Bot 后获取 Token。凭证将安全存储在本地。
-							</p>
-							<div className="space-y-3">
-								<div className="space-y-1.5">
-									<label
-										htmlFor={`${channelName}-bot-token`}
-										className="text-sm"
-									>
-										Bot Token
-									</label>
-									<Input
-										id={`${channelName}-bot-token`}
-										type="password"
-										placeholder="输入 Telegram Bot Token"
-										value={botToken}
-										onChange={(e) => setBotToken(e.target.value)}
-									/>
-								</div>
-							</div>
-						</>
-					)}
+						))}
+					</div>
 
 					<div className="flex gap-2">
 						<Button
@@ -208,26 +172,6 @@ export default function ChannelSettings({
 								<Unlink className="w-4 h-4" />
 							</Button>
 						)}
-					</div>
-				</Card>
-
-				{/* 轮询设置 */}
-				<Card className="p-4 space-y-3">
-					<h3 className="text-sm font-medium">消息轮询</h3>
-					<div className="flex items-center justify-between">
-						<span className="text-sm text-muted-foreground">轮询间隔</span>
-						<div className="flex items-center gap-2">
-							<input
-								type="range"
-								min="10"
-								max="300"
-								step="10"
-								value={pollInterval}
-								onChange={(e) => setPollInterval(Number(e.target.value))}
-								className="w-32"
-							/>
-							<span className="text-sm w-16 text-right">{pollInterval} 秒</span>
-						</div>
 					</div>
 				</Card>
 			</div>

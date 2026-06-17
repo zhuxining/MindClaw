@@ -3,7 +3,9 @@ import type {
 	AcpServer,
 	Agent,
 	AgentResponse,
+	ChannelDescriptor,
 	ChannelMessage,
+	ChannelStatus,
 	ConversationExecutionState,
 	Skill,
 	SlashCommand,
@@ -17,11 +19,10 @@ interface MessageState {
 	skills: Skill[];
 	slashCommands: SlashCommand[];
 	conversationStates: Record<string, ConversationExecutionState>;
-	feishuConnected: boolean;
+	channelDescriptors: ChannelDescriptor[];
 	channelStatuses: Record<string, boolean>;
-	isPolling: boolean;
-	pollInterval: number;
-	autoReply: boolean;
+	runtimeStatuses: Record<string, ChannelStatus>;
+	feishuConnected: boolean;
 
 	setMessages: (messages: ChannelMessage[]) => void;
 	addMessages: (messages: ChannelMessage[]) => void;
@@ -31,19 +32,19 @@ interface MessageState {
 	setSkills: (skills: Skill[]) => void;
 	setSlashCommands: (commands: SlashCommand[]) => void;
 	setConversationState: (state: ConversationExecutionState) => void;
-	setFeishuConnected: (connected: boolean) => void;
+	setChannelDescriptors: (descriptors: ChannelDescriptor[]) => void;
 	setChannelConnected: (channel: string, connected: boolean) => void;
-	setPolling: (polling: boolean) => void;
-	setPollInterval: (interval: number) => void;
-	setAutoReply: (autoReply: boolean) => void;
+	setRuntimeStatuses: (statuses: ChannelStatus[]) => void;
+	setFeishuConnected: (connected: boolean) => void;
 	clearMessages: () => void;
+	connected: (channel: string) => boolean;
 }
 
 function conversationKey(state: ConversationExecutionState): string {
 	return `${state.key.channel}:${state.key.conversation_id}`;
 }
 
-export const useMessageStore = create<MessageState>((set) => ({
+export const useMessageStore = create<MessageState>((set, get) => ({
 	messages: [],
 	processingResults: {},
 	acpServers: [],
@@ -51,11 +52,10 @@ export const useMessageStore = create<MessageState>((set) => ({
 	skills: [],
 	slashCommands: [],
 	conversationStates: {},
-	feishuConnected: false,
+	channelDescriptors: [],
 	channelStatuses: {},
-	isPolling: false,
-	pollInterval: 30,
-	autoReply: true,
+	runtimeStatuses: {},
+	feishuConnected: false,
 
 	setMessages: (messages) => set({ messages }),
 	addMessages: (newMessages) =>
@@ -93,8 +93,14 @@ export const useMessageStore = create<MessageState>((set) => ({
 		set((state) => ({
 			channelStatuses: { ...state.channelStatuses, [channel]: connected },
 		})),
-	setPolling: (isPolling) => set({ isPolling }),
-	setPollInterval: (pollInterval) => set({ pollInterval }),
-	setAutoReply: (autoReply) => set({ autoReply }),
+	setChannelDescriptors: (channelDescriptors) => set({ channelDescriptors }),
+	setRuntimeStatuses: (runtimeStatuses) =>
+		set({
+			runtimeStatuses: Object.fromEntries(
+				runtimeStatuses.map((s) => [s.channel, s]),
+			),
+		}),
+	connected: (channel) =>
+		get().channelStatuses[channel] ?? get().feishuConnected,
 	clearMessages: () => set({ messages: [], processingResults: {} }),
 }));

@@ -7,6 +7,16 @@ use serde::{Deserialize, Serialize};
 pub enum RuntimeEvent {
     RuntimeStarted,
     RuntimeStopped,
+    ChannelStarted {
+        channel: String,
+    },
+    ChannelStopped {
+        channel: String,
+    },
+    ChannelReconnecting {
+        channel: String,
+        reason: String,
+    },
     ChannelPollStarted {
         channel: String,
     },

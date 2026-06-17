@@ -123,3 +123,33 @@ export interface AppConfig {
 	slash_commands: SlashCommand[];
 	default_agent_id: string;
 }
+
+// ── 渠道运行时类型 ───────────────────────────────────────────
+
+export type InboundKind =
+	| "long_connection"
+	| "long_polling"
+	| "polling"
+	| "webhook"
+	| "manual";
+
+export interface Capabilities {
+	streaming: boolean;
+	reasoning: boolean;
+	file_edit: boolean;
+	reply: boolean;
+}
+
+export interface ChannelDescriptor {
+	id: string;
+	display_name: string;
+	inbound: InboundKind;
+	credential_schema: unknown;
+	capabilities: Capabilities;
+}
+
+export interface ChannelStatus {
+	channel: string;
+	running: boolean;
+	last_error: string | null;
+}

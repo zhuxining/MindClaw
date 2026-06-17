@@ -1,21 +1,32 @@
+import { invoke } from "@tauri-apps/api/core";
 import { Menu, MessageSquare, Package, Settings } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AcpRegistry from "./components/AcpRegistry";
 import ChannelSettings from "./components/ChannelSettings";
 import MessageList from "./components/MessageList";
 import { Button } from "./components/ui/button";
+import type { ChannelDescriptor } from "./lib/types";
+import { useMessageStore } from "./stores/message-store";
 import "./App.css";
 
 type Tab = "messages" | "registry" | "settings";
-type ChannelTab = "feishu" | "telegram";
 
 export default function App() {
 	const [activeTab, setActiveTab] = useState<Tab>("messages");
-	const [channelTab, setChannelTab] = useState<ChannelTab>("feishu");
+	const [channelTabId, setChannelTabId] = useState<string>("feishu");
+	const descriptors = useMessageStore((s) => s.channelDescriptors);
+	const setDescriptors = useMessageStore((s) => s.setChannelDescriptors);
+
+	useEffect(() => {
+		invoke<ChannelDescriptor[]>("list_channel_descriptors")
+			.then(setDescriptors)
+			.catch(console.error);
+	}, [setDescriptors]);
+
+	const currentDescriptor = descriptors.find((d) => d.id === channelTabId);
 
 	return (
 		<div className="flex flex-col h-screen bg-background">
-			{/* 自定义标题栏（透明标题栏模式） */}
 			<div
 				data-tauri-drag-region
 				className="flex items-center justify-between h-10 px-4 border-b border-border select-none"
@@ -52,7 +63,6 @@ export default function App() {
 				</div>
 			</div>
 
-			{/* 主内容区 */}
 			<div className="flex-1 overflow-hidden">
 				{activeTab === "messages" ? (
 					<MessageList />
@@ -60,43 +70,24 @@ export default function App() {
 					<AcpRegistry />
 				) : (
 					<div className="flex flex-col h-full">
-						{/* 渠道切换标签 */}
 						<div className="flex border-b border-border px-4 py-2 gap-1">
-							<Button
-								variant={channelTab === "feishu" ? "secondary" : "ghost"}
-								size="sm"
-								onClick={() => setChannelTab("feishu")}
-							>
-								<img
-									src="/feishu.svg"
-									alt="飞书"
-									className="w-4 h-4 mr-1"
-									onError={(e) => {
-										(e.target as HTMLImageElement).style.display = "none";
-									}}
-								/>
-								飞书
-							</Button>
-							<Button
-								variant={channelTab === "telegram" ? "secondary" : "ghost"}
-								size="sm"
-								onClick={() => setChannelTab("telegram")}
-							>
-								电报
-							</Button>
+							{descriptors.map((desc) => (
+								<Button
+									key={desc.id}
+									variant={channelTabId === desc.id ? "secondary" : "ghost"}
+									size="sm"
+									onClick={() => setChannelTabId(desc.id)}
+								>
+									{desc.display_name}
+								</Button>
+							))}
 						</div>
-						{channelTab === "feishu" ? (
-							<ChannelSettings
-								channelName="feishu"
-								displayName="飞书"
-								credentialType="feishu"
-							/>
+						{currentDescriptor ? (
+							<ChannelSettings descriptor={currentDescriptor} />
 						) : (
-							<ChannelSettings
-								channelName="telegram"
-								displayName="Telegram"
-								credentialType="telegram"
-							/>
+							<div className="flex items-center justify-center h-full text-muted-foreground">
+								暂无可用渠道
+							</div>
 						)}
 					</div>
 				)}

@@ -1,151 +1,148 @@
-use crate::error::AppError;
-use crate::services::channels::CredentialsManager;
+//! 飞书凭证与 tenant_access_token 管理（async，凭证经 SecretStore 持久化）。
+
+use crate::services::core::{credential_key, SecretStore};
 use crate::services::gateway::GatewayError;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Token 管理器：负责飞书 tenant_access_token 的获取和缓存
-pub struct TokenManager {
-    app_id: RwLock<Option<String>>,
-    app_secret: RwLock<Option<String>>,
-    token: RwLock<Option<CachedToken>>,
-    http_client: reqwest::Client,
-}
+const TOKEN_API: &str = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
+/// 提前刷新余量（秒）。
+const REFRESH_SKEW_SECS: i64 = 300;
+/// 飞书 token 无效业务码。
+pub const INVALID_TOKEN_CODE: i64 = 99_991_663;
 
 #[derive(Debug, Clone)]
 struct CachedToken {
     value: String,
-    expires_at: i64, // Unix timestamp
+    expires_at: i64,
 }
 
-/// 飞书获取 token 的 API 响应
 #[derive(Debug, serde::Deserialize)]
-struct FeishuTokenResponse {
+struct TokenResponse {
     code: i32,
+    #[serde(default)]
     msg: Option<String>,
     #[serde(rename = "tenant_access_token")]
     tenant_access_token: Option<String>,
+    #[serde(default)]
     expire: Option<i64>,
 }
 
-impl TokenManager {
-    pub fn new() -> Self {
+/// 飞书凭证 + token 缓存。
+pub struct FeishuCredentials {
+    app_id: RwLock<Option<String>>,
+    app_secret: RwLock<Option<String>>,
+    token: RwLock<Option<CachedToken>>,
+    http: reqwest::Client,
+}
+
+impl FeishuCredentials {
+    pub fn new(http: reqwest::Client) -> Self {
         Self {
             app_id: RwLock::new(None),
             app_secret: RwLock::new(None),
             token: RwLock::new(None),
-            http_client: reqwest::Client::new(),
+            http,
         }
     }
 
-    /// 设置飞书应用凭证
-    pub async fn set_credentials(&self, app_id: String, app_secret: String) {
-        let mut id = self.app_id.write().await;
-        *id = Some(app_id);
-        let mut secret = self.app_secret.write().await;
-        *secret = Some(app_secret);
-        // 清除旧 token 强制刷新
-        let mut token = self.token.write().await;
-        *token = None;
+    /// 从 SecretStore 载入凭证到内存（start 时调用）。
+    pub async fn load(&self, store: &dyn SecretStore) -> Result<(), GatewayError> {
+        if let Some(creds) = store.get_json(&credential_key("feishu")).await? {
+            let app_id = creds["app_id"].as_str().map(|s| s.to_string());
+            let app_secret = creds["app_secret"].as_str().map(|s| s.to_string());
+            *self.app_id.write().await = app_id.filter(|s| !s.is_empty());
+            *self.app_secret.write().await = app_secret.filter(|s| !s.is_empty());
+            *self.token.write().await = None;
+        }
+        Ok(())
     }
 
-    /// 清除凭证
-    #[allow(dead_code)]
-    pub async fn clear_credentials(&self) {
-        let mut id = self.app_id.write().await;
-        *id = None;
-        let mut secret = self.app_secret.write().await;
-        *secret = None;
-        let mut token = self.token.write().await;
-        *token = None;
+    pub async fn app_id(&self) -> Option<String> {
+        self.app_id.read().await.clone()
     }
 
-    /// 检查是否已配置凭证
+    pub async fn app_secret(&self) -> Option<String> {
+        self.app_secret.read().await.clone()
+    }
+
     pub async fn has_credentials(&self) -> bool {
         self.app_id.read().await.is_some() && self.app_secret.read().await.is_some()
     }
 
-    /// 获取有效的 access token（自动刷新）
-    pub async fn get_token(&self) -> Result<String, AppError> {
-        // 检查缓存的 token 是否有效
+    /// 获取有效 tenant_access_token（自动刷新）。
+    pub async fn get_token(&self) -> Result<String, GatewayError> {
         {
             let cached = self.token.read().await;
-            if let Some(ref ct) = *cached {
+            if let Some(ct) = cached.as_ref() {
                 let now = chrono::Utc::now().timestamp();
-                // 提前 5 分钟刷新
-                if ct.expires_at - now > 300 {
+                if ct.expires_at - now > REFRESH_SKEW_SECS {
                     return Ok(ct.value.clone());
                 }
             }
         }
-
-        // 需要刷新 token
         self.refresh_token().await
     }
 
-    async fn refresh_token(&self) -> Result<String, AppError> {
+    /// 作废缓存 token（API 报无效时调用，强制下次刷新）。
+    pub async fn invalidate(&self) {
+        *self.token.write().await = None;
+    }
+
+    async fn refresh_token(&self) -> Result<String, GatewayError> {
         let app_id = self
             .app_id
             .read()
             .await
             .clone()
-            .ok_or_else(|| AppError::Unauthorized("未配置飞书 App ID".into()))?;
-
+            .ok_or(GatewayError::Unauthorized)?;
         let app_secret = self
             .app_secret
             .read()
             .await
             .clone()
-            .ok_or_else(|| AppError::Unauthorized("未配置飞书 App Secret".into()))?;
+            .ok_or(GatewayError::Unauthorized)?;
 
         let resp = self
-            .http_client
-            .post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal")
-            .json(&serde_json::json!({
-                "app_id": app_id,
-                "app_secret": app_secret,
-            }))
+            .http
+            .post(TOKEN_API)
+            .json(&serde_json::json!({ "app_id": app_id, "app_secret": app_secret }))
             .send()
             .await
-            .map_err(|e| AppError::FeishuGateway(format!("获取 token 网络错误: {}", e)))?;
+            .map_err(|_| GatewayError::Network("获取 token 网络错误: 请求失败".into()))?;
 
-        let body: FeishuTokenResponse = resp
+        let body: TokenResponse = resp
             .json()
             .await
-            .map_err(|e| AppError::FeishuGateway(format!("解析 token 响应失败: {}", e)))?;
+            .map_err(|e| GatewayError::Network(format!("解析 token 响应失败: {e}")))?;
 
         if body.code != 0 {
-            return Err(AppError::FeishuGateway(format!(
-                "获取 token 失败: {}",
-                body.msg.as_deref().unwrap_or("未知错误")
-            )));
+            return Err(GatewayError::InvalidCredentials(
+                body.msg.unwrap_or_else(|| "获取 token 失败".into()),
+            ));
         }
 
-        let token_value = body
+        let value = body
             .tenant_access_token
-            .ok_or_else(|| AppError::FeishuGateway("token 响应中无 access_token".into()))?;
-
+            .ok_or_else(|| GatewayError::Network("token 响应中无 access_token".into()))?;
         let expires_in = body.expire.unwrap_or(7200);
         let expires_at = chrono::Utc::now().timestamp() + expires_in;
 
-        let mut cached = self.token.write().await;
-        *cached = Some(CachedToken {
-            value: token_value.clone(),
+        *self.token.write().await = Some(CachedToken {
+            value: value.clone(),
             expires_at,
         });
-
-        Ok(token_value)
-    }
-
-    /// 测试连接：尝试获取 token 验证凭证有效性
-    pub async fn test_connection(&self) -> Result<(), AppError> {
-        self.refresh_token().await.map(|_| ())
+        Ok(value)
     }
 }
 
-// ── CredentialsManager trait impl ────────────────────────────
-
-impl CredentialsManager for TokenManager {
-    fn set_credentials(&self, credentials: serde_json::Value) -> Result<(), GatewayError> {
+#[async_trait::async_trait]
+impl crate::services::channels::CredentialsManager for FeishuCredentials {
+    async fn set_credentials(
+        &self,
+        credentials: serde_json::Value,
+        store: &dyn SecretStore,
+    ) -> Result<(), GatewayError> {
         let app_id = credentials["app_id"]
             .as_str()
             .ok_or_else(|| GatewayError::InvalidCredentials("缺少 app_id".into()))?
@@ -155,45 +152,47 @@ impl CredentialsManager for TokenManager {
             .ok_or_else(|| GatewayError::InvalidCredentials("缺少 app_secret".into()))?
             .to_string();
 
-        // Use block_on because trait methods are not async
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.set_credentials(app_id, app_secret).await;
-            })
-        });
+        store
+            .put_json(&credential_key("feishu"), &credentials)
+            .await?;
+
+        *self.app_id.write().await = Some(app_id);
+        *self.app_secret.write().await = Some(app_secret);
+        *self.token.write().await = None;
         Ok(())
     }
 
-    fn clear_credentials(&self) -> Result<(), GatewayError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.clear_credentials().await;
-            })
-        });
+    async fn clear_credentials(&self, store: &dyn SecretStore) -> Result<(), GatewayError> {
+        store.delete(&credential_key("feishu")).await?;
+        *self.app_id.write().await = None;
+        *self.app_secret.write().await = None;
+        *self.token.write().await = None;
         Ok(())
     }
 
-    fn has_credentials(&self) -> bool {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async { self.has_credentials().await })
-        })
+    async fn has_credentials(&self, store: &dyn SecretStore) -> bool {
+        store
+            .get_json(&credential_key("feishu"))
+            .await
+            .ok()
+            .flatten()
+            .map(|c| {
+                c.get("app_id").and_then(|v| v.as_str()).is_some()
+                    && c.get("app_secret").and_then(|v| v.as_str()).is_some()
+            })
+            .unwrap_or(false)
     }
 
-    fn test_connection(&self) -> Result<(), GatewayError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.test_connection().await.map_err(|e| match e {
-                    AppError::Unauthorized(_msg) => GatewayError::Unauthorized,
-                    AppError::FeishuGateway(msg) => GatewayError::Network(msg),
-                    other => GatewayError::Network(other.to_string()),
-                })
-            })
-        })
+    async fn test_connection(&self) -> Result<(), GatewayError> {
+        self.refresh_token().await.map(|_| ())
     }
 }
 
-impl Default for TokenManager {
-    fn default() -> Self {
-        Self::new()
-    }
+/// 共享凭证别名。
+#[allow(dead_code)]
+pub type TokenManager = FeishuCredentials;
+
+#[allow(dead_code)]
+pub fn arc(http: reqwest::Client) -> Arc<FeishuCredentials> {
+    Arc::new(FeishuCredentials::new(http))
 }

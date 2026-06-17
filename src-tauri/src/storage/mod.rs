@@ -64,6 +64,7 @@ impl MessageStore {
     }
 
     /// 批量过滤并标记新消息。
+    #[allow(dead_code)]
     pub fn filter_new_messages(&self, messages: Vec<ChannelMessage>) -> Vec<ChannelMessage> {
         if let Some(database) = &self.database {
             return filter_new_messages_in_database(&mut database.lock().unwrap(), messages);
@@ -134,6 +135,7 @@ fn check_and_mark_seen_in_database(connection: &Connection, message_id: &str) ->
         .unwrap_or(false)
 }
 
+#[allow(dead_code)]
 fn filter_new_messages_in_database(
     connection: &mut Connection,
     messages: Vec<ChannelMessage>,

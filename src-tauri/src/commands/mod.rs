@@ -2,7 +2,8 @@ use crate::config::AppConfig;
 use crate::error::AppError;
 use crate::services::acp_client::{AcpServer, AcpServerStatus};
 use crate::services::agent::{Agent, ConversationExecutionState, Skill, SlashCommand};
-use crate::services::core::{AgentResponse, ChannelMessage};
+use crate::services::channels::{manager::ChannelStatus, ChannelDescriptor};
+use crate::services::core::ChannelMessage;
 use crate::services::gateway::GatewaySupervisor;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,11 +29,10 @@ impl AppState {
         {
             Some(gateway) => gateway,
             None => {
-                eprintln!("ConversationExecutionState 持久化初始化失败，回退到内存存储");
+                eprintln!("持久化初始化失败，回退到内存存储");
                 GatewaySupervisor::new(config)
             }
         };
-
         Self {
             gateway: Arc::new(gateway),
         }
@@ -74,23 +74,44 @@ pub async fn get_channel_connection_status(
 }
 
 #[tauri::command]
-pub async fn list_channels(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, AppError> {
-    Ok(state.gateway.list_channels().await)
+pub fn clear_channel_credentials(
+    channel: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), AppError> {
+    let _ = channel;
+    let _ = state;
+    // CredentialsManager::clear_credentials 在渠道内处理；前端应发空凭证触发。
+    // 此命令为语义占位。
+    Ok(())
+}
+
+// ── 渠道描述符与状态 ──────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_channel_descriptors(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ChannelDescriptor>, AppError> {
+    Ok(state
+        .gateway
+        .list_channel_descriptors()
+        .into_iter()
+        .cloned()
+        .collect())
+}
+
+#[tauri::command]
+pub fn list_channels(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, AppError> {
+    Ok(state.gateway.list_channels())
+}
+
+#[tauri::command]
+pub async fn get_channels_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ChannelStatus>, AppError> {
+    Ok(state.gateway.channels_status().await)
 }
 
 // ── 消息 ────────────────────────────────────────────────────────
-
-#[tauri::command]
-pub async fn poll_channel_messages(
-    channel: String,
-    page_token: Option<String>,
-    state: State<'_, Arc<AppState>>,
-) -> Result<Vec<ChannelMessage>, AppError> {
-    state
-        .gateway
-        .poll_channel_messages(&channel, page_token)
-        .await
-}
 
 #[tauri::command]
 pub fn get_messages(
@@ -104,14 +125,6 @@ pub fn get_messages(
 pub fn clear_messages(state: State<'_, Arc<AppState>>) -> Result<(), AppError> {
     state.gateway.clear_messages();
     Ok(())
-}
-
-#[tauri::command]
-pub async fn process_message(
-    message: ChannelMessage,
-    state: State<'_, Arc<AppState>>,
-) -> Result<AgentResponse, AppError> {
-    state.gateway.dispatch_message(message).await
 }
 
 // ── ACP Server ─────────────────────────────────────────────────
@@ -185,17 +198,14 @@ pub async fn install_acp_agent(
 ) -> Result<(), AppError> {
     use crate::services::acp_client::server::{validate_npm_package, EnvVar};
 
-    // 将 RegistryAgent 转换为 AcpServer
     let distribution = registry_agent.distribution;
 
-    // 优先使用 npx 分发方式
     let (command, args, env_vars) = if let Some(npx) = distribution.get("npx") {
         let package = npx
             .get("package")
             .and_then(|v| v.as_str())
             .ok_or_else(|| AppError::Config("ACP Agent npx package 不存在".into()))?;
 
-        // 严格验证 npm 包名，防止包名注入
         validate_npm_package(package)?;
 
         let args_from_registry = npx
@@ -207,7 +217,6 @@ pub async fn install_acp_agent(
             .filter_map(|v| v.as_str().map(ToString::to_string))
             .collect::<Vec<_>>();
 
-        // 仅允许特定的 ACP 相关环境变量
         let env_from_registry = npx
             .get("env")
             .and_then(|v| v.as_object())
@@ -215,7 +224,6 @@ pub async fn install_acp_agent(
             .unwrap_or_default()
             .into_iter()
             .filter_map(|(k, v)| {
-                // 仅允许以 ACP_ 开头的环境变量
                 if k.starts_with("ACP_") {
                     v.as_str().map(|s| EnvVar {
                         name: k,
@@ -232,7 +240,6 @@ pub async fn install_acp_agent(
 
         ("npx".to_string(), final_args, env_from_registry)
     } else if distribution.get("binary").is_some() {
-        // 对于 binary 分发方式，提示用户需要手动安装
         return Err(AppError::Config(
             "Binary 分发方式需要手动安装，请参考项目文档。".into(),
         ));
@@ -330,13 +337,4 @@ pub fn get_conversation_execution_state(
 #[tauri::command]
 pub fn get_config(state: State<'_, Arc<AppState>>) -> Result<AppConfig, AppError> {
     Ok(state.gateway.get_config())
-}
-
-#[tauri::command]
-pub fn update_feishu_poll_interval(
-    interval_secs: u64,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), AppError> {
-    state.gateway.update_feishu_poll_interval(interval_secs);
-    Ok(())
 }

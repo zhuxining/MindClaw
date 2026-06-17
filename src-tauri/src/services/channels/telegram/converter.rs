@@ -1,19 +1,9 @@
-use crate::services::core::ChannelMessage;
+//! Telegram Update JSON → InboundMessage 归一化。
 
-/// 将 Telegram Update JSON 转换为统一 ChannelMessage
-///
-/// Telegram getUpdates 返回的 Update 结构：
-/// {
-///   "update_id": 123,
-///   "message": {
-///     "message_id": 456,
-///     "from": { "id": 789, "first_name": "John", "username": "johndoe" },
-///     "chat": { "id": -100123, "title": "Group", "type": "group" },
-///     "text": "Hello",
-///     "date": 1680000000
-///   }
-/// }
-pub fn convert_telegram_update(update: &serde_json::Value) -> Option<ChannelMessage> {
+use crate::services::core::InboundMessage;
+
+/// 从 getUpdates 的一项构造 InboundMessage。
+pub fn to_inbound(update: &serde_json::Value) -> Option<InboundMessage> {
     let update_id = update.get("update_id")?.as_i64()?;
     let msg = update.get("message")?;
     let message_id = msg.get("message_id")?.as_i64()?;
@@ -37,15 +27,17 @@ pub fn convert_telegram_update(update: &serde_json::Value) -> Option<ChannelMess
         .to_string();
     let timestamp = msg.get("date").and_then(|v| v.as_i64()).unwrap_or(0);
 
-    Some(ChannelMessage {
-        message_id: format!("tg_{}_{}", update_id, message_id),
+    Some(InboundMessage {
         channel: "telegram".to_string(),
-        conversation_id: chat_id,
         sender_id,
-        sender_name,
+        chat_id,
         content,
-        timestamp,
-        is_reply: false,
-        reply_to: None,
+        media: Vec::new(),
+        metadata: serde_json::json!({
+            "message_id": format!("tg_{update_id}_{message_id}"),
+            "sender_name": sender_name,
+            "timestamp": timestamp,
+        }),
+        session_key_override: None,
     })
 }

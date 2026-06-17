@@ -9,6 +9,7 @@ pub enum AppError {
 
     /// 飞书网关错误（deprecated，保留向后兼容）
     #[error("飞书网关错误: {0}")]
+    #[allow(dead_code)]
     FeishuGateway(String),
 
     /// 消息路由错误（v2 路由时使用）
@@ -33,6 +34,7 @@ pub enum AppError {
     Config(String),
 
     #[error("未授权: {0}")]
+    #[allow(dead_code)]
     Unauthorized(String),
 
     /// 内部错误（v2 集成错误处理时使用）

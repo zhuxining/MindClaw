@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod error;
+mod secret_store;
 mod services;
 mod storage;
 
@@ -100,16 +101,18 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            // 泛化渠道命令（新）
+            // 渠道凭证
             commands::set_channel_credentials,
             commands::test_channel_connection,
             commands::get_channel_connection_status,
+            commands::clear_channel_credentials,
+            // 渠道描述符与状态
+            commands::list_channel_descriptors,
             commands::list_channels,
-            commands::poll_channel_messages,
-            // 消息管理
+            commands::get_channels_status,
+            // 消息
             commands::get_messages,
             commands::clear_messages,
-            commands::process_message,
             // ACP Server
             commands::list_acp_servers,
             commands::save_acp_server,
@@ -128,7 +131,6 @@ pub fn run() {
             commands::get_conversation_execution_state,
             // 配置
             commands::get_config,
-            commands::update_feishu_poll_interval,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

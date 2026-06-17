@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { MessageSquare, RefreshCw, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback } from "react";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { ScrollArea } from "../components/ui/scroll-area";
@@ -15,89 +15,45 @@ function formatTime(timestamp: number): string {
 	});
 }
 
-function formatDate(timestamp: number): string {
-	const date = new Date(timestamp * 1000);
-	const now = new Date();
-	const diff = now.getTime() - date.getTime();
-	if (diff < 86400000) {
-		return "今天";
-	}
-	if (diff < 172800000) {
-		return "昨天";
-	}
-	return date.toLocaleDateString("zh-CN");
-}
-
 export default function MessageList() {
-	const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 	const {
 		messages,
 		processingResults,
-		isPolling,
-		pollInterval,
+		channelStatuses,
 		feishuConnected,
 		addMessages,
-		setPolling,
 		clearMessages,
 	} = useMessageStore();
+	const anyConnected =
+		Object.values(channelStatuses).some((v) => v) || feishuConnected;
 
-	const pollMessages = useCallback(async () => {
-		if (!feishuConnected) return;
+	const refreshMessages = useCallback(async () => {
 		try {
-			setPolling(true);
-			const newMessages = await invoke<ChannelMessage[]>(
-				"poll_channel_messages",
-				{
-					channel: "feishu",
-					pageToken: null,
-				},
-			);
-			if (newMessages.length > 0) {
-				addMessages(newMessages);
-			}
+			const msgs = await invoke<ChannelMessage[]>("get_messages", {});
+			addMessages(msgs);
 		} catch (err) {
-			console.error("轮询消息失败:", err);
-		} finally {
-			setPolling(false);
+			console.error("刷新消息失败:", err);
 		}
-	}, [feishuConnected, addMessages, setPolling]);
-
-	useEffect(() => {
-		if (feishuConnected) {
-			pollMessages();
-			pollIntervalRef.current = setInterval(pollMessages, pollInterval * 1000);
-		}
-		return () => {
-			if (pollIntervalRef.current) {
-				clearInterval(pollIntervalRef.current);
-			}
-		};
-	}, [feishuConnected, pollInterval, pollMessages]);
+	}, [addMessages]);
 
 	return (
 		<div className="flex flex-col h-full">
-			{/* 工具栏 */}
 			<div className="flex items-center justify-between px-4 py-3 border-b border-border">
 				<div className="flex items-center gap-2">
 					<MessageSquare className="w-4 h-4" />
 					<span className="text-sm font-medium">消息流</span>
-					{isPolling && (
-						<span className="text-xs text-muted-foreground animate-pulse">
-							轮询中...
-						</span>
-					)}
+					<span className="text-xs text-muted-foreground">
+						（后端运行时驱动，点击刷新查看历史）
+					</span>
 				</div>
 				<div className="flex items-center gap-1">
 					<Button
 						variant="ghost"
 						size="icon"
-						onClick={pollMessages}
-						disabled={!feishuConnected || isPolling}
-						title="刷新消息"
+						onClick={refreshMessages}
+						title="刷新"
 					>
-						<RefreshCw
-							className={`w-4 h-4 ${isPolling ? "animate-spin" : ""}`}
-						/>
+						<RefreshCw className="w-4 h-4" />
 					</Button>
 					<Button
 						variant="ghost"
@@ -111,15 +67,14 @@ export default function MessageList() {
 				</div>
 			</div>
 
-			{/* 消息列表 */}
 			<ScrollArea className="flex-1">
 				{messages.length === 0 ? (
 					<div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 p-8">
 						<MessageSquare className="w-12 h-12 opacity-20" />
 						<p className="text-sm">
-							{feishuConnected
-								? "暂无消息，等待飞书新消息..."
-								: "请先在设置中配置飞书连接"}
+							{anyConnected
+								? "暂无消息。渠道运行时正在监听，新消息将自动出现在此处。"
+								: "请先在设置中配置渠道连接"}
 						</p>
 					</div>
 				) : (
@@ -150,7 +105,6 @@ function MessageCard({
 }) {
 	return (
 		<Card className="p-3 space-y-2">
-			{/* 消息头 */}
 			<div className="flex items-center justify-between">
 				<div className="flex items-center gap-2">
 					<span className="text-sm font-medium">{message.sender_name}</span>
@@ -160,20 +114,16 @@ function MessageCard({
 				</div>
 				<div className="flex items-center gap-2">
 					<span className="text-xs text-muted-foreground">
-						{formatDate(message.timestamp)} {formatTime(message.timestamp)}
+						{formatTime(message.timestamp)}
 					</span>
 					{agentResult && <StatusBadge status={agentResult.status} />}
 				</div>
 			</div>
-
-			{/* 消息内容 */}
 			<p className="text-sm whitespace-pre-wrap">{message.content}</p>
-
-			{/* Agent 处理结果 */}
 			{agentResult && (
 				<div className="mt-2 p-2 rounded-md bg-muted/50 border border-border">
 					<div className="flex items-center gap-2 mb-1">
-						<span className="text-xs font-medium">Agent 处理结果</span>
+						<span className="text-xs font-medium">Agent 回复</span>
 						<StatusBadge status={agentResult.status} />
 					</div>
 					{agentResult.status === "success" && agentResult.output && (

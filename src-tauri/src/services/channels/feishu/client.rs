@@ -1,251 +1,217 @@
-use super::converter::{convert_feishu_message, FeishuMessageListResponse};
-use super::token::TokenManager;
-use crate::error::AppError;
-use crate::services::channels::{Channel, CredentialsManager};
-use crate::services::core::ChannelMessage;
+//! 飞书 REST API 客户端：token、WS endpoint、发送/更新卡片消息。
+
+use super::token::FeishuCredentials;
 use crate::services::gateway::GatewayError;
-use std::sync::Arc;
 
-/// 飞书 API 基础 URL
 const FEISHU_API_BASE: &str = "https://open.feishu.cn/open-apis";
+const FEISHU_WS_BASE: &str = "https://open.feishu.cn";
 
-/// 飞书 Gateway 客户端
-pub struct FeishuClient {
-    http_client: reqwest::Client,
-    token_manager: Arc<TokenManager>,
+/// 卡片 markdown 内容上限（~30KB 限制留余量）。
+pub const CARD_MARKDOWN_MAX_BYTES: usize = 28_000;
+
+/// POST /callback/ws/endpoint 响应。
+#[derive(Debug, serde::Deserialize)]
+struct WsEndpointResp {
+    code: i32,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
+    data: Option<WsEndpoint>,
 }
 
-impl FeishuClient {
-    pub fn new(token_manager: Arc<TokenManager>) -> Self {
-        Self {
-            http_client: reqwest::Client::new(),
-            token_manager,
-        }
+#[derive(Debug, serde::Deserialize)]
+struct WsEndpoint {
+    #[serde(rename = "URL")]
+    url: String,
+    #[serde(rename = "ClientConfig")]
+    #[serde(default)]
+    client_config: Option<WsClientConfig>,
+}
+
+#[derive(Debug, serde::Deserialize, Default, Clone)]
+pub struct WsClientConfig {
+    #[serde(rename = "PingInterval")]
+    #[serde(default)]
+    pub ping_interval: Option<u64>,
+}
+
+/// 获取 WS 长连接端点 URL + 客户端配置。
+pub async fn get_ws_endpoint(
+    http: &reqwest::Client,
+    app_id: &str,
+    app_secret: &str,
+) -> Result<(String, WsClientConfig), GatewayError> {
+    let resp = http
+        .post(format!("{FEISHU_WS_BASE}/callback/ws/endpoint"))
+        .header("locale", "zh")
+        .header("Content-Type", "application/json; charset=utf-8")
+        .json(&serde_json::json!({ "AppID": app_id, "AppSecret": app_secret }))
+        .send()
+        .await
+        .map_err(|_| GatewayError::Network("获取 WS endpoint 网络错误".into()))?
+        .json::<WsEndpointResp>()
+        .await
+        .map_err(|e| GatewayError::Network(format!("解析 WS endpoint 失败: {e}")))?;
+
+    if resp.code != 0 {
+        return Err(GatewayError::Network(format!(
+            "WS endpoint 失败: code={} msg={}",
+            resp.code,
+            resp.msg.as_deref().unwrap_or("(none)")
+        )));
     }
+    let ep = resp
+        .data
+        .ok_or_else(|| GatewayError::Network("WS endpoint: empty data".into()))?;
+    Ok((ep.url, ep.client_config.unwrap_or_default()))
+}
 
-    /// 拉取飞书消息列表
-    /// 使用飞书 Open API: GET /im/v1/messages
-    pub async fn poll_messages(
-        &self,
-        container_id_type: &str,
-        page_size: i32,
-        page_token: Option<&str>,
-    ) -> Result<(Vec<ChannelMessage>, Option<String>), AppError> {
-        let token = self.token_manager.get_token().await?;
+/// 统一发送 POST 并校验业务码。
+async fn post_json(
+    http: &reqwest::Client,
+    url: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, GatewayError> {
+    let resp = http
+        .post(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json; charset=utf-8")
+        .json(body)
+        .send()
+        .await
+        .map_err(|_| GatewayError::Network("发送请求网络错误".into()))?;
+    let status = resp.status();
+    let raw = resp.text().await.unwrap_or_default();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({ "raw": raw }));
 
-        let mut url = format!(
-            "{}/im/v1/messages?receive_id_type=open_id&container_id_type={}&page_size={}&sort_type=ByCreateTimeDesc",
-            FEISHU_API_BASE, container_id_type, page_size
-        );
-
-        if let Some(pt) = page_token {
-            url.push_str(&format!("&page_token={}", pt));
-        }
-
-        let resp = self
-            .http_client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", token))
-            .send()
-            .await
-            .map_err(|e| AppError::FeishuGateway(format!("拉取消息网络错误: {}", e)))?;
-
-        let body: FeishuMessageListResponse = resp
-            .json()
-            .await
-            .map_err(|e| AppError::FeishuGateway(format!("解析消息列表失败: {}", e)))?;
-
-        if body.code != 0 {
-            return Err(AppError::FeishuGateway(format!(
-                "拉取消息失败: {}",
-                body.msg.as_deref().unwrap_or("未知错误")
-            )));
-        }
-
-        let data = body.data.unwrap_or(
-            FeishuMessageListResponse {
-                code: 0,
-                msg: None,
-                data: None,
-            }
-            .data
-            .unwrap_or(super::converter::FeishuMessageListData {
-                items: None,
-                has_more: None,
-                page_token: None,
-            }),
-        );
-
-        let messages: Vec<ChannelMessage> = data
-            .items
-            .unwrap_or_default()
-            .into_iter()
-            .map(|msg| convert_feishu_message(msg, "飞书用户"))
-            .collect();
-
-        let next_page_token = if data.has_more.unwrap_or(false) {
-            data.page_token
-        } else {
-            None
-        };
-
-        Ok((messages, next_page_token))
+    // 401 → token 失效
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(GatewayError::Unauthorized);
     }
-
-    /// 发送消息到飞书会话
-    /// 使用飞书 Open API: POST /im/v1/messages
-    pub async fn send_message(
-        &self,
-        receive_id: &str,
-        msg_type: &str,
-        content: &str,
-        reply_msg_id: Option<&str>,
-    ) -> Result<(), AppError> {
-        let token = self.token_manager.get_token().await?;
-
-        let content_json = if let Some(ref reply_id) = reply_msg_id {
-            serde_json::json!({
-                "text": content,
-                "reply_msg_id": reply_id,
-            })
-        } else {
-            serde_json::json!({
-                "text": content,
-            })
-        };
-
-        let body = serde_json::json!({
-            "receive_id": receive_id,
-            "msg_type": msg_type,
-            "content": content_json.to_string(),
+    let code = parsed.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+    if code != 0 {
+        return Err(GatewayError::Api {
+            code: code as i32,
+            msg: parsed
+                .get("msg")
+                .and_then(|m| m.as_str())
+                .unwrap_or("未知错误")
+                .to_string(),
         });
-
-        let resp = self
-            .http_client
-            .post(format!(
-                "{}/im/v1/messages?receive_id_type=chat_id",
-                FEISHU_API_BASE
-            ))
-            .header("Authorization", format!("Bearer {}", token))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::FeishuGateway(format!("发送消息网络错误: {}", e)))?;
-
-        #[derive(serde::Deserialize)]
-        struct SendResp {
-            code: i32,
-            msg: Option<String>,
-        }
-
-        let send_resp: SendResp = resp
-            .json()
-            .await
-            .map_err(|e| AppError::FeishuGateway(format!("解析发送响应失败: {}", e)))?;
-
-        if send_resp.code != 0 {
-            return Err(AppError::FeishuGateway(format!(
-                "发送消息失败: {}",
-                send_resp.msg.as_deref().unwrap_or("未知错误")
-            )));
-        }
-
-        Ok(())
     }
-
-    /// 发送回复消息到飞书
-    #[allow(dead_code)]
-    pub async fn send_reply(
-        &self,
-        conversation_id: &str,
-        content: &str,
-        reply_msg_id: &str,
-    ) -> Result<(), AppError> {
-        self.send_message(conversation_id, "text", content, Some(reply_msg_id))
-            .await
-    }
-
-    /// 获取聊天名称
-    #[allow(dead_code)]
-    pub async fn get_chat_name(&self, chat_id: &str) -> Result<String, AppError> {
-        let token = self.token_manager.get_token().await?;
-
-        let resp = self
-            .http_client
-            .get(format!("{}/im/v1/chats/{}", FEISHU_API_BASE, chat_id))
-            .header("Authorization", format!("Bearer {}", token))
-            .send()
-            .await
-            .map_err(|e| AppError::FeishuGateway(format!("获取聊天信息失败: {}", e)))?;
-
-        #[derive(serde::Deserialize)]
-        struct ChatResp {
-            code: i32,
-            data: Option<ChatData>,
-        }
-
-        #[derive(serde::Deserialize)]
-        struct ChatData {
-            name: Option<String>,
-        }
-
-        let chat_resp: ChatResp = resp
-            .json()
-            .await
-            .map_err(|e| AppError::FeishuGateway(format!("解析聊天信息失败: {}", e)))?;
-
-        Ok(chat_resp
-            .data
-            .and_then(|d| d.name)
-            .unwrap_or_else(|| "未知群聊".to_string()))
-    }
+    Ok(parsed)
 }
 
-// ── Channel trait impl ────────────────────────────────
+/// 构建 Card JSON 2.0 单 markdown 元素内容。
+fn build_card_content(markdown: &str) -> String {
+    serde_json::json!({
+        "schema": "2.0",
+        "body": { "elements": [{ "tag": "markdown", "content": markdown }] }
+    })
+    .to_string()
+}
 
-impl Channel for FeishuClient {
-    fn channel_name(&self) -> &str {
-        "feishu"
+/// 截断到卡片字节上限（按 UTF-8 边界）。
+fn truncate_card_markdown(text: &str) -> String {
+    if text.len() <= CARD_MARKDOWN_MAX_BYTES {
+        return text.to_string();
     }
+    let suffix = "\n\n…_(updating)_";
+    let budget = CARD_MARKDOWN_MAX_BYTES.saturating_sub(suffix.len());
+    let mut end = 0;
+    for (idx, ch) in text.char_indices() {
+        if idx + ch.len_utf8() > budget {
+            break;
+        }
+        end = idx + ch.len_utf8();
+    }
+    format!("{}{suffix}", &text[..end])
+}
 
-    fn poll_messages(
-        &self,
-        page_size: i32,
-        page_token: Option<&str>,
-    ) -> Result<(Vec<ChannelMessage>, Option<String>), GatewayError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.poll_messages("chat", page_size, page_token)
-                    .await
-                    .map_err(|e| match e {
-                        AppError::FeishuGateway(msg) => GatewayError::Network(msg),
-                        AppError::Unauthorized(_) => GatewayError::Unauthorized,
-                        other => GatewayError::Network(other.to_string()),
-                    })
-            })
-        })
-    }
+/// 发送交互卡片消息，返回 message_id。
+pub async fn send_card(
+    http: &reqwest::Client,
+    creds: &FeishuCredentials,
+    chat_id: &str,
+    markdown: &str,
+) -> Result<String, GatewayError> {
+    let token = creds.get_token().await?;
+    let body = serde_json::json!({
+        "receive_id": chat_id,
+        "msg_type": "interactive",
+        "content": build_card_content(markdown),
+    });
+    let resp = post_json(
+        http,
+        &format!("{FEISHU_API_BASE}/im/v1/messages?receive_id_type=chat_id"),
+        &token,
+        &body,
+    )
+    .await?;
+    let message_id = resp
+        .pointer("/data/message_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(message_id)
+}
 
-    fn send_message(
-        &self,
-        conversation_id: &str,
-        content: &str,
-        reply_to: Option<&str>,
-    ) -> Result<(), GatewayError> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.send_message(conversation_id, "text", content, reply_to)
-                    .await
-                    .map_err(|e| match e {
-                        AppError::FeishuGateway(msg) => GatewayError::Network(msg),
-                        AppError::Unauthorized(_) => GatewayError::Unauthorized,
-                        other => GatewayError::Network(other.to_string()),
-                    })
-            })
-        })
-    }
+/// PATCH 更新已有卡片内容（流式增量）。
+pub async fn patch_card(
+    http: &reqwest::Client,
+    creds: &FeishuCredentials,
+    message_id: &str,
+    markdown: &str,
+) -> Result<(), GatewayError> {
+    let token = creds.get_token().await?;
+    let body = serde_json::json!({
+        "msg_type": "interactive",
+        "content": build_card_content(markdown),
+    });
+    let _ = post_json(
+        http,
+        &format!("{FEISHU_API_BASE}/im/v1/messages/{message_id}"),
+        &token,
+        &body,
+    )
+    .await?;
+    Ok(())
+}
 
-    fn credentials(&self) -> &dyn CredentialsManager {
-        self.token_manager.as_ref()
-    }
+/// 发送纯文本消息（Final 回复）。
+pub async fn send_text(
+    http: &reqwest::Client,
+    creds: &FeishuCredentials,
+    chat_id: &str,
+    content: &str,
+) -> Result<(), GatewayError> {
+    let token = creds.get_token().await?;
+    let body = serde_json::json!({
+        "receive_id": chat_id,
+        "msg_type": "text",
+        "content": serde_json::json!({ "text": content }).to_string(),
+    });
+    post_json(
+        http,
+        &format!("{FEISHU_API_BASE}/im/v1/messages?receive_id_type=chat_id"),
+        &token,
+        &body,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// 流式 buffer：累积文本 + 已发送卡片 message_id + 上次 PATCH 时间。
+#[derive(Debug, Default, Clone)]
+pub struct StreamBuf {
+    pub text: String,
+    pub card_message_id: Option<String>,
+    pub last_edit: Option<std::time::Instant>,
+}
+
+/// 给定累积文本返回截断后用于渲染的内容。
+pub fn render_markdown(buf: &StreamBuf) -> String {
+    truncate_card_markdown(&buf.text)
 }

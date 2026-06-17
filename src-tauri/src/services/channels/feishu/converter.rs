@@ -1,107 +1,127 @@
-use crate::services::core::ChannelMessage;
-use serde::{Deserialize, Serialize};
+//! 飞书 WS 事件 → InboundMessage 归一化。
 
-/// 飞书消息原始结构（来自 API 响应）
-#[derive(Debug, Deserialize)]
-pub struct FeishuMessage {
+use crate::services::core::InboundMessage;
+
+/// LarkEvent envelope（method=1 / type=event payload）。
+#[derive(Debug, serde::Deserialize)]
+pub struct LarkEvent {
+    pub header: LarkEventHeader,
+    pub event: serde_json::Value,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct LarkEventHeader {
+    pub event_type: String,
+    #[allow(dead_code)]
+    pub event_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct MsgReceivePayload {
+    pub sender: LarkSender,
+    pub message: LarkMessage,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct LarkSender {
+    pub sender_id: LarkSenderId,
+    #[serde(default)]
+    pub sender_type: String,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct LarkSenderId {
+    #[serde(default)]
+    pub open_id: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct LarkMessage {
     pub message_id: String,
     pub chat_id: String,
-    #[allow(dead_code)]
     pub chat_type: String,
-    #[allow(dead_code)]
-    pub msg_type: String,
-    pub sender: Option<FeishuSender>,
-    pub body: Option<FeishuMessageBody>,
-    pub create_time: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct FeishuSender {
-    pub id: Option<FeishuUserId>,
-    #[allow(dead_code)]
-    pub sender_type: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct FeishuUserId {
-    pub user_id: Option<String>,
-    pub open_id: Option<String>,
-    pub union_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct FeishuMessageBody {
-    pub content: Option<String>,
-}
-
-/// 飞书 API 消息列表响应
-#[derive(Debug, Deserialize)]
-pub struct FeishuMessageListResponse {
-    pub code: i32,
-    pub msg: Option<String>,
-    pub data: Option<FeishuMessageListData>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct FeishuMessageListData {
-    pub items: Option<Vec<FeishuMessage>>,
-    pub has_more: Option<bool>,
-    pub page_token: Option<String>,
-}
-
-/// 飞书发送消息请求
-#[derive(Debug, Serialize)]
-#[allow(dead_code)]
-pub struct FeishuSendMessageRequest {
-    pub msg_type: String,
+    pub message_type: String,
+    #[serde(default)]
     pub content: String,
 }
 
-/// 飞书文本消息内容
-#[derive(Debug, Serialize)]
-#[allow(dead_code)]
-pub struct FeishuTextContent {
-    pub text: String,
-}
+/// 从 `im.message.receive_v1` 事件 payload 构造 InboundMessage。
+///
+/// 仅处理 text / post；其它类型返回 None（上层跳过）。
+pub fn to_inbound(payload: &serde_json::Value) -> Option<InboundMessage> {
+    let recv: MsgReceivePayload = serde_json::from_value(payload.clone()).ok()?;
 
-/// 飞书回复消息内容（包含引用）
-#[derive(Debug, Serialize)]
-#[allow(dead_code)]
-pub struct FeishuReplyContent {
-    pub text: String,
-    #[serde(rename = "reply_msg_id")]
-    pub reply_msg_id: String,
-}
+    if recv.sender.sender_type == "app" || recv.sender.sender_type == "bot" {
+        return None;
+    }
 
-/// 将飞书消息转换为统一 ChannelMessage
-pub fn convert_feishu_message(msg: FeishuMessage, sender_name: &str) -> ChannelMessage {
-    let content = msg.body.and_then(|b| b.content).unwrap_or_default();
-
-    let sender_id = msg
+    let sender_id = recv
         .sender
-        .as_ref()
-        .and_then(|s| s.id.as_ref())
-        .and_then(|id| {
-            id.open_id
-                .clone()
-                .or(id.user_id.clone().or(id.union_id.clone()))
-        })
+        .sender_id
+        .open_id
+        .clone()
         .unwrap_or_else(|| "unknown".to_string());
 
-    let timestamp = msg
-        .create_time
-        .and_then(|t| t.parse::<i64>().ok())
-        .unwrap_or(0);
-
-    ChannelMessage {
-        message_id: msg.message_id,
-        channel: "feishu".to_string(),
-        conversation_id: msg.chat_id,
-        sender_id,
-        sender_name: sender_name.to_string(),
-        content,
-        timestamp,
-        is_reply: false,
-        reply_to: None,
+    let text = match recv.message.message_type.as_str() {
+        "text" => {
+            let v: serde_json::Value = serde_json::from_str(&recv.message.content).ok()?;
+            v.get("text")
+                .and_then(|t| t.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())?
+        }
+        "post" => parse_post_text(&recv.message.content)?,
+        _ => return None,
+    };
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return None;
     }
+
+    Some(InboundMessage {
+        channel: "feishu".to_string(),
+        sender_id,
+        chat_id: recv.message.chat_id.clone(),
+        content: text,
+        media: Vec::new(),
+        metadata: serde_json::json!({
+            "message_id": recv.message.message_id,
+            "chat_type": recv.message.chat_type,
+            "msg_type": recv.message.message_type,
+            "timestamp": chrono::Utc::now().timestamp(),
+        }),
+        session_key_override: None,
+    })
+}
+
+/// 解析 post 消息为纯文本。
+fn parse_post_content(content: &str) -> Option<Vec<Vec<PostNode>>> {
+    let v: serde_json::Value = serde_json::from_str(content).ok()?;
+    v.get("content")
+        .and_then(|c| serde_json::from_value(c.clone()).ok())
+}
+
+fn parse_post_text(content: &str) -> Option<String> {
+    let lines = parse_post_content(content)?;
+    let mut out = String::new();
+    for line in lines {
+        for node in line {
+            if let Some(t) = node.text {
+                out.push_str(&t);
+            }
+        }
+        out.push('\n');
+    }
+    let trimmed = out.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PostNode {
+    #[serde(default)]
+    text: Option<String>,
 }

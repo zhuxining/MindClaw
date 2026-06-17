@@ -2,7 +2,15 @@ use crate::error::AppError;
 use agent_client_protocol::schema::{EnvVariable, McpServer, McpServerStdio};
 use serde::{Deserialize, Serialize};
 
-const ALLOWED_COMMANDS: &[&str] = &["agent", "claude", "claude-code", "gemini", "qwen", "codex"];
+const ALLOWED_COMMANDS: &[&str] = &[
+    "agent",
+    "claude",
+    "claude-code",
+    "gemini",
+    "qwen",
+    "codex",
+    "npx",
+];
 const ALLOWED_ENV_PREFIXES: &[&str] = &[
     "ACP_",
     "ANTHROPIC_",
@@ -141,6 +149,91 @@ fn validate_arg(arg: &str) -> Result<(), AppError> {
     if arg.chars().any(|ch| ch.is_control()) {
         return Err(AppError::Config("ACP Server 参数不能包含控制字符".into()));
     }
+    // 禁止危险字符，防止命令注入
+    let forbidden_chars = [
+        ';', '&', '|', '`', '$', '>', '<', '(', ')', '{', '}', '[', ']',
+    ];
+    if arg.chars().any(|ch| forbidden_chars.contains(&ch)) {
+        return Err(AppError::Config(format!(
+            "ACP Server 参数包含非法字符: {}",
+            arg
+        )));
+    }
+    // 防止参数注入：禁止以 - 或 -- 开头的参数（除了明确允许的）
+    let forbidden_flags = [
+        "--config",
+        "-c",
+        "--eval",
+        "-e",
+        "--execute",
+        "-x",
+        "--command",
+        "-r",
+        "--require",
+        "-p",
+        "--print",
+        "-i",
+        "--interactive",
+        "--shell",
+        "-s",
+        "--prefer-offline",
+        "--prefer-online",
+        "--no-install",
+        "--node-arg",
+        "-n",
+    ];
+    let arg_lower = arg.to_lowercase();
+    if forbidden_flags.iter().any(|flag| {
+        arg_lower.starts_with(flag) && (arg_lower.len() == flag.len() || !flag.starts_with("--"))
+    }) {
+        return Err(AppError::Config(format!(
+            "ACP Server 参数包含不允许的标志: {}",
+            arg
+        )));
+    }
+    Ok(())
+}
+
+/// 验证 npm 包名格式，防止包名注入
+pub fn validate_npm_package(package: &str) -> Result<(), AppError> {
+    if package.is_empty() || package.len() > 214 {
+        return Err(AppError::Config("npm 包名长度非法".into()));
+    }
+
+    // 范围包 @scope/name 或普通包名
+    let (scope, name) = if package.starts_with('@') {
+        let parts: Vec<&str> = package.splitn(2, '/').collect();
+        if parts.len() != 2 {
+            return Err(AppError::Config("范围包名格式非法".into()));
+        }
+        (Some(parts[0]), parts[1])
+    } else {
+        (None, package)
+    };
+
+    // 验证范围名
+    if let Some(scope) = scope {
+        if scope.len() < 2 {
+            return Err(AppError::Config("范围名太短".into()));
+        }
+        if !scope[1..]
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
+        {
+            return Err(AppError::Config("范围名包含非法字符".into()));
+        }
+    }
+
+    // 验证包名
+    if name.is_empty() || name.starts_with('.') || name.starts_with('_') {
+        return Err(AppError::Config("包名格式非法".into()));
+    }
+    if !name.chars().all(|ch| {
+        ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_' || ch == '.'
+    }) {
+        return Err(AppError::Config("包名包含非法字符".into()));
+    }
+
     Ok(())
 }
 

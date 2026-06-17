@@ -135,6 +135,128 @@ pub fn get_acp_server_status(
     Ok(state.gateway.get_acp_server_status(server_id))
 }
 
+// ── ACP Registry ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RegistryAgent {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub repository: Option<String>,
+    pub website: Option<String>,
+    pub authors: Vec<String>,
+    pub license: String,
+    pub icon: Option<String>,
+    pub distribution: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AcpRegistry {
+    pub version: String,
+    pub agents: Vec<RegistryAgent>,
+}
+
+#[tauri::command]
+pub async fn fetch_acp_registry() -> Result<AcpRegistry, AppError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::Config(format!("创建 HTTP 客户端失败: {}", e)))?;
+
+    let response = client
+        .get("https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json")
+        .send()
+        .await
+        .map_err(|e| AppError::Config(format!("获取 ACP 注册表失败: {}", e)))?;
+
+    let registry = response
+        .json::<AcpRegistry>()
+        .await
+        .map_err(|e| AppError::Config(format!("解析 ACP 注册表失败: {}", e)))?;
+
+    Ok(registry)
+}
+
+#[tauri::command]
+pub async fn install_acp_agent(
+    registry_agent: RegistryAgent,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), AppError> {
+    use crate::services::acp_client::server::{validate_npm_package, EnvVar};
+
+    // 将 RegistryAgent 转换为 AcpServer
+    let distribution = registry_agent.distribution;
+
+    // 优先使用 npx 分发方式
+    let (command, args, env_vars) = if let Some(npx) = distribution.get("npx") {
+        let package = npx
+            .get("package")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| AppError::Config("ACP Agent npx package 不存在".into()))?;
+
+        // 严格验证 npm 包名，防止包名注入
+        validate_npm_package(package)?;
+
+        let args_from_registry = npx
+            .get("args")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|v| v.as_str().map(ToString::to_string))
+            .collect::<Vec<_>>();
+
+        // 仅允许特定的 ACP 相关环境变量
+        let env_from_registry = npx
+            .get("env")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(k, v)| {
+                // 仅允许以 ACP_ 开头的环境变量
+                if k.starts_with("ACP_") {
+                    v.as_str().map(|s| EnvVar {
+                        name: k,
+                        value: s.to_string(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut final_args = vec!["-y".to_string(), package.to_string()];
+        final_args.extend(args_from_registry);
+
+        ("npx".to_string(), final_args, env_from_registry)
+    } else if distribution.get("binary").is_some() {
+        // 对于 binary 分发方式，提示用户需要手动安装
+        return Err(AppError::Config(
+            "Binary 分发方式需要手动安装，请参考项目文档。".into(),
+        ));
+    } else {
+        return Err(AppError::Config(
+            "不支持的分发方式，仅支持 npx 分发。".into(),
+        ));
+    };
+
+    let server = AcpServer {
+        id: registry_agent.id,
+        name: registry_agent.name,
+        description: registry_agent.description,
+        command,
+        args,
+        env_vars,
+        timeout_secs: 120,
+        enabled: true,
+    };
+
+    server.validate()?;
+    state.gateway.save_acp_server(server)
+}
+
 // ── Agent / Skill / SlashCommand ───────────────────────────────
 
 #[tauri::command]

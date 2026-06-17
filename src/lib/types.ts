@@ -17,13 +17,18 @@ export interface AgentResponse {
 	error_message: string | null;
 }
 
+export interface EnvVar {
+	name: string;
+	value: string;
+}
+
 export interface AcpServer {
 	id: string;
 	name: string;
+	description: string;
 	command: string;
 	args: string[];
-	env: Record<string, string>;
-	working_directory: string | null;
+	env_vars: EnvVar[];
 	timeout_secs: number;
 	enabled: boolean;
 }
@@ -70,6 +75,36 @@ export interface ConversationExecutionState {
 	key: ConversationKey;
 	agent_id: string;
 	skill_id: string | null;
+}
+
+export interface RegistryAgent {
+	id: string;
+	name: string;
+	version: string;
+	description: string;
+	repository?: string;
+	website?: string;
+	authors: string[];
+	license: string;
+	icon?: string;
+	distribution: {
+		npx?: {
+			package: string;
+			args?: string[];
+			env?: Record<string, string>;
+		};
+		binary?: {
+			[key: string]: {
+				archive: string;
+				cmd: string;
+			};
+		};
+	};
+}
+
+export interface AcpRegistry {
+	version: string;
+	agents: RegistryAgent[];
 }
 
 export interface ChannelConfig {

@@ -1,11 +1,12 @@
-import { Menu, MessageSquare, Settings } from "lucide-react";
+import { Menu, MessageSquare, Package, Settings } from "lucide-react";
 import { useState } from "react";
+import AcpRegistry from "./components/AcpRegistry";
 import ChannelSettings from "./components/ChannelSettings";
 import MessageList from "./components/MessageList";
 import { Button } from "./components/ui/button";
 import "./App.css";
 
-type Tab = "messages" | "settings";
+type Tab = "messages" | "registry" | "settings";
 type ChannelTab = "feishu" | "telegram";
 
 export default function App() {
@@ -33,6 +34,14 @@ export default function App() {
 						消息
 					</Button>
 					<Button
+						variant={activeTab === "registry" ? "secondary" : "ghost"}
+						size="sm"
+						onClick={() => setActiveTab("registry")}
+					>
+						<Package className="w-4 h-4 mr-1" />
+						应用市场
+					</Button>
+					<Button
 						variant={activeTab === "settings" ? "secondary" : "ghost"}
 						size="sm"
 						onClick={() => setActiveTab("settings")}
@@ -47,6 +56,8 @@ export default function App() {
 			<div className="flex-1 overflow-hidden">
 				{activeTab === "messages" ? (
 					<MessageList />
+				) : activeTab === "registry" ? (
+					<AcpRegistry />
 				) : (
 					<div className="flex flex-col h-full">
 						{/* 渠道切换标签 */}

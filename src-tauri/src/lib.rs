@@ -114,6 +114,8 @@ pub fn run() {
             commands::list_acp_servers,
             commands::save_acp_server,
             commands::get_acp_server_status,
+            commands::fetch_acp_registry,
+            commands::install_acp_agent,
             // Agent / Skill / SlashCommand
             commands::list_agents,
             commands::save_agent,

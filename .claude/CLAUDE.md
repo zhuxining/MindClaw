@@ -1,4 +1,1 @@
-- Each response begins with 🃏.
-- Avoid over-engineering and ensure the code is concise, understandable, simple and practical.
-- Pay attention to cyclomatic complexity during coding and maximize code reusability as much as possible.
-- Focus on modular design in coding and apply design patterns where appropriate.
+@AGENTS.md

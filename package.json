@@ -17,13 +17,10 @@
 	"dependencies": {
 		"@base-ui/react": "^1.6.0",
 		"@effect/language-service": "^0.86.2",
-		"@effect/platform-bun": "^4.0.0-beta.84",
+		"@effect/platform-bun": "^0.90.0",
 		"@fontsource-variable/inter": "^5.2.8",
-		"@larksuite/channel": "^0.2.0",
-		"@milkdown/crepe": "^7.21.2",
-		"@milkdown/kit": "^7.21.2",
 		"@tailwindcss/vite": "^4.3.1",
-		"@tanstack/react-query": "^5.101.0",
+		"@tanstack/react-query": "^5.101.1",
 		"@tanstack/react-router": "^1.170.16",
 		"@tauri-apps/api": "^2.11.1",
 		"@tauri-apps/plugin-autostart": "~2.5.1",
@@ -39,6 +36,8 @@
 		"@tauri-apps/plugin-stronghold": "~2.3.1",
 		"@tauri-apps/plugin-updater": "~2.10.1",
 		"@tauri-apps/plugin-window-state": "~2.4.1",
+		"ai": "^7.0.2",
+		"chat": "^4.31.0",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"cmdk": "^1.1.1",
@@ -54,16 +53,16 @@
 		"zustand": "^5.0.14"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.5.0",
-		"@effect/vitest": "^4.0.0-beta.84",
+		"@biomejs/biome": "^2.5.1",
+		"@effect/vitest": "^0.29.0",
 		"@tauri-apps/cli": "^2.11.3",
 		"@types/react": "^19.2.17",
 		"@types/react-dom": "^19.2.3",
-		"@vitejs/plugin-react": "^6.0.2",
+		"@vitejs/plugin-react": "^6.0.3",
 		"lefthook": "^2.1.9",
 		"markdownlint-cli2": "^0.22.1",
 		"typescript": "^6.0.3",
-		"vite": "^8.0.16",
+		"vite": "^8.1.0",
 		"vitest": "^4.1.9"
 	}
 }
